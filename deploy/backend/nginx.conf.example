@@ -1,0 +1,19 @@
+# Server B: bind only to private overlay IP. Never expose 8443 to public Internet.
+# Replace placeholders with real private IP, internal CA-signed certificate, and allowlist.
+server {
+    listen YOUR_BACKEND_PRIVATE_IP:8443 ssl;
+    server_name api.internal.example;
+    ssl_certificate /etc/ssl/tinynest/internal-fullchain.pem;
+    ssl_certificate_key /etc/ssl/tinynest/internal-privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    allow YOUR_FRONTEND_PRIVATE_IP;
+    deny all;
+    location /api/ {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        add_header Cache-Control "no-store" always;
+    }
+    location / { return 404; }
+}

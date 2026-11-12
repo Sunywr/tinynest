@@ -1,0 +1,26 @@
+# Secrets and machine-specific state
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+/data/
+/backups/
+**/data/
+**/backups/
+# Build/dependency artifacts
+**/node_modules/
+**/dist/
+**/.vite/
+*.log
+*.tsbuildinfo
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc

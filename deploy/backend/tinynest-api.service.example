@@ -1,0 +1,21 @@
+[Unit]
+Description=TinyNest Phase 0 Go API
+After=network.target
+[Service]
+Type=simple
+User=tinynest
+Group=tinynest
+WorkingDirectory=/opt/tinynest/api
+Environment=TINYNEST_LISTEN_ADDR=127.0.0.1:8787
+Environment=TINYNEST_DATA_DIR=/var/lib/tinynest
+ExecStart=/opt/tinynest/api/tinynest-api
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/tinynest
+UMask=0077
+[Install]
+WantedBy=multi-user.target

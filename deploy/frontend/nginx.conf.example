@@ -1,0 +1,39 @@
+# Server A: public HTTPS frontend. Replace placeholders AND provision valid certs.
+# Upstream is Server B over private encrypted overlay (WireGuard/Tailscale/private TLS).
+# DNS and keys are intentionally placeholders: DO NOT copy unchanged to production.
+server {
+    listen 80;
+    server_name YOUR_PUBLIC_DOMAIN;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl http2;
+    server_name YOUR_PUBLIC_DOMAIN;
+    ssl_certificate /etc/ssl/tinynest/fullchain.pem;
+    ssl_certificate_key /etc/ssl/tinynest/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    root /srv/tinynest/web/dist;
+    index index.html;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header X-Frame-Options DENY always;
+
+    location /api/ {
+        proxy_pass https://YOUR_BACKEND_PRIVATE_IP:8443;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/tinynest/internal-ca.crt;
+        proxy_ssl_server_name on;
+        proxy_ssl_name api.internal.example;
+        proxy_set_header Host api.internal.example;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+        proxy_hide_header Access-Control-Allow-Origin;
+        add_header Cache-Control "no-store" always;
+    }
+    location = /sw.js { add_header Cache-Control "no-cache" always; try_files $uri =404; }
+    location = /index.html { add_header Cache-Control "no-cache" always; try_files $uri =404; }
+    location / { try_files $uri $uri/ /index.html; }
+}
