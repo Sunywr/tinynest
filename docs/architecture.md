@@ -25,5 +25,6 @@ PC 浏览器 / iPhone Safari 或主屏 PWA
 ### 开发和交付
 - `apps/web`：Vue 3/Vite + PWA，独立 dist 静态发布。
 - `apps/api`：Go stdlib，仅 healthz/readyz，独立二进制发布。
-- `scripts/init_sqlite.py`：SQLite 元数据初始化；**Go 现在未连接 SQLite 数据库**，后续须实现驱动/迁移工具后才能提供真实数据库读写。
-- 暂不确定正式身份认证、家庭成员权限、记账表和安全存储；任何未来敏感功能上线路径必须补完认证、授权、CSRF/会话等安全设计。
+- `scripts/init_sqlite.py`：Phase 0 的 SQLite 元数据初始化脚本，保留可用。
+- **V0.1 更新**：Go 后端已通过纯 Go 驱动 `modernc.org/sqlite` 连接 SQLite，启用 WAL / `foreign_keys=ON` / `busy_timeout`，7 个版本迁移在启动时按序执行、单事务提交；`readyz` 已升级为真实 `PRAGMA quick_check` + 迁移版本校验。业务模型见 `docs/er-v0.1.md`。
+- V0.1 已实现单家庭管理员登录（Argon2id）、HttpOnly/Secure/SameSite 会话、写操作 CSRF 校验与审计日志；多成员登录与细粒度权限仍待后续版本。生产 HTTPS、A→B 私网 TLS 链路与实机验证**尚未执行**，模板中的 `YOUR_*` 仍为占位符。

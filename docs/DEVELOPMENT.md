@@ -50,6 +50,35 @@ A 机提供前端静态资源和 HTTPS 统一入口；B 机运行 Go 与 SQLite�
 
 打开 `docs/agent-prompt.md` 并复制提示词；或直接要求 Agent 阅读 `AGENTS.md`、`plan.md`。不得跳到真实业务开发。
 
+## V0.1 真实账本（当前分支）
+
+前端已连接真实后端，不再展示虚构金额。首次打开页面先点「首次初始化」创建家庭与管理员，再登录。
+
+```bash
+# 终端 1：Go API（自动执行 7 个版本迁移）
+cd apps/api
+mkdir -p data
+TINYNEST_DATA_DIR=./data TINYNEST_DB_PATH=./data/tinynest.sqlite3 go run ./cmd/server
+
+# 终端 2：Vue Web
+cd apps/web
+npm install
+npm run dev        # http://127.0.0.1:5173
+```
+
+环境变量：`TINYNEST_LISTEN_ADDR`（默认 `127.0.0.1:8787`）、`TINYNEST_DATA_DIR`（默认 `./data`）、`TINYNEST_DB_PATH`（默认 `<data_dir>/tinynest.sqlite3`）。数据库文件只在后端，`.gitignore` 已排除。
+
+验证命令：
+
+```bash
+cd apps/api && go test ./... && go vet ./... && go build ./...
+cd apps/web && npm run build
+```
+
+设计文档：`docs/accounting-rules-v0.1.md`（账务规则）、`docs/er-v0.1.md`（ER 图）、`docs/api-v0.1.md`（API 契约）、`docs/plan-v0.1.md`（实施计划）、`IMPLEMENTATION_REPORT.md`（交付与未竟事项）。
+
+> V0.1 的发布门禁尚未全部通过（实机、HTTPS 双服务器、备份恢复演练未验证），**暂不建议录入真实家庭财务数据**。
+
 ## 自检
 
 Linux/macOS: `bash scripts/check-phase0.sh`；Windows：`powershell -ExecutionPolicy Bypass -File scripts/check-phase0.ps1`。安装过 npm 依赖后，运行 `cd apps/web && npm run build`。
