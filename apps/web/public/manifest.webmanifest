@@ -2,7 +2,7 @@
   "id": "/",
   "name": "小家 · TinyNest",
   "short_name": "小家",
-  "description": "小家 TinyNest — 家庭记账网站（初始化演示）",
+  "description": "小家 TinyNest — 自托管家庭财务账本（PC Web / iPhone PWA）",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

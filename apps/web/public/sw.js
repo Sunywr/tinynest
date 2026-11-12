@@ -1,5 +1,6 @@
-/* TinyNest Phase 0: only cache PUBLIC shell and icons; never cache /api or sensitive data. */
-const CACHE = 'tinynest-shell-phase0-v1';
+/* TinyNest V0.1: only cache the PUBLIC app shell and icons.
+   Never cache /api responses or any private financial data (all API replies are no-store). */
+const CACHE = 'tinynest-shell-v0.1-1';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
