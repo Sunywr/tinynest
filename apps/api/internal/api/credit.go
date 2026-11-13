@@ -167,11 +167,17 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 			internalErr(w, err)
 			return
 		}
-		items = append(items, map[string]any{
+		row := map[string]any{
 			"id": v.id, "kind": v.kind, "name": v.name, "credit_limit_minor": v.limit,
 			"cycle_start_day": v.sd, "cycle_end_day": v.ed, "due_day": v.dd, "due_month_offset": v.off,
 			"status": v.status, "outstanding_minor": -bal,
-		})
+		}
+		// V0.1.1: used/available/usage are derived from the posted journal, not a
+		// cached balance. An unconfigured limit never produces a fake percentage.
+		for k, val := range creditLimitFields(v.limit, -int64(bal)) {
+			row[k] = val
+		}
+		items = append(items, row)
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
 }
@@ -197,11 +203,15 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			internalErr(w, err)
 			return
 		}
+		// V0.1.1: status is derived from the business date + posted amounts.
+		// stored_status is kept visible so a stale cached value can be diagnosed.
+		derived := deriveStatementStatus(end, due, a.businessDate(), sysDue, paid)
 		m := map[string]any{
 			"id": id, "instrument_id": instrID, "instrument_name": name,
 			"cycle_start_on": start, "cycle_end_on": end, "due_on": due,
 			"system_due_minor": sysDue, "paid_minor": paid,
-			"remaining_minor": sysDue - paid, "status": status,
+			"remaining_minor": sysDue - paid,
+			"status": derived, "derived_status": derived, "stored_status": status,
 			"platform_amount_minor": platform,
 		}
 		if platform != nil {
@@ -229,13 +239,28 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_amount", "还款金额必须为正")
 		return
 	}
+	// V0.1.1: replaying the same Idempotency-Key returns the FIRST result,
+	// never a UNIQUE error and never a second journal entry.
+	replayKey := idempotencyKey(r)
+	if replayKey != "" {
+		var existingID, existingEntry string
+		if err := a.DB.QueryRowContext(r.Context(),
+			`SELECT id,entry_id FROM credit_payments WHERE idempotency_key=? AND household_id=?`,
+			replayKey, p.HouseholdID).Scan(&existingID, &existingEntry); err == nil {
+			writeJSON(w, 200, map[string]any{
+				"id": existingID, "entry_id": existingEntry, "statement_id": stmtID,
+				"status": "confirmed", "replayed": true,
+			})
+			return
+		}
+	}
 	payID, entryID := newID("cpay"), newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var instrID string
+		var instrID, cycleEnd, dueOn string
 		var sysDue, paid int64
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT instrument_id,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
-			stmtID, p.HouseholdID).Scan(&instrID, &sysDue, &paid); err != nil {
+			`SELECT instrument_id,cycle_end_on,due_on,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
+			stmtID, p.HouseholdID).Scan(&instrID, &cycleEnd, &dueOn, &sysDue, &paid); err != nil {
 			return errors.New("账单不存在")
 		}
 		if int64(amount) > sysDue-paid {
@@ -259,9 +284,12 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 			nullableKey(idempotencyKey(r))); err != nil {
 			return err
 		}
+		// Status is derived from facts + business date, not a mutable running flag.
+		newPaid := paid + int64(amount)
+		newStatus := deriveStatementStatus(cycleEnd, dueOn, a.businessDate(), sysDue, newPaid)
 		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE credit_statements SET paid_minor=paid_minor+?, status=CASE WHEN paid_minor+?>=system_due_minor THEN 'paid' ELSE 'partial' END WHERE id=?`,
-			int64(amount), int64(amount), stmtID); err != nil {
+			`UPDATE credit_statements SET paid_minor=?, status=? WHERE id=?`,
+			newPaid, newStatus, stmtID); err != nil {
 			return err
 		}
 		return nil
