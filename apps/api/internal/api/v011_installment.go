@@ -465,6 +465,7 @@ func (a *API) handleConvertFromCredit(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
 		CreditInstrumentID string  `json:"credit_instrument_id"`
+		StatementID        string  `json:"statement_id"`
 		Name               string  `json:"name"`
 		PrincipalMinor     int64   `json:"principal_minor"`
 		TotalFeeMinor      int64   `json:"total_fee_minor"`
@@ -513,6 +514,47 @@ func (a *API) handleConvertFromCredit(w http.ResponseWriter, r *http.Request) {
 		outstanding := -int64(bal)
 		if in.PrincipalMinor > outstanding {
 			return errors.New("转分期金额不得超过信用工具当前未偿余额")
+		}
+		var stmtID string
+		var remaining int64
+		if err := tx.QueryRowContext(r.Context(), `
+			SELECT MIN(id), COALESCE(MAX(system_due_minor-paid_minor),0)
+			FROM credit_statements
+			WHERE household_id=? AND instrument_id=? AND system_due_minor>paid_minor
+			  AND (?='' OR id=?)
+			HAVING COUNT(*)=1`, p.HouseholdID, in.CreditInstrumentID, in.StatementID, in.StatementID).
+			Scan(&stmtID, &remaining); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("请选择一张有未还余额的原账单")
+			}
+			return err
+		}
+		if in.PrincipalMinor > remaining {
+			return errors.New("转分期金额不得超过原账单未还余额")
+		}
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on)
+			VALUES(?,'installment_conversion',?,?,?)`, stmtID, contractID, -in.PrincipalMinor, a.businessDate()); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(), `
+			UPDATE credit_statements
+			SET system_due_minor=(SELECT SUM(amount_minor) FROM credit_statement_items WHERE statement_id=?)
+			WHERE id=? AND household_id=?`, stmtID, stmtID, p.HouseholdID); err != nil {
+			return err
+		}
+		remaining -= in.PrincipalMinor
+		if remaining == 0 {
+			if _, err := tx.ExecContext(r.Context(), `
+				DELETE FROM schedule_due_items WHERE household_id=? AND source_type='credit_statement'
+				  AND source_id=? AND status='pending'`, p.HouseholdID, stmtID); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(r.Context(), `
+			UPDATE schedule_due_items SET amount_minor=?
+			WHERE household_id=? AND source_type='credit_statement' AND source_id=? AND status='pending'`,
+			remaining, p.HouseholdID, stmtID); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO installment_contracts(id,household_id,name,principal_minor,total_fee_minor,periods,

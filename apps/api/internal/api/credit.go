@@ -255,8 +255,8 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 	if replayKey != "" {
 		var existingID, existingEntry string
 		if err := a.DB.QueryRowContext(r.Context(),
-			`SELECT id,entry_id FROM credit_payments WHERE idempotency_key=? AND household_id=?`,
-			replayKey, p.HouseholdID).Scan(&existingID, &existingEntry); err == nil {
+			`SELECT id,entry_id FROM credit_payments WHERE idempotency_key=? AND household_id=? AND statement_id=?`,
+			replayKey, p.HouseholdID, stmtID).Scan(&existingID, &existingEntry); err == nil {
 			writeJSON(w, 200, map[string]any{
 				"id": existingID, "entry_id": existingEntry, "statement_id": stmtID,
 				"status": "confirmed", "replayed": true,

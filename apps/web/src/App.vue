@@ -49,7 +49,7 @@ const f = reactive<any>({
   tx: { type: 'expense', amount: '', occurred_on: today(), payment_kind: 'cash', account_id: '', to_account_id: '', credit_instrument_id: '', category_id: '', project_id: '', note: '' },
   account: { kind: 'cash', name: '', opening_balance: '' },
   project: { name: '' },
-  credit: { kind: 'credit_card', name: '', cycle_start_day: 1, cycle_end_day: 31, due_day: 10, due_month_offset: 1 },
+  credit: { kind: 'credit_card', name: '', cycle_start_day: 1, cycle_end_day: 31, due_day: 10, due_month_offset: 1, credit_limit: '' },
   payment: { statement_id: '', amount: '', from_account_id: '', paid_on: today() },
   installment: { name: '', category_id: '', principal: '', fee: '0', periods: 3, first_due_on: today() },
   instPayment: { contract_id: '', installment_no: 1, amount: '', principal: '', fee: '', channel: 'cash', channel_id: '', paid_on: today() },
@@ -57,7 +57,7 @@ const f = reactive<any>({
   debt: { kind: 'mortgage', name: '', principal: '', start_on: today(), due_day: 10 },
   debtSchedule: { contract_id: '', items: [] as any[] },
   debtPayment: { contract_id: '', installment_no: 1, amount: '', principal: '', interest: '', fee: '0', channel: 'cash', channel_id: '', paid_on: today() },
-  convert: { credit_instrument_id: '', name: '', principal: '', fee: '0', periods: 3, first_due_on: today() },
+  convert: { credit_instrument_id: '', statement_id: '', name: '', principal: '', fee: '0', periods: 3, first_due_on: today() },
   asset: { code: '', name: '', kind: 'stock', account_id: '' },
   trade: { asset_id: '', side: 'buy', trade_on: today(), quantity: '', gross: '', fee: '0', from_account_id: '' },
   dividend: { asset_id: '', gross: '', tax: '', received_on: today(), to_account_id: '' },
@@ -187,7 +187,9 @@ function createAccount() {
 }
 function createCredit() {
   if (!f.credit.name) return toast('请填写信用工具名称')
-  return run(() => api.createCreditInstrument({ ...f.credit }), '信用工具已创建')
+  const limit = f.credit.credit_limit === '' ? null : minor(f.credit.credit_limit)
+  if (limit !== null && (limit === undefined || limit <= 0)) return toast('额度必须为正数或留空（未配置）')
+  return run(() => api.createCreditInstrument({ ...f.credit, credit_limit_minor: limit ?? undefined }), '信用工具已创建')
 }
 function payStatement() {
   const amount = minor(f.payment.amount)
@@ -236,10 +238,18 @@ function instRefund() {
 }
 function instAdjustReduce(no: number, principal: number, fee: number) {
   if (!f.instRefund.contract_id) return toast('请先选择合同')
+  const principalInput = window.prompt(`请输入第 ${no} 期调整后的本金（元）`, (principal / 100).toFixed(2))
+  if (principalInput === null) return
+  const feeInput = window.prompt(`请输入第 ${no} 期调整后的费用（元）`, (fee / 100).toFixed(2))
+  if (feeInput === null) return
+  const newPrincipal = minor(principalInput)
+  const newFee = minor(feeInput)
+  if (newPrincipal === null || newFee === null || newPrincipal < 0 || newFee < 0 || newPrincipal > principal || newFee > fee ||
+      newPrincipal + newFee === principal + fee) return toast('请输入有效的调减金额')
   const reason = window.prompt(`确认调整第 ${no} 期？未付款期次可减少/取消，累计减免不得超过累计退款。请填写原因：`)
   if (!reason) return
   return run(() => api.adjustInstallmentSchedule(f.instRefund.contract_id, {
-    reason, items: [{ installment_no: no, action: 'reduce', principal_minor: principal, fee_minor: fee }],
+    reason, items: [{ installment_no: no, action: 'reduce', principal_minor: newPrincipal, fee_minor: newFee }],
   }), '期次已调整（已审计）')
 }
 function instSettleEarly() {
@@ -250,9 +260,9 @@ function instSettleEarly() {
 }
 function convertFromCredit() {
   const principal = minor(f.convert.principal), fee = minor(f.convert.fee)
-  if (!f.convert.credit_instrument_id || !f.convert.name || principal === null || principal <= 0 || fee === null) return toast('请填写信用工具、名称与本金')
+  if (!f.convert.credit_instrument_id || !f.convert.statement_id || !f.convert.name || principal === null || principal <= 0 || fee === null) return toast('请选择信用工具与原账单，并填写名称与本金')
   return run(() => api.convertInstallment({
-    credit_instrument_id: f.convert.credit_instrument_id, name: f.convert.name,
+    credit_instrument_id: f.convert.credit_instrument_id, statement_id: f.convert.statement_id, name: f.convert.name,
     principal_minor: principal, total_fee_minor: fee,
     periods: f.convert.periods, first_due_on: f.convert.first_due_on,
   }), '已转分期：信用负债重分类为分期负债，本金只保留一份')
@@ -558,6 +568,7 @@ const metricCards = computed(() => {
               <label>账单结束日<input type="number" min="1" max="31" v-model.number="f.credit.cycle_end_day" /></label>
               <label>还款日<input type="number" min="1" max="31" v-model.number="f.credit.due_day" /></label>
               <label>还款月偏移<input type="number" min="0" max="12" v-model.number="f.credit.due_month_offset" /></label>
+              <label>信用额度（元，留空=未配置）<input v-model="f.credit.credit_limit" inputmode="decimal" placeholder="如 20000" /></label>
             </div><button class="primary" @click="createCredit()">创建</button>
           </section>
           <section class="panel formpanel"><div class="paneltitle"><div><h2>账单还款</h2><span class="subinfo">支持部分还款与提前还款</span></div></div>
@@ -609,7 +620,7 @@ const metricCards = computed(() => {
             </div>
             <template v-if="debtDetail">
               <div class="ranklist"><div v-for="p in debtDetail.schedule" :key="p.installment_no" class="rankrow">
-                <span>第 {{ p.installment_no }} 期 · {{ p.due_on }} · {{ p.derived_status }}</span>
+                <span>第 {{ p.installment_no }} 期 · {{ p.due_on }} · {{ p.status === 'cancelled' ? p.status : p.derived_status }}</span>
                 <b>本 {{ formatMinor(p.principal_minor) }} / 息 {{ formatMinor(p.interest_minor) }} / 费 {{ formatMinor(p.fee_minor) }} · 余 {{ formatMinor(p.remaining_minor) }}</b>
               </div></div>
               <div class="formgrid">
@@ -675,7 +686,7 @@ const metricCards = computed(() => {
                 守恒 {{ instDetail.conservation?.principal_balanced ? '✓本金' : '✗本金' }} / {{ instDetail.conservation?.fee_balanced ? '✓费用' : '✗费用' }} ·
                 剩余应付 {{ formatMinor(instDetail.conservation?.remaining_minor) }}</div>
               <div class="ranklist"><div v-for="p in instDetail.schedule" :key="p.installment_no" class="rankrow">
-                <span>第 {{ p.installment_no }} 期 · {{ p.due_on }} · {{ p.derived_status }}</span>
+                <span>第 {{ p.installment_no }} 期 · {{ p.due_on }} · {{ p.status === 'cancelled' ? p.status : p.derived_status }}</span>
                 <b>本 {{ formatMinor(p.principal_minor) }} / 费 {{ formatMinor(p.fee_minor) }} · 余 {{ formatMinor(p.remaining_minor) }}</b>
                 <span class="rowacts"><button v-if="p.status !== 'paid' && p.status !== 'cancelled' && p.paid_minor === 0" class="ghost"
                   @click="instAdjustReduce(p.installment_no, p.principal_minor, p.fee_minor)">按退款调整</button></span>
@@ -694,8 +705,10 @@ const metricCards = computed(() => {
 
           <section class="panel formpanel"><div class="paneltitle"><div><h2>信用账单转分期</h2><span class="subinfo">仅重分类负债：本金绝不重复</span></div></div>
             <div class="formgrid">
-              <label>信用工具<select v-model="f.convert.credit_instrument_id"><option value="">请选择</option>
+              <label>信用工具<select v-model="f.convert.credit_instrument_id" @change="f.convert.statement_id = ''"><option value="">请选择</option>
                 <option v-for="c in creditInstruments.filter(c => c.status === 'active')" :key="c.id" :value="c.id">{{ c.name }}</option></select></label>
+              <label>原账单<select v-model="f.convert.statement_id"><option value="">请选择</option>
+                <option v-for="s in statements.filter(s => s.instrument_id === f.convert.credit_instrument_id && s.system_due_minor > s.paid_minor)" :key="s.id" :value="s.id">{{ s.due_on }} · 未还 {{ formatMinor(s.system_due_minor - s.paid_minor) }}</option></select></label>
               <label>合同名称<input v-model="f.convert.name" /></label>
               <label>转分期本金（元）<input v-model="f.convert.principal" inputmode="decimal" /></label>
               <label>总手续费（元）<input v-model="f.convert.fee" inputmode="decimal" /></label>

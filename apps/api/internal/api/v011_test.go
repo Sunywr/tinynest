@@ -809,17 +809,49 @@ func TestV011_InstallmentConvertFromCreditKeepsSinglePrincipal(t *testing.T) {
 	if got := subjectMinor(t, database, "2010:"+ci); got != -100_000 {
 		t.Fatalf("credit liability before conversion = %d", got)
 	}
+	stmt := findRow(t, c.mustOK("GET", "/api/v1/credit-statements", nil), "instrument_id", ci)
+	stmtID := stmt["id"].(string)
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	var pendingBefore int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items WHERE source_id=? AND status='pending'`, stmtID).Scan(&pendingBefore); err != nil || pendingBefore != 1 {
+		t.Fatalf("expected an existing pending bill, got %d, err=%v", pendingBefore, err)
+	}
+	const convertPath = "/api/v1/installments/convert-from-credit"
+	partial := map[string]any{
+		"credit_instrument_id": ci, "statement_id": stmtID, "name": "部分转分期",
+		"principal_minor": 40_000, "total_fee_minor": 0,
+		"periods": 2, "first_due_on": "2026-12-01",
+	}
+	c.headers = map[string]string{"Idempotency-Key": "partial-conversion"}
+	first := c.mustOK("POST", convertPath, partial)
+	replay := c.mustOK("POST", convertPath, partial)
+	c.headers = nil
+	if replay["id"] != first["id"] || replay["replayed"] != true {
+		t.Fatalf("conversion replay = %v, first = %v", replay, first)
+	}
+	var projected int64
+	if err := database.QueryRow(`SELECT amount_minor FROM schedule_due_items WHERE source_id=? AND status='pending'`, stmtID).Scan(&projected); err != nil || projected != 60_000 {
+		t.Fatalf("pending bill after partial conversion = %d, err=%v", projected, err)
+	}
 	out := c.mustOK("POST", "/api/v1/installments/convert-from-credit", map[string]any{
 		"credit_instrument_id": ci, "name": "账单转分期",
-		"principal_minor": 100_000, "total_fee_minor": 0,
+		"principal_minor": 60_000, "total_fee_minor": 0,
 		"periods": 2, "first_due_on": "2026-12-01",
 	})
 	instID := out["id"].(string)
+	bill := c.mustOK("GET", "/api/v1/credit-statements/"+stmtID, nil)
+	if number(bill["remaining_minor"]) != 0 || number(bill["paid_minor"]) != 0 {
+		t.Errorf("conversion must remove the bill obligation without recording a payment: %v", bill)
+	}
+	var pending int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items WHERE source_id=? AND status='pending'`, stmtID).Scan(&pending); err != nil || pending != 0 {
+		t.Errorf("pending bill after full conversion = %d, err=%v", pending, err)
+	}
 	if got := subjectMinor(t, database, "2010:"+ci); got != 0 {
 		t.Errorf("credit liability after conversion = %d, want 0", got)
 	}
-	if got := subjectMinor(t, database, "2020:"+instID); got != -100_000 {
-		t.Errorf("installment liability = %d, want -100000", got)
+	if got := subjectMinor(t, database, "2020:"+instID); got != -60_000 {
+		t.Errorf("installment liability = %d, want -60000", got)
 	}
 	sum := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
 	if number(sum["expense_minor"]) != 100_000 {

@@ -117,6 +117,7 @@
 |---|---|---|---|
 | GET/POST | `/installments` | IMPLEMENTED | 合同；校验期次本金/费用合计 |
 | POST | `/installments/{id}/payments` | IMPLEMENTED | 确认实付（`channel=cash\|credit`） |
+| POST | `/installments/convert-from-credit` | IMPLEMENTED（V0.1.1） | 指定 `credit_instrument_id` 与 `statement_id`，同一事务重分类本金、冲减原账单及已有待办。仅当该工具恰有一张未还账单时可省略 `statement_id` |
 | GET | `/schedule/due-items` | IMPLEMENTED | 待支付事项（只读，业务日时钟） |
 | POST | `/schedule/generate` | IMPLEMENTED（PARTIAL 语义） | **手动**幂等投影未来 30 天期次；每日自动调度器仍为 PLANNED |
 | GET | `/installments/{id}` | PLANNED | 合同 + 期次计划 |
