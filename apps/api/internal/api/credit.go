@@ -211,7 +211,7 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			"cycle_start_on": start, "cycle_end_on": end, "due_on": due,
 			"system_due_minor": sysDue, "paid_minor": paid,
 			"remaining_minor": sysDue - paid,
-			"status": derived, "derived_status": derived, "stored_status": status,
+			"status":          derived, "derived_status": derived, "stored_status": status,
 			"platform_amount_minor": platform,
 		}
 		if platform != nil {
@@ -241,7 +241,7 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	// V0.1.1: replaying the same Idempotency-Key returns the FIRST result,
 	// never a UNIQUE error and never a second journal entry.
-	replayKey := idempotencyKey(r)
+	replayKey := scopedKey(p.HouseholdID, idempotencyKey(r))
 	if replayKey != "" {
 		var existingID, existingEntry string
 		if err := a.DB.QueryRowContext(r.Context(),
@@ -274,14 +274,14 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, idempotencyKey(r), p.Username); err != nil {
+		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, replayKey, p.Username); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO credit_payments(id,household_id,statement_id,amount_minor,paid_on,from_account_id,entry_id,idempotency_key)
 			VALUES(?,?,?,?,?,?,?,?)`,
 			payID, p.HouseholdID, stmtID, int64(amount), in.PaidOn, in.FromAccountID, entryID,
-			nullableKey(idempotencyKey(r))); err != nil {
+			nullableKey(replayKey)); err != nil {
 			return err
 		}
 		// Status is derived from facts + business date, not a mutable running flag.
