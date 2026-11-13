@@ -13,4 +13,5 @@ if command -v npm >/dev/null 2>&1; then
 else
   echo 'SKIP Vue build: npm missing'
 fi
-echo 'Phase 0 static checks passed (see any SKIP above)'
+echo 'Local static checks passed (see any SKIP above); this script name is kept for history, it now validates the V0.1 tree.'
+echo 'NOTE: for the full V0.1 gate run go mod tidy -diff, npm ci / typecheck / build, and git diff --check (see docs/acceptance.md).'

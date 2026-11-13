@@ -1,0 +1,106 @@
+name: TinyNest V0.1 CI
+
+# Pinned toolchain versions on purpose: go.mod targets go 1.22 but the gate uses
+# `go mod tidy -diff`, which requires Go >= 1.23; Node 22 matches the local dev baseline.
+# No artifacts are uploaded: no real setup tokens, .env files or SQLite databases ever
+# leave the runner. API tests create their own throwaway SQLite files in temp dirs.
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - 'feature/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: Go API (build / test / vet / tidy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.6'
+          cache: true
+          cache-dependency-path: apps/api/go.sum
+      - name: go build ./...
+        run: go build ./...
+      - name: go test ./... -count=1
+        run: go test ./... -count=1
+      - name: go vet ./...
+        run: go vet ./...
+      - name: go mod tidy -diff (exit code is enforced)
+        run: go mod tidy -diff
+
+  web:
+    name: Web (npm ci / typecheck / build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: npm run typecheck
+        run: npm run typecheck
+      - name: npm run build
+        run: npm run build
+
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: git diff --check on this PR's changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            git diff --check "origin/$BASE_REF...HEAD"
+          elif [ -n "$BEFORE_SHA" ] && ! printf '%s' "$BEFORE_SHA" | grep -qE '^0+$'; then
+            git diff --check "$BEFORE_SHA" HEAD
+          else
+            git diff --check HEAD^ HEAD
+          fi
+      - name: No secrets / databases / local state tracked
+        run: |
+          set -euo pipefail
+          bad=$(git ls-files | grep -Ei '(^|/)\.env($|\.)|\.sqlite3?($|-)|\.db($|-)|(^|/)(backups|data)/' | grep -v '\.env\.example$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Sensitive or machine-local files must not be committed:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: No local agent notes tracked
+        run: |
+          set -euo pipefail
+          bad=$(git ls-files .workbuddy/ || true)
+          if [ -n "$bad" ]; then
+            echo "::error::.workbuddy/ is local-only and must stay out of the PR:"
+            echo "$bad"
+            exit 1
+          fi

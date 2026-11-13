@@ -1,13 +1,34 @@
+# TinyNest V0.1 Go API — systemd unit 模板（示例，勿直接用于生产）
+#
+# 说明：
+# - B 机运行 API，SQLite 在 /var/lib/tinynest 下；Nginx 在 A 机终止 TLS 后反代到本机端口，
+#   因此 Go 侧 r.TLS 为 nil，会话 Cookie 的 Secure 必须由 TINYNEST_COOKIE_SECURE 显式打开。
+# - TINYNEST_SETUP_TOKEN 只在首次初始化时使用，必须是后端主机上生成的强随机值；
+#   不要写进仓库、日志或前端。初始化成功后 /api/v1/setup 返回 409。
+# - 用 EnvironmentFile 存放机密，文件权限 0600、属主 tinynest，文件本身不入仓库。
+# - 生产环境把 TINYNEST_TRUSTED_PROXIES 设为反代真实来源 CIDR（如 10.0.0.0/8 中实际网段），
+#   不要填 0.0.0.0/0，否则客户端可伪造 X-Forwarded-*。
+
 [Unit]
-Description=TinyNest Phase 0 Go API
+Description=TinyNest V0.1 Go API
 After=network.target
+
 [Service]
 Type=simple
 User=tinynest
 Group=tinynest
 WorkingDirectory=/opt/tinynest/api
+EnvironmentFile=/etc/tinynest/api.env
 Environment=TINYNEST_LISTEN_ADDR=127.0.0.1:8787
 Environment=TINYNEST_DATA_DIR=/var/lib/tinynest
+Environment=TINYNEST_DB_PATH=/var/lib/tinynest/tinynest.sqlite3
+# api.env 中必须提供（示例值，部署时替换）：
+#   TINYNEST_SETUP_TOKEN=<strong-random-once>
+#   TINYNEST_COOKIE_SECURE=true
+#   TINYNEST_TRUSTED_PROXIES=<reverse-proxy-source-cidr>
+#   TINYNEST_LOGIN_MAX_FAILURES=5
+#   TINYNEST_LOGIN_WINDOW_SECONDS=300
+#   TINYNEST_LOGIN_LOCKOUT_SECONDS=60
 ExecStart=/opt/tinynest/api/tinynest-api
 Restart=on-failure
 RestartSec=3
@@ -17,5 +38,6 @@ ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/tinynest
 UMask=0077
+
 [Install]
 WantedBy=multi-user.target

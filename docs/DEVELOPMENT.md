@@ -1,55 +1,97 @@
-# TinyNest · 小家
+# TinyNest · 小家 · 开发与本地验证
 
-**已确认视觉主题：A · 奶油团子**。个人家庭记账网站项目 Phase 0 初始化包，适合 PC Web 与 iPhone PWA（非 App Store App）。
+**已确认视觉主题：A · 奶油团子**（见 `docs/design-system.md`）。当前仓库处于 **V0.1 家庭账本开发基线**：`apps/web` 已连接真实后端 API，可完成登录、记账、退款、信用账单、分期与投资记录。
 
-> ⚠️ 当前只有 **界面演示与基础设施骨架**；所有金额、流水、预算为虚构样本，**不可用于真正记账**。没有登录、权限、加密账务存储和真实业务 API。
+> **状态声明**：V0.1 主体已实现并有自动化测试覆盖，但**发布门禁尚未全部通过**（iPhone 实机 PWA、双服务器 HTTPS 私网链路、前端 E2E、10 项账务口径确认）。**暂不建议录入真实家庭财务数据，暂不部署生产**。原始 Phase 0 计划见 `plan.md`（历史存档）。
 
-## 现在就能预览
+## 静态原型（历史存档，虚构数据）
 
-**直接打开** `previews/open-directly.html`，不需要安装任何依赖、无需启动后端；或查看 `previews/desktop-cream.png` / `previews/iphone-cream.png`。
+`previews/open-directly.html` 与 `previews/desktop-cream.png` / `previews/iphone-cream.png` 是 **Phase 0 存档的静态 Demo**，金额全部为虚构样本，**不代表当前 `apps/web`**。它们不需要安装依赖、无需启动后端，仅用于回顾视觉风格。
 
-## 快速启动 Vue + Go
+## 当前 V0.1 快速启动
+
+先阅读 `apps/api/.env.example`（示例配置，勿提交真实值）。后端**必须显式**设置会话 Cookie 安全开关，否则拒绝启动。
 
 ```bash
-# 终端1: Go API
+# 终端 1：Go API（启动即执行 7 个版本迁移）
 cd apps/api
 mkdir -p data
-TINYNEST_DATA_DIR=./data go run ./cmd/server
+# 本地纯 HTTP 开发：显式关闭 Secure；初始化令牌由部署者生成，仅用一次
+export TINYNEST_DATA_DIR=./data
+export TINYNEST_DB_PATH=./data/tinynest.sqlite3
+export TINYNEST_COOKIE_SECURE=false
+export TINYNEST_SETUP_TOKEN="$(openssl rand -hex 32)"   # Windows 可用 PowerShell 生成随机串
+go run ./cmd/server
 
-# 终端2: Vue Web
+# 终端 2：Vue Web
 cd apps/web
-npm install
-npm run dev
-# http://127.0.0.1:5173
+npm ci
+npm run dev        # http://127.0.0.1:5173
 ```
 
-Windows PowerShell：`cd apps\api; New-Item -ItemType Directory -Force data; go run ./cmd/server`，另一个窗口 `cd apps\web; npm install; npm run dev`。
+Windows PowerShell：
 
-`http://127.0.0.1:8787/api/v1/healthz` 是后端存活检查；页面 `/api` 通过 Vite 代理访问它。断开后端不影响 Demo 页面。
+```powershell
+cd apps\api
+New-Item -ItemType Directory -Force data | Out-Null
+$env:TINYNEST_DATA_DIR = "./data"
+$env:TINYNEST_DB_PATH = "./data/tinynest.sqlite3"
+$env:TINYNEST_COOKIE_SECURE = "false"
+$env:TINYNEST_SETUP_TOKEN = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
+go run ./cmd/server
+```
 
-## 工程目录
+首次使用：打开页面 →「首次初始化」→ 填入**与后端 `TINYNEST_SETUP_TOKEN` 完全一致**的一次性令牌、家庭名称、用户名与密码 → 提交（仅一次）→ 登录。令牌不写入浏览器代码、不进仓库、不写日志。
+
+环境变量（全部在后端配置）：
+
+| 变量 | 说明 |
+|---|---|
+| `TINYNEST_LISTEN_ADDR` | 默认 `127.0.0.1:8787` |
+| `TINYNEST_DATA_DIR` | 默认 `./data` |
+| `TINYNEST_DB_PATH` | 默认 `<data_dir>/tinynest.sqlite3` |
+| `TINYNEST_SETUP_TOKEN` | 一次性 Bootstrap Token；**未配置时 `/api/v1/setup` 返回 403** |
+| `TINYNEST_COOKIE_SECURE` | **必填** `true`（生产 HTTPS）/ `false`（本地纯 HTTP）；缺失拒绝启动 |
+| `TINYNEST_TRUSTED_PROXIES` | 可选，逗号分隔 IP/CIDR；只有这些来源的 `X-Forwarded-*` 才被采信 |
+| `TINYNEST_LOGIN_MAX_FAILURES` / `_WINDOW_SECONDS` / `_LOCKOUT_SECONDS` | 可选，登录失败限流参数，留空用内置默认值 |
+
+数据库文件只在后端，`.gitignore` 已排除。健康检查：`GET http://127.0.0.1:8787/api/v1/healthz`；`readyz` 会做真实 SQLite `quick_check` 与迁移版本校验。前端 `/api` 经 Vite 代理访问后端。
+
+## 工程目录（当前）
 
 ```text
 tinynest/
-├── AGENTS.md / plan.md / README.md
-├── assets/brand/         # 用户原始团子图标（不改绘）
-├── previews/             # 无依赖 HTML Demo、PC/手机截图
-├── apps/web/             # Vue 3 + TS + Vite；PWA/图标/Service Worker
-├── apps/api/             # Go 标准库：healthz / readyz，零业务 API
-├── scripts/              # 品牌哈希核对、元数据库初始化/备份/自检
-├── deploy/frontend/      # A 机 Nginx HTTPS 同源代理模板
-├── deploy/backend/       # B 机私网 Nginx + systemd 模板
-└── docs/                 # 设计、架构、安全、部署、Agent 提示词、验收
+├── AGENTS.md                    # 当前 V0.1 守则（含 Phase 0 历史说明）
+├── plan.md / .plan/              # 历史阶段计划（保留原文）
+├── assets/brand/                 # 用户原始团子图标（不改绘）
+├── previews/                     # Phase 0 静态原型存档（虚构金额）
+├── apps/web/                     # Vue 3 + TS + Vite；真实 API 界面 / PWA / SW
+├── apps/api/                     # Go + SQLite：健康检查 + V0.1 账本 API + 7 版本迁移
+├── scripts/                      # 品牌哈希核对、备份、自检、可选元表预初始化
+├── deploy/frontend/ · backend/  # A 机 Nginx HTTPS 同源代理 / B 机私网 Nginx + systemd 模板
+├── docs/                         # 设计、架构、安全、部署、账务规则、API 契约
+└── docs/reviews/                 # 合并前审查、修复报告、发布门禁、口径决策记录
 ```
 
 ## 部署方向
 
-A 机提供前端静态资源和 HTTPS 统一入口；B 机运行 Go 与 SQLite；A→B 经私网加密链路，B 不公开数据库/Go 端口。具体配置待用户提供域名和服务器网络信息后再落地。
+A 机提供前端静态资源和 HTTPS 统一入口；B 机运行 Go 与 SQLite；A→B 经私网加密链路，B 不公开数据库/Go 端口。生产必须设置 `TINYNEST_COOKIE_SECURE=true`、可信反代列表与一次性初始化令牌。详见 `docs/deployment.md`、`docs/architecture.md`、`deploy/*`。**上线前仍需完成发布门禁**（见 `docs/reviews/v0.1-release-gates.md`）。
 
-## 给 Coding Agent
+## 验证命令
 
-打开 `docs/agent-prompt.md` 并复制提示词；或直接要求 Agent 阅读 `AGENTS.md`、`plan.md`。不得跳到真实业务开发。
+```bash
+cd apps/api
+go test ./... -count=1
+go vet ./...
+go mod tidy -diff            # 退出码 0 表示 go.mod / go.sum 与 tidy 一致
+go build ./...
 
-## 自检
+cd apps/web
+npm ci
+npm run typecheck
+npm run build
+```
 
-Linux/macOS: `bash scripts/check-phase0.sh`；Windows：`powershell -ExecutionPolicy Bypass -File scripts/check-phase0.ps1`。安装过 npm 依赖后，运行 `cd apps/web && npm run build`。
+或用 `bash scripts/check-phase0.sh`（脚本名保留历史，实际执行全仓自检）/ Windows `powershell -ExecutionPolicy Bypass -File scripts/check-phase0.ps1`。CI 工作流见 `.github/workflows/ci.yml`（首次绿灯需真正在 GitHub Actions 跑过）。
+
+设计文档：`docs/accounting-rules-v0.1.md`（账务规则，第 8 节 10 项**待确认**）、`docs/er-v0.1.md`（ER）、`docs/api-v0.1.md`（API 契约含状态列）、`docs/plan-v0.1.md`（V0.1 实施计划）、`IMPLEMENTATION_REPORT.md`（交付与未竟事项）。
