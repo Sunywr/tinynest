@@ -45,8 +45,12 @@ func newRemEnv(t *testing.T, opts Options) *remEnv {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if len(applied) != 7 {
-		t.Fatalf("expected 7 migrations, got %v", applied)
+	expected, err := db.EmbeddedVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != len(expected) {
+		t.Fatalf("expected %d migrations, got %v", len(expected), applied)
 	}
 	a := New(database, opts)
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
