@@ -1,11 +1,18 @@
 package api
 
 import (
+	"context"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"tinynest/api/internal/auth"
 	"tinynest/api/internal/credit"
 	"tinynest/api/internal/db"
+	"tinynest/api/internal/server"
 )
 
 // findRow returns the first item of a {"items":[...]} response whose key equals value.
@@ -856,5 +863,239 @@ func TestV011_InstallmentSettleEarlyKeepsPaidHistory(t *testing.T) {
 	}
 	if got := subjectMinor(t, database, "2020:"+inst); got != -200_000 {
 		t.Errorf("liability after settlement = %d, want -200000", got)
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %s", what)
+}
+
+// M4: the automatic scheduler (startup backfill + daily tick) projects due
+// obligations for every household exactly once, logs every run, never posts a
+// journal entry, and confirms to-do items inside the paying transaction.
+func TestV011_M4_SchedulerBackfillTickConfirmAndIsolation(t *testing.T) {
+	// 2026-11-13 20:00 Asia/Shanghai, frozen except where the test advances it.
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	a := New(database, Options{
+		SetupToken:        testSetupToken,
+		Clock:             func() time.Time { return now },
+		SchedulerInterval: 20 * time.Millisecond, // test cadence
+	})
+	mux := server.NewMux(dir, server.Options{Register: a.Register})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	jar, _ := cookiejar.New(nil)
+	c := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar},
+		headers: map[string]string{setupTokenHeader: testSetupToken}}
+	code, body := c.do("POST", "/api/v1/setup", map[string]any{
+		"household_name": "调度小家", "username": "admin", "password": "correct-horse-battery",
+	})
+	if code != 201 {
+		t.Fatalf("setup: %d %v", code, body)
+	}
+	c.headers = nil
+	code, body = c.do("POST", "/api/v1/auth/session", map[string]any{
+		"username": "admin", "password": "correct-horse-battery",
+	})
+	if code != 200 {
+		t.Fatalf("login: %d %v", code, body)
+	}
+	c.csrf, _ = body["csrf_token"].(string)
+
+	// Household A obligations: installment period + unpaid statement + debt period.
+	cash := cashIDForTest(t, c)
+	inst := makeInstallment(t, c, 300_000, 9_000, 3, "2026-12-01")
+	loan := makeDebt(t, c, "mortgage", 300_000, "2026-11-01")
+	makeDebtSchedule(t, c, loan, map[string]any{
+		"installment_no": 1, "due_on": "2026-11-20",
+		"principal_minor": 100_000, "interest_minor": 50_000, "fee_minor": 0,
+	})
+	expCat := c.firstCategory("expense")
+	ci := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"kind": "credit_card", "name": "调度卡", "cycle_start_day": 1,
+		"cycle_end_day": 31, "due_day": 10, "due_month_offset": 1,
+	})["id"].(string)
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 100_000, "occurred_on": "2026-11-12",
+		"payment_kind": "credit", "credit_instrument_id": ci,
+		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 100_000}},
+	})
+	stmtID := findRow(t, c.mustOK("GET", "/api/v1/credit-statements", nil), "instrument_id", ci)["id"].(string)
+
+	// Household B lives in the SAME database; it must never see or block A.
+	hash, err := auth.HashPassword("correct-horse-battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO households(id,name) VALUES('hh_sched_b','调度B家')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(
+		`INSERT INTO users(id,household_id,username,password_hash,role) VALUES('usr_sched_b','hh_sched_b','admin_b',?,'admin')`, hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(
+		`INSERT INTO sessions(id,user_id,token_hash,csrf_token,expires_at) VALUES('sess_sched_b','usr_sched_b',?,'csrf-b','2099-01-01T00:00:00Z')`,
+		auth.HashToken("raw-b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO installment_contracts(id,household_id,name,principal_minor,total_fee_minor,periods,first_due_on,ledger_code,status)
+		VALUES('inst_sched_b','hh_sched_b','B的分期',60000,0,1,'2026-11-15','2020:inst_sched_b','active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO installment_schedule_items(id,contract_id,installment_no,due_on,principal_minor,fee_minor,total_minor,status)
+		VALUES('isi_sched_b','inst_sched_b',1,'2026-11-15',60000,0,60000,'pending')`); err != nil {
+		t.Fatal(err)
+	}
+
+	var entriesBefore int
+	_ = database.QueryRow(`SELECT COUNT(*) FROM journal_entries`).Scan(&entriesBefore)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.StartScheduler(ctx)
+
+	// Startup backfill must appear in schedule_runs for BOTH households.
+	waitFor(t, "startup backfill runs", func() bool {
+		var n int
+		_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_runs`).Scan(&n)
+		return n >= 2
+	})
+
+	countDue := func(hh, status string) int {
+		var n int
+		_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items WHERE household_id=? AND status=?`, hh, status).Scan(&n)
+		return n
+	}
+	householdA := c.mustOK("GET", "/api/v1/auth/me", nil)["household_id"].(string)
+	waitFor(t, "projected due items", func() bool {
+		return countDue(householdA, "pending") == 3 && countDue("hh_sched_b", "pending") == 1
+	})
+	if countDue(householdA, "pending") != 3 || countDue("hh_sched_b", "pending") != 1 {
+		t.Fatalf("due items: A=%d B=%d", countDue(householdA, "pending"), countDue("hh_sched_b", "pending"))
+	}
+
+	// The scheduler must be a pure projection: no journal entries, ever.
+	var entriesAfter int
+	_ = database.QueryRow(`SELECT COUNT(*) FROM journal_entries`).Scan(&entriesAfter)
+	if entriesAfter != entriesBefore {
+		t.Fatalf("scheduler posted journal entries: %d -> %d", entriesBefore, entriesAfter)
+	}
+
+	// Advance the business day: ticks keep running, nothing new is projected,
+	// and the run log keeps growing (daily tick is traceable).
+	runsBefore := 0
+	_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_runs`).Scan(&runsBefore)
+	now = now.AddDate(0, 0, 1)
+	waitFor(t, "daily tick after clock advance", func() bool {
+		var n int
+		_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_runs`).Scan(&n)
+		return n > runsBefore
+	})
+	if countDue(householdA, "pending") != 3 || countDue("hh_sched_b", "pending") != 1 {
+		t.Fatal("repeated ticks must not duplicate due items")
+	}
+
+	// Household A's list endpoint shows ONLY household A obligations.
+	list := c.mustOK("GET", "/api/v1/schedule/due-items?days=30", nil)
+	if number(list["total"]) != 3 {
+		t.Fatalf("household A sees %v due items, want 3 (no cross-household leak)", list["total"])
+	}
+	for _, it := range list["items"].([]any) {
+		m := it.(map[string]any)
+		if m["biz_key"].(string)[:len(householdA)] != householdA {
+			t.Fatalf("biz_key leak across households: %v", m["biz_key"])
+		}
+		if m["source_label"].(string) == "" {
+			t.Fatalf("due item missing source_label: %v", m)
+		}
+	}
+
+	// Paying the statement / installment / debt period confirms each to-do
+	// INSIDE the same transaction; balances move only via the real payments.
+	c.mustOK("POST", "/api/v1/credit-statements/"+stmtID+"/payments", map[string]any{
+		"amount_minor": 100_000, "paid_on": "2026-11-13", "from_account_id": cash,
+	})
+	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 103_000, "paid_on": "2026-11-13",
+		"channel": "cash", "channel_id": cash,
+	})
+	c.mustOK("POST", "/api/v1/debts/"+loan+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 150_000, "paid_on": "2026-11-13",
+		"channel": "cash", "channel_id": cash,
+		"principal_minor": 100_000, "interest_minor": 50_000, "fee_minor": 0,
+	})
+	waitFor(t, "due items confirmed after payment", func() bool {
+		return countDue(householdA, "confirmed") == 3
+	})
+
+	// B's only obligation stays pending and invisible to A.
+	if countDue("hh_sched_b", "pending") != 1 {
+		t.Fatal("household B obligation must stay pending and isolated")
+	}
+	bc := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar},
+		headers: map[string]string{"Cookie": "tn_session=raw-b"}, csrf: "csrf-b"}
+	blist := bc.mustOK("GET", "/api/v1/schedule/due-items?days=30", nil)
+	if number(blist["total"]) != 1 {
+		t.Fatalf("household B sees %v due items, want 1", blist["total"])
+	}
+
+	// Run log is traceable per household; manual regeneration stays idempotent.
+	runs := c.mustOK("GET", "/api/v1/schedule/runs", nil)
+	if number(runs["total"]) < 1 {
+		t.Fatalf("schedule run log missing: %v", runs)
+	}
+	for i := 0; i < 20; i++ {
+		gen := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+		if number(gen["generated"]) != 0 {
+			t.Fatalf("manual regen %d created %v items (must be idempotent)", i, gen["generated"])
+		}
+	}
+	if countDue(householdA, "pending") != 0 || countDue("hh_sched_b", "pending") != 1 {
+		t.Fatal("regeneration changed due items")
+	}
+}
+
+// M4: the production daily boundary is 00:07 Asia/Shanghai; a run already
+// past 00:07 today must be scheduled for the next day.
+func TestV011_M4_NextDailyRunBoundary(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	before := time.Date(2026, 11, 13, 0, 6, 59, 0, cst)
+	got := nextDailyRun(before)
+	want := time.Date(2026, 11, 13, 0, 7, 0, 0, cst)
+	if !got.Equal(want) {
+		t.Errorf("nextDailyRun(00:06:59) = %v, want %v", got, want)
+	}
+	after := time.Date(2026, 11, 13, 0, 7, 0, 0, cst)
+	got = nextDailyRun(after)
+	want = time.Date(2026, 11, 14, 0, 7, 0, 0, cst)
+	if !got.Equal(want) {
+		t.Errorf("nextDailyRun(00:07:00) = %v, want %v", got, want)
+	}
+	// UTC input must be interpreted in Asia/Shanghai, not the host zone.
+	utc := time.Date(2026, 11, 12, 16, 30, 0, 0, time.UTC) // 00:30 CST next day
+	got = nextDailyRun(utc)
+	want = time.Date(2026, 11, 14, 0, 7, 0, 0, cst)
+	if !got.Equal(want) {
+		t.Errorf("nextDailyRun(UTC 16:30) = %v, want %v", got, want)
 	}
 }

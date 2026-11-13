@@ -612,6 +612,9 @@ func (a *API) handleDebtPayment(w http.ResponseWriter, r *http.Request) {
 			pv, contractID); err != nil {
 			return err
 		}
+		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "debt", itemID); err != nil {
+			return err
+		}
 		return audit(r.Context(), tx, p, "debt_payment", "debt_payment", payID, in.PaidOn)
 	})
 	if err != nil {

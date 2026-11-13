@@ -56,6 +56,9 @@ type Options struct {
 	Clock func() time.Time
 	// LoginLimiter configures the failed-login rate limiter.
 	LoginLimiter LoginLimiterConfig
+	// SchedulerInterval overrides the daily due-item cadence (test hook only).
+	// Zero uses the production daily Asia/Shanghai 00:07 boundary.
+	SchedulerInterval time.Duration
 }
 
 type API struct {
@@ -64,6 +67,7 @@ type API struct {
 	trusted []netip.Prefix
 	limiter *loginLimiter
 	setupMu sync.Mutex
+	schedMu sync.Mutex
 }
 
 // New keeps the historical single-argument form working while allowing the

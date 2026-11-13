@@ -443,7 +443,7 @@ func (a *API) handleSettleEarlyInstallment(w http.ResponseWriter, r *http.Reques
 			INSERT INTO installment_adjustments(id,household_id,contract_id,action,payload_json,reason,actor)
 			VALUES(?,?,?,'settle_early',?,?,?)`,
 			newID("iadj"), p.HouseholdID, id,
-			fmtInt(cancelled), in.Reason, p.Username); err != nil {
+			itoa(cancelled), in.Reason, p.Username); err != nil {
 			return err
 		}
 		return audit(r.Context(), tx, p, "settle_early_installment", "installment_contract", id, in.Reason)
@@ -456,28 +456,6 @@ func (a *API) handleSettleEarlyInstallment(w http.ResponseWriter, r *http.Reques
 		"contract_id": id, "cancelled_periods": cancelled, "status": "settled",
 		"note": "仅取消未付款期次；已付款历史与分录全部保留",
 	})
-}
-
-func fmtInt(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	var b [20]byte
-	i := len(b)
-	for v > 0 {
-		i--
-		b[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }
 
 // Converting an existing credit-card balance into an instalment contract MUST

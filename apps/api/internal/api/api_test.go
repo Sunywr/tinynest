@@ -260,9 +260,10 @@ func TestV01EndToEnd(t *testing.T) {
 	})["id"].(string)
 	gen1 := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
 	gen2 := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
-	// The daily task only projects obligations due within 30 days, so with monthly
-	// periods just the first one is created; a second run must create nothing at all.
-	if number(gen1["generated"]) != 1 || number(gen2["generated"]) != 0 {
+	// V0.1.1 M4 projects ALL unpaid obligations within 30 days: the credit card
+	// statement (remaining 40000 after the partial repayment above) plus the
+	// first installment period. A second run must create nothing at all.
+	if number(gen1["generated"]) != 2 || number(gen2["generated"]) != 0 {
 		t.Errorf("due-item generation not idempotent: first=%v second=%v", gen1["generated"], gen2["generated"])
 	}
 	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{

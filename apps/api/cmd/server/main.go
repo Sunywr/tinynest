@@ -152,6 +152,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// V0.1.1 M4: daily due-item projection (startup backfill + Asia/Shanghai 00:07 tick).
+	businessAPI.StartScheduler(ctx)
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -292,6 +292,9 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 			newPaid, newStatus, stmtID); err != nil {
 			return err
 		}
+		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "credit_statement", stmtID); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -581,6 +584,9 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		splitPrincipal, splitFee = payP, payF
+		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "installment", itemID); err != nil {
+			return err
+		}
 		return audit(r.Context(), tx, p, "installment_payment", "installment_payment", payID, in.PaidOn)
 	})
 	if err != nil {
@@ -597,60 +603,12 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGenerateDueItems is the daily task. It ONLY inserts pending obligations;
-// it NEVER marks anything paid and never changes any balance. biz_key makes it idempotent.
+// handleGenerateDueItems is the manual trigger of the daily projection. It
+// ONLY inserts pending obligations; it NEVER marks anything paid and never
+// changes any balance. The biz_key makes it idempotent.
 func (a *API) handleGenerateDueItems(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	horizon := a.businessToday().AddDate(0, 0, 30).Format("2006-01-02")
-	generated := 0
-	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		// The schedule tables have no household_id column of their own: ownership is
-		// resolved through their parent contract. Filtering here (not after the fact)
-		// is what prevents household A from projecting household B's obligations.
-		for _, src := range []struct{ table, kind, contractTable string }{
-			{"installment_schedule_items", "installment", "installment_contracts"},
-			{"debt_schedule_items", "debt", "debt_contracts"},
-		} {
-			rows, err := tx.QueryContext(r.Context(), fmt.Sprintf(`
-			SELECT s.id,s.due_on,s.total_minor,s.paid_minor
-			FROM %s s JOIN %s c ON c.id = s.contract_id
-			WHERE c.household_id = ? AND s.status='pending' AND s.due_on<=?`,
-				src.table, src.contractTable), p.HouseholdID, horizon)
-			if err != nil {
-				return err
-			}
-			type row struct {
-				id, due     string
-				total, paid int64
-			}
-			var found []row
-			for rows.Next() {
-				var v row
-				if err := rows.Scan(&v.id, &v.due, &v.total, &v.paid); err != nil {
-					_ = rows.Close()
-					return err
-				}
-				found = append(found, v)
-			}
-			_ = rows.Close()
-			for _, v := range found {
-				// Scope the idempotency key to the household so two households can
-				// never contend for the same globally-unique biz_key.
-				bizKey := p.HouseholdID + ":" + src.kind + ":" + v.id
-				res, err := tx.ExecContext(r.Context(), `
-					INSERT OR IGNORE INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status)
-					VALUES(?,?,?,?,?,?,?,'pending')`,
-					newID("due"), p.HouseholdID, src.kind, v.id, bizKey, v.due, v.total-v.paid)
-				if err != nil {
-					return err
-				}
-				if n, _ := res.RowsAffected(); n > 0 {
-					generated++
-				}
-			}
-		}
-		return nil
-	})
+	generated, err := a.projectDueItems(r.Context(), p.HouseholdID, "manual", 30)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -666,7 +624,7 @@ func (a *API) handleListDueItems(w http.ResponseWriter, r *http.Request) {
 	}
 	to := a.businessToday().AddDate(0, 0, days).Format("2006-01-02")
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id,source_type,source_id,biz_key,due_on,amount_minor,status FROM schedule_due_items
+		`SELECT id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label FROM schedule_due_items
 		 WHERE household_id=? AND due_on<=? ORDER BY due_on`, p.HouseholdID, to)
 	if err != nil {
 		internalErr(w, err)
@@ -678,14 +636,15 @@ func (a *API) handleListDueItems(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, typ, sid, key, due, status string
 		var amount int64
-		if err := rows.Scan(&id, &typ, &sid, &key, &due, &amount, &status); err != nil {
+		var label *string
+		if err := rows.Scan(&id, &typ, &sid, &key, &due, &amount, &status, &label); err != nil {
 			internalErr(w, err)
 			return
 		}
 		total += amount
 		items = append(items, map[string]any{
 			"id": id, "source_type": typ, "source_id": sid, "biz_key": key,
-			"due_on": due, "amount_minor": amount, "status": status,
+			"due_on": due, "amount_minor": amount, "status": status, "source_label": label,
 		})
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items), "total_minor": total, "days": days})
