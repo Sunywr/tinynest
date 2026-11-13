@@ -29,17 +29,23 @@ npm ci
 npm run dev        # http://127.0.0.1:5173
 ```
 
-Windows PowerShell：
+Windows PowerShell 5.1 / PowerShell 7：
+
+从仓库根目录启动后端：
 
 ```powershell
-cd apps\api
-New-Item -ItemType Directory -Force data | Out-Null
-$env:TINYNEST_DATA_DIR = "./data"
-$env:TINYNEST_DB_PATH = "./data/tinynest.sqlite3"
-$env:TINYNEST_COOKIE_SECURE = "false"
-$env:TINYNEST_SETUP_TOKEN = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
-go run ./cmd/server
+.\scripts\start-dev-api.ps1
 ```
+
+首次运行会使用系统加密随机数生成 32 字节，编码为 64 位小写十六进制令牌，保存在 Git 忽略的 `apps/api/data/.env.setup-token`。以后启动会读取同一文件，并把令牌作为 `TINYNEST_SETUP_TOKEN` 传给 Go 后端。若启动前已设置该环境变量，脚本优先使用显式值。
+
+在另一个 PowerShell 终端从仓库根目录执行以下命令，将默认令牌复制到剪贴板：
+
+```powershell
+Set-Clipboard -Value (Get-Content -Raw .\apps\api\data\.env.setup-token).Trim()
+```
+
+另一个终端按上面的 Vue Web 步骤启动前端，打开 http://127.0.0.1:5173 。初始化成功后，数据库中的初始化状态会关闭该入口，重启后端也无需再次初始化。生产部署按部署文档单独配置令牌。
 
 首次使用：打开页面 →「首次初始化」→ 填入**与后端 `TINYNEST_SETUP_TOKEN` 完全一致**的一次性令牌、家庭名称、用户名与密码 → 提交（仅一次）→ 登录。令牌不写入浏览器代码、不进仓库、不写日志。
 
