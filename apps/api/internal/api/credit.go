@@ -456,31 +456,51 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	contractID := r.PathValue("id")
 	var in struct {
-		InstallmentNo int    `json:"installment_no"`
-		AmountMinor   int64  `json:"amount_minor"`
-		PaidOn        string `json:"paid_on"`
-		Channel       string `json:"channel"`
-		ChannelID     string `json:"channel_id"`
+		InstallmentNo  int    `json:"installment_no"`
+		AmountMinor    int64  `json:"amount_minor"`
+		PaidOn         string `json:"paid_on"`
+		Channel        string `json:"channel"`
+		ChannelID      string `json:"channel_id"`
+		PrincipalMinor *int64 `json:"principal_minor"`
+		FeeMinor       *int64 `json:"fee_minor"`
 	}
 	if err := decode(r, &in); err != nil || !validDate(in.PaidOn) {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
 	amount := money.Minor(in.AmountMinor)
-	if err := money.MustPositive(amount); err != nil || (in.Channel != "cash" && in.Channel != "credit") {
+	if err := money.MustPositive(amount); err != nil ||
+		(in.Channel != "cash" && in.Channel != "credit") || in.ChannelID == "" {
 		writeErr(w, 400, "invalid_request", "金额或付款渠道不正确")
 		return
 	}
+	key := scopedKey(p.HouseholdID, idempotencyKey(r))
+	if key != "" {
+		var existingID, existingEntry string
+		if err := a.DB.QueryRowContext(r.Context(), `
+			SELECT p.id,p.entry_id FROM installment_payments p
+			JOIN installment_schedule_items s ON s.id=p.schedule_item_id
+			JOIN installment_contracts c ON c.id=s.contract_id
+			WHERE p.idempotency_key=? AND c.household_id=? AND c.id=?`,
+			key, p.HouseholdID, contractID).Scan(&existingID, &existingEntry); err == nil {
+			writeJSON(w, 200, map[string]any{
+				"id": existingID, "entry_id": existingEntry, "contract_id": contractID,
+				"status": "confirmed", "replayed": true,
+			})
+			return
+		}
+	}
 	payID, entryID := newID("ipay"), newID("je")
+	var splitPrincipal, splitFee int64
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var itemID string
-		var pv, fv, total, paid int64
-		var status string
+		var itemID, dueOn, status string
+		var pv, fv, total, paid, usedP, usedF int64
 		if err := tx.QueryRowContext(r.Context(), `
-			SELECT i.id,i.principal_minor,i.fee_minor,i.total_minor,i.paid_minor,i.status
+			SELECT i.id,i.due_on,i.status,i.principal_minor,i.fee_minor,i.total_minor,i.paid_minor
 			FROM installment_schedule_items i JOIN installment_contracts c ON c.id=i.contract_id
 			WHERE i.contract_id=? AND i.installment_no=? AND c.household_id=?`,
-			contractID, in.InstallmentNo, p.HouseholdID).Scan(&itemID, &pv, &fv, &total, &paid, &status); err != nil {
+			contractID, in.InstallmentNo, p.HouseholdID).
+			Scan(&itemID, &dueOn, &status, &pv, &fv, &total, &paid); err != nil {
 			return errors.New("期次不存在")
 		}
 		if status == "paid" || status == "cancelled" {
@@ -489,56 +509,92 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 		if int64(amount) > total-paid {
 			return errors.New("付款金额超过该期剩余应付")
 		}
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT COALESCE(SUM(principal_minor),0),COALESCE(SUM(fee_minor),0)
+			 FROM installment_payments WHERE schedule_item_id=? AND reversed=0`, itemID).
+			Scan(&usedP, &usedF); err != nil {
+			return err
+		}
+		remainP, remainF := pv-usedP, fv-usedF
+		settling := int64(amount) == total-paid
+		var payP, payF int64
+		if in.PrincipalMinor == nil || in.FeeMinor == nil {
+			// A final settlement consumes the remaining PLAN amounts (explicit).
+			// A partial payment must NEVER be auto-allocated: all 10 accounting
+			// policies are still PENDING_USER_CONFIRMATION.
+			if !settling {
+				return errSplitRequired
+			}
+			payP, payF = remainP, remainF
+		} else {
+			payP, payF = *in.PrincipalMinor, *in.FeeMinor
+		}
+		if payP < 0 || payF < 0 || payP+payF != int64(amount) {
+			return errors.New("拆分金额之和必须等于本次实付金额")
+		}
+		if payP > remainP || payF > remainF {
+			return errors.New("拆分金额超过该期本金/手续费剩余金额")
+		}
+		paySubject := ledger.CreditSubject(in.ChannelID)
 		if in.Channel == "cash" {
 			if _, err := a.validateAccount(tx, r, p.HouseholdID, in.ChannelID); err != nil {
 				return errors.New("付款账户不存在")
 			}
-		}
-		paySubject := ledger.CreditSubject(in.ChannelID)
-		if in.Channel == "cash" {
 			paySubject = ledger.CashSubject(in.ChannelID)
+		} else {
+			var n int
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT COUNT(*) FROM credit_instruments WHERE id=? AND household_id=? AND status='active'`,
+				in.ChannelID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
+				return errors.New("付款信用工具不存在")
+			}
 		}
-		// Partial payments reduce principal first; fee is recognised on the period's final settlement.
-		principalPart := int64(amount)
-		feePart := int64(0)
-		if int64(amount) >= total-paid {
-			principalPart, feePart = pv, fv
-		} else if principalPart > pv {
-			principalPart = pv
-		}
-		if principalPart <= 0 {
-			return errors.New("付款金额无效")
-		}
-		e, err := ledger.InstallmentPayment(
+		e, err := ledger.InstallmentPaymentWithSplit(
 			ledger.Context{EntryID: entryID, BizID: payID, OccurredOn: in.PaidOn},
-			contractID, paySubject, money.Minor(principalPart), money.Minor(feePart))
+			contractID, paySubject, money.Minor(payP), money.Minor(payF))
 		if err != nil {
 			return err
 		}
-		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, idempotencyKey(r), p.Username); err != nil {
+		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, key, p.Username); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO installment_payments(id,schedule_item_id,amount_minor,paid_on,channel,channel_id,entry_id,idempotency_key)
-			VALUES(?,?,?,?,?,?,?,?)`,
+			INSERT INTO installment_payments(id,schedule_item_id,amount_minor,paid_on,channel,channel_id,
+			  entry_id,idempotency_key,principal_minor,fee_minor,reversed)
+			VALUES(?,?,?,?,?,?,?,?,?,?,0)`,
 			payID, itemID, int64(amount), in.PaidOn, in.Channel, in.ChannelID, entryID,
-			nullableKey(idempotencyKey(r))); err != nil {
+			nullableKey(key), payP, payF); err != nil {
 			return err
 		}
-		newPaid := paid + int64(amount)
-		newStatus := "partial"
-		if newPaid >= total {
-			newStatus = "paid"
+		// A credit-channel instalment payment creates a NEW credit liability;
+		// fold it into that card's billing cycle (no new journal entry here).
+		if in.Channel == "credit" {
+			if err := a.assignStatement(r, tx, p, in.ChannelID, "installment_payment", payID,
+				int64(amount), in.PaidOn); err != nil {
+				return err
+			}
 		}
-		_, err = tx.ExecContext(r.Context(),
-			`UPDATE installment_schedule_items SET paid_minor=?, status=? WHERE id=?`, newPaid, newStatus, itemID)
-		return err
+		newPaid := paid + int64(amount)
+		if _, err := tx.ExecContext(r.Context(),
+			`UPDATE installment_schedule_items SET paid_minor=?, status=? WHERE id=?`,
+			newPaid, derivePeriodStatus(dueOn, a.businessDate(), total, newPaid), itemID); err != nil {
+			return err
+		}
+		splitPrincipal, splitFee = payP, payF
+		return audit(r.Context(), tx, p, "installment_payment", "installment_payment", payID, in.PaidOn)
 	})
 	if err != nil {
+		if errors.Is(err, errSplitRequired) {
+			writeErr(w, 400, "split_required", "部分付款口径未确认，请显式填写本金/手续费拆分")
+			return
+		}
 		writeErr(w, 400, "invalid_request", err.Error())
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": payID, "entry_id": entryID, "status": "confirmed"})
+	writeJSON(w, 201, map[string]any{
+		"id": payID, "entry_id": entryID, "status": "confirmed",
+		"split": map[string]any{"principal_minor": splitPrincipal, "fee_minor": splitFee},
+	})
 }
 
 // handleGenerateDueItems is the daily task. It ONLY inserts pending obligations;

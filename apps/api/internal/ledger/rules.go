@@ -373,6 +373,31 @@ func DebtPayment(c Context, contractID, paySubject, kind string, spec DebtPaymen
 	return c.entry(BizLoanPayment, lines...)
 }
 
+// InstallmentPaymentWithSplit settles a period with an EXPLICIT split supplied
+// by the caller. Unlike InstallmentPayment it accepts principal == 0 (a fee-only
+// partial payment), which V0.1.1 must never infer automatically.
+func InstallmentPaymentWithSplit(c Context, contractID, paySubject string, principal, fee money.Minor) (*Entry, error) {
+	if principal < 0 || fee < 0 {
+		return nil, fmt.Errorf("%w: negative split component", ErrInvalidComponents)
+	}
+	total, err := money.Add(principal, fee)
+	if err != nil {
+		return nil, err
+	}
+	if total <= 0 {
+		return nil, fmt.Errorf("%w: zero-value payment", ErrInvalidComponents)
+	}
+	lines := []Line{}
+	if principal > 0 {
+		lines = append(lines, Line{Account: InstallmentSubject(contractID), Debit: principal})
+	}
+	if fee > 0 {
+		lines = append(lines, Line{Account: SubjExpenseFee, Debit: fee})
+	}
+	lines = append(lines, Line{Account: paySubject, Credit: total})
+	return c.entry(BizInstallmentPay, lines...)
+}
+
 // ConvertToInstallment reclassifies an existing credit-card balance into installment debt.
 // No expense is created and the principal can never exist in both liabilities.
 func ConvertToInstallment(c Context, instrumentID, contractID string, principal money.Minor) (*Entry, error) {

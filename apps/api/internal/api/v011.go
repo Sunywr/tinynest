@@ -7,6 +7,7 @@ import "net/http"
 func (a *API) registerV011(mux *http.ServeMux) {
 	a.registerV011Credit(mux)
 	a.registerV011Debt(mux)
+	a.registerV011Installment(mux)
 }
 
 // ptrArg converts an optional JSON field into a SQL parameter: a nil pointer

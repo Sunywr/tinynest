@@ -595,3 +595,266 @@ func TestV011_DebtPaymentValidation(t *testing.T) {
 		t.Errorf("rejected payments must not move cash: %d", got)
 	}
 }
+
+func makeInstallment(t *testing.T, c *testClient, principal, fee int64, periods int, firstDue string) string {
+	t.Helper()
+	return c.mustOK("POST", "/api/v1/installments", map[string]any{
+		"name": "T3 分期", "category_id": c.firstCategory("expense"),
+		"principal_minor": principal, "total_fee_minor": fee,
+		"periods": periods, "first_due_on": firstDue,
+	})["id"].(string)
+}
+
+func conservation(t *testing.T, out map[string]any) map[string]any {
+	t.Helper()
+	v, ok := out["conservation"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing conservation block: %v", out)
+	}
+	return v
+}
+
+// T3: principal/fee conservation, explicit partial-payment split, and a
+// partial payment that must NOT be auto-allocated.
+func TestV011_T3_InstallmentConservationAndPartialPayment(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+
+	cash := cashIDForTest(t, c)
+	inst := makeInstallment(t, c, 300_000, 9_000, 3, "2026-12-01")
+	detail := c.mustOK("GET", "/api/v1/installments/"+inst, nil)
+	con := conservation(t, detail)
+	if number(con["scheduled_principal_minor"]) != 300_000 || number(con["scheduled_fee_minor"]) != 9_000 ||
+		number(con["total_due_minor"]) != 309_000 || con["principal_balanced"] != true || con["fee_balanced"] != true {
+		t.Fatalf("conservation broken at creation: %v", con)
+	}
+	sched, _ := detail["schedule"].([]any)
+	first := sched[0].(map[string]any)
+	if number(first["principal_minor"]) != 100_000 || number(first["fee_minor"]) != 3_000 ||
+		number(first["total_minor"]) != 103_000 {
+		t.Fatalf("period 1 = %v", first)
+	}
+
+	// A partial payment WITHOUT an explicit split must be refused: none of the
+	// 10 accounting policies (fee-first / principal-first / pro-rata) is confirmed.
+	code, _ := c.do("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
+		"channel": "cash", "channel_id": cash,
+	})
+	if code == 200 || code == 201 {
+		t.Fatal("partial payment without explicit split must be refused")
+	}
+
+	// Explicit split: 51500 = 50000 principal + 1500 fee.
+	c.headers = map[string]string{"Idempotency-Key": "inst-pay-1"}
+	p1 := c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
+		"channel": "cash", "channel_id": cash,
+		"principal_minor": 50_000, "fee_minor": 1_500,
+	})
+	p1Again := c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
+		"channel": "cash", "channel_id": cash,
+		"principal_minor": 50_000, "fee_minor": 1_500,
+	})
+	c.headers = nil
+	if p1["id"] != p1Again["id"] || p1Again["replayed"] != true {
+		t.Fatalf("idempotent replay broken: %v / %v", p1, p1Again)
+	}
+	detail = c.mustOK("GET", "/api/v1/installments/"+inst, nil)
+	sched, _ = detail["schedule"].([]any)
+	first = sched[0].(map[string]any)
+	if first["status"] != "partial" || number(first["remaining_minor"]) != 51_500 {
+		t.Fatalf("period 1 partial state = %v", first)
+	}
+	con = conservation(t, detail)
+	if number(con["paid_minor"]) != 51_500 || number(con["remaining_minor"]) != 257_500 {
+		t.Fatalf("conservation after partial payment = %v", con)
+	}
+	if got := subjectMinor(t, database, "2020:"+inst); got != -250_000 {
+		t.Errorf("installment liability = %d, want -250000", got)
+	}
+	if got := subjectMinor(t, database, "5110"); got != 1_500 {
+		t.Errorf("period fee recognised = %d, want 1500", got)
+	}
+
+	// Settle the rest of period 1 explicitly.
+	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-02",
+		"channel": "cash", "channel_id": cash,
+		"principal_minor": 50_000, "fee_minor": 1_500,
+	})
+	detail = c.mustOK("GET", "/api/v1/installments/"+inst, nil)
+	sched, _ = detail["schedule"].([]any)
+	if sched[0].(map[string]any)["status"] != "paid" {
+		t.Fatal("period 1 must be paid")
+	}
+	con = conservation(t, detail)
+	if con["principal_balanced"] != true || con["fee_balanced"] != true {
+		t.Errorf("conservation broken after settlement: %v", con)
+	}
+
+	// Daily projection repeated 20 times must remain idempotent (M4 gate).
+	// The exact horizon depends on the business date, so we assert that only the
+	// FIRST run may insert anything and the row count never grows afterwards.
+	firstRun := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	var afterFirst int
+	_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items`).Scan(&afterFirst)
+	for i := 1; i < 20; i++ {
+		gen := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+		if number(gen["generated"]) != 0 {
+			t.Errorf("run %d generated %v rows (must be idempotent)", i, gen["generated"])
+		}
+	}
+	var afterAll int
+	_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items`).Scan(&afterAll)
+	if afterAll != afterFirst {
+		t.Errorf("due items grew from %d to %d across 20 runs", afterFirst, afterAll)
+	}
+	_ = firstRun
+}
+
+func TestV011_InstallmentRefundAndExplicitScheduleAdjustment(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+
+	cash := cashIDForTest(t, c)
+	inst := makeInstallment(t, c, 300_000, 9_000, 3, "2026-12-01")
+	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 103_000, "paid_on": "2026-12-01",
+		"channel": "cash", "channel_id": cash,
+	})
+	// A refund must be linked to the original consumption and must NOT silently
+	// delete paid periods. It only reports which future periods are affected.
+	ref := c.mustOK("POST", "/api/v1/installments/"+inst+"/refunds", map[string]any{
+		"amount_minor": 50_000, "refund_on": "2026-12-05",
+		"destination_type": "cash", "destination_id": cash,
+		"note": "部分退货",
+	})
+	if number(ref["refunded_minor"]) != 50_000 || ref["requires_explicit_adjustment"] != true {
+		t.Fatalf("refund response = %v", ref)
+	}
+	affected, _ := ref["future_periods_affected"].([]any)
+	if len(affected) != 2 {
+		t.Fatalf("future periods affected = %d, want 2", len(affected))
+	}
+	detail := c.mustOK("GET", "/api/v1/installments/"+inst, nil)
+	sched, _ := detail["schedule"].([]any)
+	if sched[0].(map[string]any)["status"] != "paid" {
+		t.Fatal("paid period must be preserved after refund")
+	}
+	if number(conservation(t, detail)["refunded_minor"]) != 50_000 {
+		t.Fatalf("refund not reflected in conservation: %v", detail["conservation"])
+	}
+
+	// Adjusting more than the refunded amount is refused (no unsupported relief).
+	code, _ := c.do("POST", "/api/v1/installments/"+inst+"/adjust-schedule", map[string]any{
+		"reason": "超额减免", "items": []any{map[string]any{
+			"installment_no": 2, "action": "cancel",
+		}},
+	})
+	if code == 200 || code == 201 {
+		t.Fatal("adjustment exceeding total refunds must be refused")
+	}
+
+	// Explicit, audited reduction within the refunded amount.
+	adj := c.mustOK("POST", "/api/v1/installments/"+inst+"/adjust-schedule", map[string]any{
+		"reason": "按退款 500.00 调整第 2 期",
+		"items": []any{map[string]any{
+			"installment_no": 2, "action": "reduce",
+			"principal_minor": 53_000, "fee_minor": 0,
+		}},
+	})
+	if number(adj["reduced_minor"]) != 50_000 {
+		t.Fatalf("reduced amount = %v, want 50000", adj["reduced_minor"])
+	}
+	detail = c.mustOK("GET", "/api/v1/installments/"+inst, nil)
+	sched, _ = detail["schedule"].([]any)
+	if number(sched[1].(map[string]any)["total_minor"]) != 53_000 {
+		t.Fatalf("period 2 after adjustment = %v", sched[1])
+	}
+	if number(conservation(t, detail)["adjustment_count"]) != 1 {
+		t.Fatalf("adjustment not audited: %v", detail["conservation"])
+	}
+	// Paid history is untouched.
+	if got := subjectMinor(t, database, "2020:"+inst); got != -200_000 {
+		t.Errorf("liability after adjustment = %d, want -200000 (refund/adjustment must not silently rewrite posted entries)", got)
+	}
+}
+
+func TestV011_InstallmentConvertFromCreditKeepsSinglePrincipal(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+
+	expCat := c.firstCategory("expense")
+	ci := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"kind": "credit_card", "name": "转分期卡", "cycle_start_day": 1,
+		"cycle_end_day": 31, "due_day": 10, "due_month_offset": 1,
+	})["id"].(string)
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 100_000, "occurred_on": "2026-11-12",
+		"payment_kind": "credit", "credit_instrument_id": ci,
+		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 100_000}},
+	})
+	if got := subjectMinor(t, database, "2010:"+ci); got != -100_000 {
+		t.Fatalf("credit liability before conversion = %d", got)
+	}
+	out := c.mustOK("POST", "/api/v1/installments/convert-from-credit", map[string]any{
+		"credit_instrument_id": ci, "name": "账单转分期",
+		"principal_minor": 100_000, "total_fee_minor": 0,
+		"periods": 2, "first_due_on": "2026-12-01",
+	})
+	instID := out["id"].(string)
+	if got := subjectMinor(t, database, "2010:"+ci); got != 0 {
+		t.Errorf("credit liability after conversion = %d, want 0", got)
+	}
+	if got := subjectMinor(t, database, "2020:"+instID); got != -100_000 {
+		t.Errorf("installment liability = %d, want -100000", got)
+	}
+	sum := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
+	if number(sum["expense_minor"]) != 100_000 {
+		t.Errorf("expense must be recognised exactly once, got %v", sum["expense_minor"])
+	}
+	detail := c.mustOK("GET", "/api/v1/installments/"+instID, nil)
+	if con := conservation(t, detail); con["principal_balanced"] != true {
+		t.Errorf("converted contract conservation = %v", con)
+	}
+	// Converting more than the outstanding credit balance is refused.
+	code, _ := c.do("POST", "/api/v1/installments/convert-from-credit", map[string]any{
+		"credit_instrument_id": ci, "name": "超额转分期",
+		"principal_minor": 50_000, "total_fee_minor": 0,
+		"periods": 2, "first_due_on": "2026-12-01",
+	})
+	if code == 200 || code == 201 {
+		t.Fatal("conversion exceeding outstanding balance must be refused")
+	}
+}
+
+func TestV011_InstallmentSettleEarlyKeepsPaidHistory(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+
+	cash := cashIDForTest(t, c)
+	inst := makeInstallment(t, c, 300_000, 0, 3, "2026-12-01")
+	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 100_000, "paid_on": "2026-12-01",
+		"channel": "cash", "channel_id": cash,
+	})
+	out := c.mustOK("POST", "/api/v1/installments/"+inst+"/settle-early", map[string]any{"reason": "提前结清"})
+	if number(out["cancelled_periods"]) != 2 {
+		t.Fatalf("cancelled periods = %v, want 2", out["cancelled_periods"])
+	}
+	detail := c.mustOK("GET", "/api/v1/installments/"+inst, nil)
+	sched, _ := detail["schedule"].([]any)
+	if len(sched) != 3 || sched[0].(map[string]any)["status"] != "paid" ||
+		sched[1].(map[string]any)["status"] != "cancelled" || sched[2].(map[string]any)["status"] != "cancelled" {
+		t.Fatalf("periods after settlement = %v", sched)
+	}
+	if got := subjectMinor(t, database, "2020:"+inst); got != -200_000 {
+		t.Errorf("liability after settlement = %d, want -200000", got)
+	}
+}
