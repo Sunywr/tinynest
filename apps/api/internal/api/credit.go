@@ -184,11 +184,18 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
+	// Drill-down filters (M5): window on due_on, plus derived status filter.
+	// Status filtering happens on the DERIVED value computed from facts, so a
+	// stale cached status can never leak into the response.
+	q := r.URL.Query()
+	from, to := q.Get("from"), q.Get("to")
+	status := q.Get("status")
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,s.instrument_id,i.name,s.cycle_start_on,s.cycle_end_on,s.due_on,
 		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status
 		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id
-		WHERE s.household_id=? ORDER BY s.cycle_start_on DESC`, p.HouseholdID)
+		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)
+		ORDER BY s.cycle_start_on DESC`, p.HouseholdID, from, from, to, to)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -196,10 +203,10 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, instrID, name, start, end, due, status string
+		var id, instrID, name, start, end, due, stored string
 		var sysDue, paid int64
 		var platform *int64
-		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &status); err != nil {
+		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &stored); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -211,11 +218,14 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			"cycle_start_on": start, "cycle_end_on": end, "due_on": due,
 			"system_due_minor": sysDue, "paid_minor": paid,
 			"remaining_minor": sysDue - paid,
-			"status":          derived, "derived_status": derived, "stored_status": status,
+			"status":          derived, "derived_status": derived, "stored_status": stored,
 			"platform_amount_minor": platform,
 		}
 		if platform != nil {
 			m["reconcile_diff_minor"] = sysDue - *platform
+		}
+		if status != "" && derived != status {
+			continue
 		}
 		items = append(items, m)
 	}
@@ -623,9 +633,11 @@ func (a *API) handleListDueItems(w http.ResponseWriter, r *http.Request) {
 		days = 7
 	}
 	to := a.businessToday().AddDate(0, 0, days).Format("2006-01-02")
+	status := r.URL.Query().Get("status")
 	rows, err := a.DB.QueryContext(r.Context(),
 		`SELECT id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label FROM schedule_due_items
-		 WHERE household_id=? AND due_on<=? ORDER BY due_on`, p.HouseholdID, to)
+		 WHERE household_id=? AND due_on<=? AND (?='' OR status=?) ORDER BY due_on`,
+		p.HouseholdID, to, status, status)
 	if err != nil {
 		internalErr(w, err)
 		return

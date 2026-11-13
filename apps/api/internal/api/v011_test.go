@@ -535,7 +535,7 @@ func TestV011_DebtSettleEarlyKeepsHistory(t *testing.T) {
 	loan := makeDebt(t, c, "loan", 300_000, "2026-11-01")
 	makeDebtSchedule(t, c, loan,
 		map[string]any{"installment_no": 1, "due_on": "2026-12-10", "principal_minor": 100_000, "interest_minor": 10_000, "fee_minor": 0},
-		map[string]any{"installment_no": 2, "due_on": "2027-01-10", "principal_minor": 100_000, "interest_minor": 10_000, "fee_minor": 0},
+		map[string]any{"installment_no": 2, "due_on": "2026-12-13", "principal_minor": 100_000, "interest_minor": 10_000, "fee_minor": 0},
 		map[string]any{"installment_no": 3, "due_on": "2027-02-10", "principal_minor": 100_000, "interest_minor": 10_000, "fee_minor": 0},
 	)
 	c.mustOK("POST", "/api/v1/debts/"+loan+"/payments", map[string]any{
@@ -1097,5 +1097,164 @@ func TestV011_M4_NextDailyRunBoundary(t *testing.T) {
 	want = time.Date(2026, 11, 14, 0, 7, 0, 0, cst)
 	if !got.Equal(want) {
 		t.Errorf("nextDailyRun(UTC 16:30) = %v, want %v", got, want)
+	}
+}
+
+// T4 (M5): the three accounting bases stay strictly separated across months
+// and across a year boundary. A single consumption is never counted twice,
+// and every headline number traces to drill-down detail endpoints.
+func TestV011_T4_ThreeAccountingBasesAcrossMonthsAndYears(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "T4 工资卡", "opening_balance_minor": 1_000_000,
+	})["id"].(string)
+	expCat := c.firstCategory("expense")
+	incCat := c.firstCategory("income")
+	ci := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"kind": "credit_card", "name": "T4 信用卡", "cycle_start_day": 1,
+		"cycle_end_day": 31, "due_day": 10, "due_month_offset": 1,
+		"credit_limit_minor": 200_000,
+	})["id"].(string)
+
+	// November 2026: income + one credit consumption + one cash consumption.
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "income", "amount_minor": 300_000, "occurred_on": "2026-11-01",
+		"account_id": cash, "splits": []any{map[string]any{"category_id": incCat, "amount_minor": 300_000}},
+	})
+	creditTx := c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 100_000, "occurred_on": "2026-11-12",
+		"payment_kind": "credit", "credit_instrument_id": ci,
+		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 100_000}},
+	})["id"].(string)
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 50_000, "occurred_on": "2026-11-15",
+		"account_id": cash, "splits": []any{map[string]any{"category_id": expCat, "amount_minor": 50_000}},
+	})
+
+	nov := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
+	if number(nov["income_minor"]) != 300_000 || number(nov["expense_minor"]) != 150_000 {
+		t.Fatalf("Nov income/expense = %v/%v", nov["income_minor"], nov["expense_minor"])
+	}
+	// 现金流口径：信用消费不动现金。
+	if number(nov["cashflow_minor"]) != 250_000 {
+		t.Fatalf("Nov cashflow = %v, want 250000", nov["cashflow_minor"])
+	}
+	// Drill-down: occurred-basis expense transactions sum to the same 150000.
+	_, txs := c.do("GET", "/api/v1/transactions?from=2026-11-01&to=2026-11-30&type=expense", nil)
+	var txSum int64
+	for _, it := range txs["items"].([]any) {
+		txSum += number(it.(map[string]any)["amount_minor"])
+	}
+	if txSum != 150_000 {
+		t.Fatalf("Nov expense drill-down sum = %d, want 150000", txSum)
+	}
+
+	// December 2026: refund to the card, partial statement repayment, and a
+	// mortgage period whose principal/interest split is explicit.
+	c.mustOK("POST", "/api/v1/refunds", map[string]any{
+		"transaction_id": creditTx, "amount_minor": 30_000, "refund_on": "2026-12-05",
+		"destination_type": "credit", "destination_id": ci,
+	})
+	loan := makeDebt(t, c, "mortgage", 250_000, "2026-11-01")
+	makeDebtSchedule(t, c, loan,
+		map[string]any{"installment_no": 1, "due_on": "2026-12-10", "principal_minor": 150_000, "interest_minor": 50_000, "fee_minor": 0},
+		map[string]any{"installment_no": 2, "due_on": "2026-12-13", "principal_minor": 100_000, "interest_minor": 10_000, "fee_minor": 0},
+	)
+	c.mustOK("POST", "/api/v1/debts/"+loan+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 200_000, "paid_on": "2026-12-10",
+		"channel": "cash", "channel_id": cash,
+		"principal_minor": 150_000, "interest_minor": 50_000, "fee_minor": 0,
+	})
+	// 还款目标是 11 月账期那张账单（due 2026-12-10），不是退款形成的 12 月账期。
+	var stmtID string
+	for _, it := range c.mustOK("GET", "/api/v1/credit-statements", nil)["items"].([]any) {
+		m := it.(map[string]any)
+		if m["due_on"] == "2026-12-10" {
+			stmtID = m["id"].(string)
+		}
+	}
+	if stmtID == "" {
+		t.Fatal("November statement not found")
+	}
+	c.mustOK("POST", "/api/v1/credit-statements/"+stmtID+"/payments", map[string]any{
+		"amount_minor": 40_000, "paid_on": "2026-12-10", "from_account_id": cash,
+	})
+
+	dec := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-12-01&to=2026-12-31", nil)
+	// 收支口径：退款冲减支出(-30000)，利息计支出(+50000)；本金只减负债；
+	// 11 月的信用消费绝不在 12 月重复计支出。
+	if number(dec["expense_minor"]) != 20_000 {
+		t.Fatalf("Dec expense = %v, want 20000 (refund -30000 + interest 50000, no double count)", dec["expense_minor"])
+	}
+	// 现金流口径：实付 40000 还卡 + 200000 房贷；退款回卡不动现金。
+	if number(dec["cashflow_minor"]) != -240_000 {
+		t.Fatalf("Dec cashflow = %v, want -240000", dec["cashflow_minor"])
+	}
+	if number(dec["income_minor"]) != 0 {
+		t.Fatalf("Dec income = %v, want 0", dec["income_minor"])
+	}
+
+	// 到期口径：1) 11 月账单 due_on=12-10 在 12 月窗口：应还 100000、
+	//    已还 40000、未还 60000；2) 12 月退款归集到 12 月账期（due 2027-01-10，
+	//    净额 -30000，在 1 月窗口体现）；3) 房贷第 1 期已全额付款 → 其待办
+	//    在同事务内 confirmed，不再计入到期应付。
+	credit := c.mustOK("GET", "/api/v1/dashboard/credit?from=2026-12-01&to=2026-12-31", nil)
+	if number(credit["due_minor"]) != 100_000 || number(credit["paid_minor"]) != 40_000 ||
+		number(credit["unpaid_minor"]) != 60_000 || number(credit["overdue_minor"]) != 0 {
+		t.Fatalf("Dec statement due view = %v", credit)
+	}
+	// 1 月窗口命中 12 月账期：退款形成账单净贷方余额 -30000（事实重算，非缓存）。
+	janCredit := c.mustOK("GET", "/api/v1/dashboard/credit?from=2027-01-01&to=2027-01-31", nil)
+	if number(janCredit["due_minor"]) != -30_000 {
+		t.Fatalf("Jan statement due view = %v, want -30000 (refund cycle)", janCredit)
+	}
+	// 额度口径：已用=实时信用负债余额 30000；总额度 200000。
+	cre := credit["credit"].(map[string]any)
+	if number(cre["used_minor"]) != 30_000 || number(cre["limit_minor"]) != 200_000 ||
+		number(cre["available_minor"]) != 170_000 || number(cre["usage_bps"]) != 1500 {
+		t.Fatalf("credit limit view = %v", cre)
+	}
+
+	// 到期应付投影：跑两次（幂等），第 1 期房贷已付 → 仅账单 60000 待付。
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	gen2 := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	if number(gen2["generated"]) != 0 {
+		t.Fatalf("regeneration not idempotent: %v", gen2)
+	}
+	// 到期口径只能覆盖已投影（30 天视界内）的事项：12 月窗口含账单 60000 与
+	// 未付的房贷第 2 期 110000；已付款的第 1 期其待办已 confirmed，被排除。
+	decDue := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-12-01&to=2026-12-31", nil)
+	if number(decDue["liabilities_due_minor"]) != 170_000 {
+		t.Fatalf("Dec liabilities due = %v, want 170000 (paid mortgage period excluded)", decDue["liabilities_due_minor"])
+	}
+
+	// 跨月/跨年起止窗口：2026-12-01..2027-01-31 同样命中这两笔。
+	cross := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-12-01&to=2027-01-31", nil)
+	if number(cross["liabilities_due_minor"]) != 170_000 {
+		t.Fatalf("cross-period liabilities due = %v, want 170000", cross["liabilities_due_minor"])
+	}
+	// 到期应付可下钻：待办明细逐条核对。
+	dueList := c.mustOK("GET", "/api/v1/schedule/due-items?days=60&status=pending", nil)
+	var dueSum int64
+	for _, it := range dueList["items"].([]any) {
+		dueSum += number(it.(map[string]any)["amount_minor"])
+	}
+	if dueSum != 170_000 {
+		t.Fatalf("pending due drill-down sum = %d, want 170000", dueSum)
+	}
+	// 账单明细可下钻：12 月窗口只命中 12-10 这张账单。
+	stmtList := c.mustOK("GET", "/api/v1/credit-statements?from=2026-12-01&to=2026-12-31", nil)
+	if number(stmtList["total"]) != 1 {
+		t.Fatalf("Dec statement drill-down = %v", stmtList["total"])
+	}
+	// 现金流与资产负债事实：分录级余额与账户余额一致。
+	if got := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"]); got != 1_010_000 {
+		t.Fatalf("cash balance = %d, want 1010000", got)
+	}
+	if got := subjectMinor(t, database, "2030:"+loan); got != -100_000 {
+		t.Fatalf("remaining loan liability = %d, want -100000", got)
 	}
 }
