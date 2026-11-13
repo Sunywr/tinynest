@@ -24,3 +24,7 @@
 .vscode/
 __pycache__/
 *.pyc
+
+# Local agent/session working notes: never part of a PR.
+# Kept on disk, excluded from version control.
+.workbuddy/

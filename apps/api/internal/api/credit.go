@@ -162,7 +162,7 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []map[string]any{}
 	for _, v := range list {
-		bal, err := db.Balance(r.Context(), a.DB, v.code)
+		bal, err := db.Balance(r.Context(), a.DB, p.HouseholdID, v.code)
 		if err != nil {
 			internalErr(w, err)
 			return
@@ -517,15 +517,21 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 // it NEVER marks anything paid and never changes any balance. biz_key makes it idempotent.
 func (a *API) handleGenerateDueItems(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	horizon := time.Now().UTC().AddDate(0, 0, 30).Format("2006-01-02")
+	horizon := a.businessToday().AddDate(0, 0, 30).Format("2006-01-02")
 	generated := 0
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		for _, src := range []struct{ table, kind string }{
-			{"installment_schedule_items", "installment"},
-			{"debt_schedule_items", "debt"},
+		// The schedule tables have no household_id column of their own: ownership is
+		// resolved through their parent contract. Filtering here (not after the fact)
+		// is what prevents household A from projecting household B's obligations.
+		for _, src := range []struct{ table, kind, contractTable string }{
+			{"installment_schedule_items", "installment", "installment_contracts"},
+			{"debt_schedule_items", "debt", "debt_contracts"},
 		} {
 			rows, err := tx.QueryContext(r.Context(), fmt.Sprintf(`
-				SELECT s.id,s.due_on,s.total_minor,s.paid_minor FROM %s s WHERE s.status='pending' AND s.due_on<=?`, src.table), horizon)
+			SELECT s.id,s.due_on,s.total_minor,s.paid_minor
+			FROM %s s JOIN %s c ON c.id = s.contract_id
+			WHERE c.household_id = ? AND s.status='pending' AND s.due_on<=?`,
+				src.table, src.contractTable), p.HouseholdID, horizon)
 			if err != nil {
 				return err
 			}
@@ -544,7 +550,9 @@ func (a *API) handleGenerateDueItems(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = rows.Close()
 			for _, v := range found {
-				bizKey := src.kind + ":" + v.id
+				// Scope the idempotency key to the household so two households can
+				// never contend for the same globally-unique biz_key.
+				bizKey := p.HouseholdID + ":" + src.kind + ":" + v.id
 				res, err := tx.ExecContext(r.Context(), `
 					INSERT OR IGNORE INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status)
 					VALUES(?,?,?,?,?,?,?,'pending')`,
@@ -572,7 +580,7 @@ func (a *API) handleListDueItems(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("days") == "7" {
 		days = 7
 	}
-	to := time.Now().UTC().AddDate(0, 0, days).Format("2006-01-02")
+	to := a.businessToday().AddDate(0, 0, days).Format("2006-01-02")
 	rows, err := a.DB.QueryContext(r.Context(),
 		`SELECT id,source_type,source_id,biz_key,due_on,amount_minor,status FROM schedule_due_items
 		 WHERE household_id=? AND due_on<=? ORDER BY due_on`, p.HouseholdID, to)

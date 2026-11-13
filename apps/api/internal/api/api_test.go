@@ -15,10 +15,11 @@ import (
 )
 
 type testClient struct {
-	t    *testing.T
-	base string
-	hc   *http.Client
-	csrf string
+	t       *testing.T
+	base    string
+	hc      *http.Client
+	csrf    string
+	headers map[string]string
 }
 
 func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
@@ -35,11 +36,13 @@ func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
 	if len(applied) != 7 {
 		t.Fatalf("expected 7 migrations, got %v", applied)
 	}
-	a := New(database)
+	a := New(database, Options{SetupToken: testSetupToken})
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
 	ts := httptest.NewServer(mux)
 	jar, _ := cookiejar.New(nil)
-	tc := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar}}
+	// The one-time bootstrap token is used ONLY for the initial setup call.
+	tc := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar},
+		headers: map[string]string{setupTokenHeader: testSetupToken}}
 
 	code, body := tc.do("POST", "/api/v1/setup", map[string]any{
 		"household_name": "测试小家", "username": "admin", "password": "correct-horse-battery",
@@ -47,6 +50,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
 	if code != 201 {
 		t.Fatalf("setup: %d %v", code, body)
 	}
+	tc.headers = nil
 	code, body = tc.do("POST", "/api/v1/auth/session", map[string]any{
 		"username": "admin", "password": "correct-horse-battery",
 	})
@@ -81,6 +85,9 @@ func (c *testClient) do(method, path string, body any) (int, map[string]any) {
 	}
 	if c.csrf != "" {
 		req.Header.Set("X-CSRF-Token", c.csrf)
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
@@ -342,17 +349,39 @@ func TestV01EndToEnd(t *testing.T) {
 	}
 }
 
-func TestSetupIsSingleUseAndRequiresAuth(t *testing.T) {
+// TestSetupIsSingleUseAndSessionAuthEnforced covers the post-FIX-01 contract:
+// the endpoint is single-use AND bootstrap-protected; ordinary reads still need
+// a session and writes still need CSRF. (The old name claimed an auth assertion
+// it never made.)
+func TestSetupIsSingleUseAndSessionAuthEnforced(t *testing.T) {
 	ts, c, database := newTestServer(t)
 	defer ts.Close()
 	defer database.Close()
 
+	// A second, correctly tokened bootstrap must be rejected (no second admin).
+	c.headers = map[string]string{setupTokenHeader: testSetupToken}
 	code, _ := c.do("POST", "/api/v1/setup", map[string]any{
 		"household_name": "另一个家", "username": "admin2", "password": "another-password",
 	})
 	if code != 409 {
 		t.Errorf("duplicate setup should be 409, got %d", code)
 	}
+	c.headers = nil
+	var admins int
+	_ = database.QueryRow(`SELECT COUNT(*) FROM users WHERE role='admin'`).Scan(&admins)
+	if admins != 1 {
+		t.Errorf("duplicate setup must not create a second admin, got %d", admins)
+	}
+
+	// P1-01 regression: a tokenless bootstrap attempt is refused outright.
+	noToken := &testClient{t: t, base: c.base, hc: &http.Client{}}
+	code, _ = noToken.do("POST", "/api/v1/setup", map[string]any{
+		"household_name": "抢注家庭", "username": "attacker", "password": "another-password",
+	})
+	if code != 403 && code != 401 {
+		t.Errorf("tokenless setup should be rejected, got %d", code)
+	}
+
 	// A fresh client without a session cookie cannot read financial data.
 	fresh := &testClient{t: t, base: c.base, hc: &http.Client{}}
 	code, _ = fresh.do("GET", "/api/v1/accounts", nil)

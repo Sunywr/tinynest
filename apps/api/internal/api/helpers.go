@@ -10,7 +10,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"strings"
+	"sync"
 	"time"
 
 	"tinynest/api/internal/auth"
@@ -29,9 +33,53 @@ type Principal struct {
 	CSRFToken   string
 }
 
-type API struct{ DB *db.DB }
+// LoginLimiterConfig controls failed-login throttling. Zero values fall back to
+// conservative defaults; tests inject small values plus a fixed clock.
+type LoginLimiterConfig struct {
+	MaxFailures int
+	Window      time.Duration
+	Lockout     time.Duration
+}
 
-func New(database *db.DB) *API { return &API{DB: database} }
+// Options are explicit deployment-controlled knobs. There is deliberately NO
+// implicit "guess from r.TLS" behaviour: security attributes must be declared.
+// A zero value is a local-development default, never a production default.
+type Options struct {
+	// SetupToken is the one-time bootstrap token required by POST /api/v1/setup.
+	// Empty means initialization is refused outright (fail closed).
+	SetupToken string
+	// CookieSecure forces the Secure attribute on tn_session.
+	CookieSecure bool
+	// TrustedProxies lists IPs/CIDRs whose X-Forwarded-* headers may be honored.
+	TrustedProxies []string
+	// Clock is injectable so business-date tests never depend on the host timezone.
+	Clock func() time.Time
+	// LoginLimiter configures the failed-login rate limiter.
+	LoginLimiter LoginLimiterConfig
+}
+
+type API struct {
+	DB      *db.DB
+	opts    Options
+	trusted []netip.Prefix
+	limiter *loginLimiter
+	setupMu sync.Mutex
+}
+
+// New keeps the historical single-argument form working while allowing the
+// composition root (and tests) to inject explicit security configuration.
+func New(database *db.DB, opts ...Options) *API {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	return &API{
+		DB:      database,
+		opts:    o,
+		trusted: parseTrustedProxies(o.TrustedProxies),
+		limiter: newLoginLimiter(o.LoginLimiter, o.Clock),
+	}
+}
 
 func principal(r *http.Request) (Principal, bool) {
 	p, ok := r.Context().Value(principalKey).(Principal)
@@ -46,9 +94,102 @@ func newID(prefix string) string {
 	return prefix + "_" + hex.EncodeToString(b)
 }
 
-func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
+// now is the single clock source. In production it is time.Now; tests inject a
+// fixed or manually advanced clock so UTC-day boundaries are reproducible.
+func (a *API) now() time.Time {
+	if a.opts.Clock != nil {
+		return a.opts.Clock()
+	}
+	return time.Now()
+}
 
-func todayUTC() string { return time.Now().UTC().Format("2006-01-02") }
+// nowUTC is for audit/session timestamps, which stay UTC (database convention).
+func (a *API) nowUTC() string { return a.now().UTC().Format(time.RFC3339) }
+
+// businessToday is the Asia/Shanghai calendar day expressed as a UTC-shifted
+// time. A fixed +08:00 avoids a tzdata dependency and, crucially, uses the
+// injectable clock instead of reading the wall clock directly.
+func (a *API) businessToday() time.Time { return a.now().UTC().Add(8 * time.Hour) }
+
+// businessDate returns the current Asia/Shanghai business day (YYYY-MM-DD).
+func (a *API) businessDate() string { return a.businessToday().Format("2006-01-02") }
+
+// parseTrustedProxies accepts explicit IPs or CIDRs. Invalid entries are ignored
+// with a non-sensitive warning; an empty list means NO proxy header is trusted.
+func parseTrustedProxies(raw []string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range raw {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		if ip, err := netip.ParseAddr(s); err == nil {
+			out = append(out, netip.PrefixFrom(ip.Unmap(), ip.Unmap().BitLen()))
+			continue
+		}
+		slog.Warn("api: ignoring invalid trusted proxy entry", "entry", s)
+	}
+	return out
+}
+
+func (a *API) trustedContains(ip netip.Addr) bool {
+	for _, p := range a.trusted {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteIP parses the immediate peer from RemoteAddr; it never reads a
+// client-supplied header (an attacker can forge X-Forwarded-* freely).
+func remoteIP(r *http.Request) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return ip.Unmap(), true
+}
+
+// clientIP is used for rate-limit bucketing. X-Forwarded-For is honored ONLY
+// when the immediate peer is an explicitly configured trusted proxy.
+func (a *API) clientIP(r *http.Request) string {
+	ip, ok := remoteIP(r)
+	if !ok {
+		return r.RemoteAddr
+	}
+	if a.trustedContains(ip) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			first := strings.TrimSpace(strings.Split(xff, ",")[0])
+			if parsed, err := netip.ParseAddr(first); err == nil {
+				return parsed.Unmap().String()
+			}
+		}
+	}
+	return ip.String()
+}
+
+// secureCookie is an explicit deployment decision. r.TLS is deliberately NOT
+// consulted: Nginx terminates TLS and forwards plain HTTP to Go, so it is
+// always nil in production and would silently downgrade the cookie.
+func (a *API) secureCookie(r *http.Request) bool {
+	if a.opts.CookieSecure {
+		return true
+	}
+	ip, ok := remoteIP(r)
+	if !ok || !a.trustedContains(ip) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -92,7 +233,7 @@ func (a *API) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			FROM sessions s JOIN users u ON u.id = s.user_id
 			WHERE s.token_hash = ? AND s.revoked_at IS NULL AND u.status = 'active'`,
 			auth.HashToken(cookie.Value)).Scan(&p.CSRFToken, &expiresAt, &p.UserID, &p.HouseholdID, &p.Username)
-		if err != nil || expiresAt < nowUTC() {
+		if err != nil || expiresAt < a.nowUTC() {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "会话无效或已过期")
 			return
 		}

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Idempotent Phase-0 SQLite bootstrap, NO financial data schema."""
+"""Phase-0 legacy SQLite metadata bootstrap (NOT the V0.1 schema installer).
+
+Creates only the schema_migrations ledger so older Phase-0 deployments keep a
+compatible on-disk shape. All V0.1 business tables are created by the Go API's
+embedded, versioned migrations on startup; this script never creates them.
+"""
 import argparse
 import os
 from pathlib import Path
@@ -24,4 +29,4 @@ finally:
     conn.close()
 if os.name == 'posix':
     os.chmod(path, 0o600)
-print(f'Phase 0 SQLite metadata ready: {path} (no business tables)')
+print(f'Phase-0 metadata ready: {path} (schema_migrations only; V0.1 business tables are applied by the Go API migrations on startup)')

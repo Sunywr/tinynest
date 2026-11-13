@@ -1,3 +1,5 @@
+# Script name is historical (Phase 0); it now runs local static checks against the V0.1 tree.
+# Full gate: go mod tidy -diff, npm ci / typecheck / build, git diff --check (docs/acceptance.md).
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 python scripts/verify-brand.py

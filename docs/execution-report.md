@@ -1,5 +1,6 @@
 # TinyNest 执行报告（本机真实执行，2026-11-12）
 
+> **历史存档**：本文记录 2026-11-12 当时的真实命令与结果，其中的 `.plan/tinynest-v0.1-implementation-plan.md` 路径已废弃（权威计划为 `docs/plan-v0.1.md`），Phase 0 相关结论不再代表当前代码状态。当前状态见 `IMPLEMENTATION_REPORT.md` 与 `docs/reviews/`。
 > 本文件由 2026-11-12 本次实施**实际执行的命令与结果**重写，替换原先「打包方核验」的二手声明。
 > 完整交付结论见仓库根目录 `IMPLEMENTATION_REPORT.md`。
 

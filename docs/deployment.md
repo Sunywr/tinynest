@@ -34,6 +34,7 @@
 - `cd apps/api && go build -o tinynest-api ./cmd/server`，放置 `/opt/tinynest/api/tinynest-api`。
 - `python3 scripts/init_sqlite.py --db /var/lib/tinynest/tinynest.sqlite3`（在 B 执行，确保所有权归服务用户）。
 - 审核并安装 `deploy/backend/tinynest-api.service.example` 与 `deploy/backend/nginx.conf.example`；替换私网监听地址、证书、白名单 IP；做防火墙 ACL。
+- **首次初始化（FIX-01）**：在 B 机生成强随机令牌（如 `openssl rand -hex 32`），仅通过 systemd 的 `Environment=` 或受保护的 env 文件注入 `TINYNEST_SETUP_TOKEN`；**不要写进仓库、日志或前端**。未配置令牌时 `POST /api/v1/setup` 返回 `403 setup_disabled`（fail closed）。管理员在初始化页面填入该令牌提交一次，成功后令牌即失效（再次调用返回 `409`）。切勿以「Go 侧看到 `127.0.0.1`」作为安全依据——反代会让公网请求看起来像本机。
 - 验证 B 的 loopback `curl -fsS http://127.0.0.1:8787/api/v1/healthz`，然后在 A 验证 `curl -fsS https://YOUR_PUBLIC_DOMAIN/api/v1/healthz`。
 - 使用 `scripts/backup-sqlite.py` 形成一致性备份并验证备份文件；不要在公网开放 `8787`、`8443`（8443 仅私网）。
 

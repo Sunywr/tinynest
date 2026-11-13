@@ -1,5 +1,11 @@
 # TinyNest（小家）Phase 0：奶油团子风格 · 初始化与 Demo 实施计划
 
+> ## ⚠️ 历史阶段文档 · 已被 V0.1 取代（2026-11-13）
+> 本文件是 **Phase 0（工程初始化 + 虚构 Demo）** 的原始计划，保留原文作为历史存档，**不再约束当前代码**。
+> 项目已进入 V0.1 家庭账本主体阶段：真实复式记账、SQLite 持久化、登录/会话/CSRF/审计、真实 API 界面均已实现。
+> 因此本文件中「禁止账号/授权、流水 CRUD、报表真实计算」「Go 后端仅健康检查」「没有真实记账业务」「完成 Phase 0 后停止」等表述均为**历史约束**，请勿据此判断当前实现违规。
+> 当前入口：[`AGENTS.md`](AGENTS.md)（V0.1 当前守则）、[`docs/api-v0.1.md`](docs/api-v0.1.md)（路由状态）、[`docs/accounting-rules-v0.1.md`](docs/accounting-rules-v0.1.md)（账务规则）、[`IMPLEMENTATION_REPORT.md`](IMPLEMENTATION_REPORT.md)（未竟事项）、[`docs/reviews/`](docs/reviews/)。
+
 > 版本 `phase0-cream-v1` | **范围冻结**：项目地基 + 假数据演示界面。**非真实记账系统**。
 
 ## 1. 已确认、不可更改的决定

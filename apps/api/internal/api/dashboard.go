@@ -13,14 +13,13 @@ func (a *API) registerDashboard(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/dashboard/projects", a.handleDashboardProjects)
 }
 
-// Business dates are Asia/Shanghai calendar days; a fixed +08:00 avoids a tzdata dependency.
-func shanghaiToday() time.Time { return time.Now().UTC().Add(8 * time.Hour) }
-
-func period(r *http.Request) (string, string) {
+// period resolves the reporting window. Business dates come from the injectable
+// Asia/Shanghai clock, never from a direct wall-clock read (FIX-03).
+func (a *API) period(r *http.Request) (string, string) {
 	q := r.URL.Query()
 	from, to := q.Get("from"), q.Get("to")
 	if from == "" || to == "" {
-		now := shanghaiToday()
+		now := a.businessToday()
 		from = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 		to = time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 	}
@@ -31,37 +30,37 @@ func period(r *http.Request) (string, string) {
 // income/expense from P&L subjects, cashflow from cash asset subjects, due from schedule items.
 func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	from, to := period(r)
+	from, to := a.period(r)
 	ctx := r.Context()
 
 	// 收支口径只统计普通收入/费用分类和真实费用科目。
 	// 4050 分红、4060 已实现收益、5130 红利税、5190 已实现损失属于
 	// 「投资总收益」口径，绝不能混入本期收入或本期支出。
-	income, err := db.Aggregate(ctx, a.DB, "4010:%", from, to)
+	income, err := db.Aggregate(ctx, a.DB, p.HouseholdID, "4010:%", from, to)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
 	expense := int64(0)
 	for _, pattern := range []string{"5010:%", "5100", "5110", "5120"} {
-		v, err := db.Aggregate(ctx, a.DB, pattern, from, to)
+		v, err := db.Aggregate(ctx, a.DB, p.HouseholdID, pattern, from, to)
 		if err != nil {
 			internalErr(w, err)
 			return
 		}
 		expense += int64(v)
 	}
-	cash, err := db.Cashflow(ctx, a.DB, from, to)
+	cash, err := db.Cashflow(ctx, a.DB, p.HouseholdID, from, to)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
-	assets, err := db.Aggregate(ctx, a.DB, "1%", "0000-01-01", to)
+	assets, err := db.Aggregate(ctx, a.DB, p.HouseholdID, "1%", "0000-01-01", to)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
-	liabilities, err := db.Aggregate(ctx, a.DB, "2%", "0000-01-01", to)
+	liabilities, err := db.Aggregate(ctx, a.DB, p.HouseholdID, "2%", "0000-01-01", to)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -71,15 +70,15 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 	_ = a.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(amount_minor),0) FROM schedule_due_items
 		WHERE household_id=? AND status='pending' AND due_on>=? AND due_on<=?`, p.HouseholdID, from, to).Scan(&dueInPeriod)
-	today := shanghaiToday().Format("2006-01-02")
+	today := a.businessToday().Format("2006-01-02")
 	_ = a.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(amount_minor),0) FROM schedule_due_items
 		WHERE household_id=? AND status='pending' AND due_on>=? AND due_on<=?`,
-		p.HouseholdID, today, shanghaiToday().AddDate(0, 0, 7).Format("2006-01-02")).Scan(&due7)
+		p.HouseholdID, today, a.businessToday().AddDate(0, 0, 7).Format("2006-01-02")).Scan(&due7)
 	_ = a.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(amount_minor),0) FROM schedule_due_items
 		WHERE household_id=? AND status='pending' AND due_on>=? AND due_on<=?`,
-		p.HouseholdID, today, shanghaiToday().AddDate(0, 0, 30).Format("2006-01-02")).Scan(&due30)
+		p.HouseholdID, today, a.businessToday().AddDate(0, 0, 30).Format("2006-01-02")).Scan(&due30)
 
 	var realized, netDiv, cost, market int64
 	_ = a.DB.QueryRowContext(ctx, `
@@ -108,7 +107,7 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = rows.Close() // release the single connection before balance queries
 		for _, v := range list {
-			bal, _ := db.Balance(ctx, a.DB, v.code)
+			bal, _ := db.Balance(ctx, a.DB, p.HouseholdID, v.code)
 			accounts = append(accounts, map[string]any{"id": v.id, "name": v.name, "balance_minor": bal})
 		}
 	}
@@ -136,7 +135,7 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleDashboardCategories(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	from, to := period(r)
+	from, to := a.period(r)
 	// Roll every second-level split up to its top-level category; without this join
 	// child categories would be silently dropped from the ranking.
 	rows, err := a.DB.QueryContext(r.Context(), `
@@ -170,7 +169,7 @@ func (a *API) handleDashboardCategories(w http.ResponseWriter, r *http.Request) 
 
 func (a *API) handleDashboardProjects(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	from, to := period(r)
+	from, to := a.period(r)
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT pr.id,pr.name,
 		  COALESCE(SUM(CASE WHEN t.type='expense' THEN s.amount_minor ELSE 0 END),0),

@@ -332,7 +332,7 @@ func (a *API) handleReverseTransaction(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		rev, err := orig.Reverse(revID, todayUTC())
+		rev, err := orig.Reverse(revID, a.businessDate())
 		if err != nil {
 			return err
 		}

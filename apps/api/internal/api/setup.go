@@ -1,9 +1,12 @@
 package api
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"tinynest/api/internal/auth"
@@ -36,7 +39,32 @@ func (a *API) Register(mux *http.ServeMux) {
 
 // --- bootstrap & identity ---------------------------------------------------
 
+// setupTokenHeader carries the one-time bootstrap token supplied by the operator.
+// It is intentionally NOT a cookie/CSRF flow: this endpoint runs before any user exists.
+const setupTokenHeader = "X-Setup-Token"
+
+// constantTimeTokenEqual compares fixed-length SHA-256 digests so neither the
+// length nor the content of the configured token leaks through timing.
+func constantTimeTokenEqual(got, want string) bool {
+	g := sha256.Sum256([]byte(got))
+	w := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(g[:], w[:]) == 1
+}
+
 func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
+	// Fail closed: an empty database started without an operator-configured token
+	// must never expose an open admin-creation endpoint. RemoteAddr is deliberately
+	// NOT trusted here: Nginx makes every public request appear to come from loopback.
+	if a.opts.SetupToken == "" {
+		writeErr(w, http.StatusForbidden, "setup_disabled",
+			"未配置一次性初始化令牌，初始化已禁用；请在后端主机设置 TINYNEST_SETUP_TOKEN")
+		return
+	}
+	if !constantTimeTokenEqual(r.Header.Get(setupTokenHeader), a.opts.SetupToken) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "初始化令牌无效")
+		return
+	}
+
 	var in struct {
 		HouseholdName string `json:"household_name"`
 		Username      string `json:"username"`
@@ -55,6 +83,12 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
+
+	// Serialize bootstrap in-process; the conditional INSERT below plus the
+	// single-writer SQLite transaction guards the cross-request case.
+	a.setupMu.Lock()
+	defer a.setupMu.Unlock()
+
 	hhID, userID := newID("hh"), newID("usr")
 	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var n int
@@ -64,8 +98,16 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		if n > 0 {
 			return errConflict
 		}
-		if _, err := tx.ExecContext(r.Context(), `INSERT INTO households(id,name) VALUES(?,?)`, hhID, in.HouseholdName); err != nil {
+		// Conditional insert keeps the "only ever one household" invariant inside
+		// the database transaction, not in an application-level pre-check alone.
+		res, err := tx.ExecContext(r.Context(),
+			`INSERT INTO households(id,name) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM households)`,
+			hhID, in.HouseholdName)
+		if err != nil {
 			return err
+		}
+		if affected, _ := res.RowsAffected(); affected == 0 {
+			return errConflict
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			`INSERT INTO users(id,household_id,username,password_hash,role) VALUES(?,?,?,?,'admin')`,
@@ -75,6 +117,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return db.SeedForHousehold(r.Context(), tx, hhID)
 	})
 	if errors.Is(err, errConflict) {
+		// Once initialized the bootstrap token can never create another admin.
 		writeErr(w, 409, "conflict", "系统已初始化，不能重复创建家庭")
 		return
 	}
@@ -94,14 +137,31 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
+	// Throttle BEFORE touching the password hash: an unbounded stream of
+	// Argon2id verifications is itself a denial-of-service vector.
+	principal := strings.ToLower(strings.TrimSpace(in.Username))
+	ip := a.clientIP(r)
+	if allowed, retry := a.limiter.allow(principal, ip); !allowed {
+		w.Header().Set("Retry-After", retryAfterSeconds(retry))
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "登录尝试过于频繁，请稍后重试")
+		return
+	}
 	var userID, hhID, hash string
 	err := a.DB.QueryRowContext(r.Context(),
 		`SELECT id, household_id, password_hash FROM users WHERE username=? AND status='active'`, in.Username).
 		Scan(&userID, &hhID, &hash)
 	if err != nil || !auth.VerifyPassword(hash, in.Password) {
+		if blocked, retry := a.limiter.failure(principal, ip); blocked {
+			w.Header().Set("Retry-After", retryAfterSeconds(retry))
+			writeErr(w, http.StatusTooManyRequests, "rate_limited", "登录尝试过于频繁，请稍后重试")
+			return
+		}
 		writeErr(w, 401, "unauthorized", "用户名或密码错误")
 		return
 	}
+	// A successful authentication clears the per-principal failure counter, but
+	// never the IP-wide bucket (see loginLimiter.reset).
+	a.limiter.reset(principal, ip)
 	raw, tokenHash, err := auth.NewToken()
 	if err != nil {
 		internalErr(w, err)
@@ -112,7 +172,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	expires := time.Now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)
+	expires := a.now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)
 	if _, err := a.DB.ExecContext(r.Context(),
 		`INSERT INTO sessions(id,user_id,token_hash,csrf_token,expires_at) VALUES(?,?,?,?,?)`,
 		newID("sess"), userID, tokenHash, csrfRaw, expires); err != nil {
@@ -121,8 +181,8 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: "tn_session", Value: raw, Path: "/", HttpOnly: true,
-		Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
-		Expires: time.Now().UTC().Add(7 * 24 * time.Hour),
+		Secure: a.secureCookie(r), SameSite: http.SameSiteLaxMode,
+		Expires: a.now().UTC().Add(7 * 24 * time.Hour),
 	})
 	writeJSON(w, 200, map[string]string{"username": in.Username, "csrf_token": csrfRaw, "status": "ok"})
 }
@@ -139,9 +199,10 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("tn_session")
 	if err == nil {
 		_, _ = a.DB.ExecContext(r.Context(), `UPDATE sessions SET revoked_at=? WHERE token_hash=?`,
-			nowUTC(), auth.HashToken(cookie.Value))
+			a.nowUTC(), auth.HashToken(cookie.Value))
 	}
-	http.SetCookie(w, &http.Cookie{Name: "tn_session", Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "tn_session", Value: "", Path: "/", HttpOnly: true,
+		Secure: a.secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	writeJSON(w, 200, map[string]string{"status": "logged_out"})
 }
 
@@ -332,7 +393,7 @@ func (a *API) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []map[string]any{}
 	for _, v := range list {
-		bal, err := db.Balance(r.Context(), a.DB, v.code)
+		bal, err := db.Balance(r.Context(), a.DB, p.HouseholdID, v.code)
 		if err != nil {
 			internalErr(w, err)
 			return
@@ -382,7 +443,7 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		if opening > 0 {
 			entryID := newID("je")
-			e, err := ledger.OpeningBalance(ledger.Context{EntryID: entryID, BizID: id, OccurredOn: todayUTC()}, code, opening)
+			e, err := ledger.OpeningBalance(ledger.Context{EntryID: entryID, BizID: id, OccurredOn: a.businessDate()}, code, opening)
 			if err != nil {
 				return err
 			}
@@ -413,7 +474,7 @@ func (a *API) handleAccountBalance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", "账户不存在")
 		return
 	}
-	bal, err := db.Balance(r.Context(), a.DB, code)
+	bal, err := db.Balance(r.Context(), a.DB, p.HouseholdID, code)
 	if err != nil {
 		internalErr(w, err)
 		return

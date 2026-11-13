@@ -2,7 +2,7 @@
 
 > 生成时间：2026-11-12（Asia/Shanghai）
 > 分支：`feature/tinynest-phase0-v0.1`（**未合并 main，未 push**）
-> 基准：`plan.md`（Phase 0）、`.plan/tinynest-phase0-cream-plan.md`、`.plan/tinynest-v0.1-implementation-plan.md`（已归档为 `docs/plan-v0.1.md`）
+> 基准：`plan.md`（Phase 0 历史）、[`docs/plan-v0.1.md`](docs/plan-v0.1.md)（V0.1 唯一权威计划）
 > 原则：不虚报测试结果；已实现 / 已测试 / 未测试 / 待确认 / 未实现 严格分开。
 
 ---
@@ -213,13 +213,15 @@ dashboard: income=0 expense=10000 cashflow=-10000 net_worth=990000
 5. 首页 `4%`/`5%` 汇总把投资分红、已实现损益、红利税混入本期收支（**统计口径错误**）。
 6. 期初余额被计入「本期实际现金净流量」。
 
-### 未测试
+### 未测试（本轮修复后重新核对）
 - iPhone Safari 添加到主屏幕实机、独立窗口/启动画面/安全区实机表现。
 - 生产 HTTPS、A→B 私网 TLS 链路、双服务器真实部署与连通性。
-- 备份文件的**恢复演练**（脚本存在且冒烟通过 `--help`，但未对 V0.1 业务库做完整备份→恢复→账务一致性比对）。
 - 前端交互自动化测试（仅做了类型检查与生产构建，未引入 E2E 框架）。
 - 大数据量下的性能 / 流水分页压测。
 - 真实浏览器 390 / 768 / 1440px 视觉实测（仅有 Phase 0 存档预览图）。
+- Go `-race` 并发检测：本机缺 gcc，`CGO_ENABLED=1 go test -race` 构建失败，如实标记 `UNVERIFIED`；并发行为已由 `TestLoginRateLimitConcurrentAndAuditSafe`、`TestSetupConcurrentBootstrapOnlyOneSucceeds` 覆盖。
+
+> **已补证**：备份→隔离库恢复演练在前一轮合并前审查中完成（Python 生成库与真实 Go WAL 库两套，`quick_check=ok`、`foreign_key_check=[]`，迁移/家庭/用户/分类数量一致），本轮修复报告再次执行。仓库内仍缺**可自动执行**的恢复演练脚本（S7 待办）。
 
 ---
 
@@ -231,8 +233,10 @@ dashboard: income=0 expense=10000 cashflow=-10000 net_worth=990000
 | S4 | 房贷/贷款/保险等 `debt_contracts` 的 HTTP CRUD 与期次付款（表已建、待办生成已扫描该表）；分期提前结清、分期退款后未来期次调整 |
 | S5 | 费率规则 `investment_fee_rules` 的写入 API（读取与快照已实现）；无份额概念的「金额份额模式」理财产品 |
 | S6 | 资产负债构成变化、年度分红与税额的独立统计端点（分红数据已在持仓与汇总中） |
-| S7 | 登录失败限流、真正的**每日定时调度器**（当前只有手动 `POST /schedule/generate`，但幂等已验证）、审计日志全覆盖、备份自动演练、PC/iPhone 实机验证、HTTPS/Nginx 实机部署、V0.1 发布说明文档 `docs/release-v0.1.md` |
-| 通用 | 多家庭数据隔离（`handleGenerateDueItems` 未按 household_id 过滤期次；V0.1 单家庭下无影响）；部分写接口未接 `Idempotency-Key`；等额本息/等额本金计算器（计划明确列为 V0.1.x） |
+| S7 | 真正的**每日定时调度器**（当前只有手动 `POST /schedule/generate`，但幂等已验证）、审计日志查询端点与全覆盖、备份自动演练脚本、PC/iPhone 实机验证、HTTPS/Nginx 实机部署、V0.1 发布说明文档 `docs/release-v0.1.md` |
+| 通用 | 部分写接口未接 `Idempotency-Key`（`docs/api-v0.1.md` 已如实标注为 PARTIAL）；等额本息/等额本金计算器（计划明确列为 V0.1.x） |
+
+> **本轮已修复并从「未实现」移除**：`/setup` 未授权抢注、多家庭数据隔离缺失、业务日期 UTC 错期、生产 Cookie 无 `Secure`、登录失败无限流。逐项根因、文件行号与「失败测试 → 修复 → 回归」证据见 `docs/reviews/v0.1-pr-remediation-report.md`。上述修复**不代表 V0.1 全部完成**，S3/S4/S5/S7 未实现项与发布门禁仍然存在。
 
 > 按 V0.1 计划第 17.4 节发布门禁，上述未实现项 + 未测试项意味着 **V0.1 尚不能宣布正式发布完成**。本次交付的是账务内核正确、可运行、可记账、已通过自动化与真实进程验证的 V0.1 主体，不是已完成发布门禁的最终版。
 
@@ -243,7 +247,7 @@ dashboard: income=0 expense=10000 cashflow=-10000 net_worth=990000
 **待确认（阻塞正式入账声明）**：`docs/accounting-rules-v0.1.md` 第 8 节 10 项口径（成员登录范围、现金账户范围、账单周期、分期确认时点、手续费分摊、移动加权平均成本法、手工估值、房贷每期拆分、收益率口径、退款跨月）。代码按建议默认值实现，但不得视为用户已确认。
 
 **已知问题**：
-1. 期初余额分录日期使用 UTC 当日，业务时区为 Asia/Shanghai，跨日边界可能相差一天。
+1. ~~期初余额分录日期使用 UTC 当日，业务时区为 Asia/Shanghai，跨日边界可能相差一天~~ → **已修复（FIX-03）**：期初余额、冲正、到期任务与默认统计区间统一使用可注入的 Asia/Shanghai 业务日；审计/会话时间戳仍 UTC。
 2. 分期「部分付款」时手续费仅在结清该期的最后一笔确认，前期付款先冲本金（与「手续费按期确认」的理想口径有偏差）。
 3. 红利税留空（未知）时，`gross_minor` 保存用户录入值而 `net_minor` 与之相同，页面需以 `tax_unknown` 标记展示，不得解读为免税。
 4. 账单 `status` 目前只在还款时更新为 partial/paid，未随日期自动判定逾期。
@@ -255,9 +259,9 @@ dashboard: income=0 expense=10000 cashflow=-10000 net_worth=990000
 
 ## 10. 后续 V0.2 建议（按优先级）
 
-1. **补齐发布门禁**：完成第 7 节「未测试」清单，尤其备份→恢复账务一致性演练、iPhone Safari 实机、双服务器 HTTPS 私网链路实测。
-2. **补齐 S4/S7 未实现项**：房贷/贷款/保险合同 API、提前结清、分期退款调整、真正的每日幂等调度器、登录限流、审计全覆盖。
-3. **多家庭隔离与幂等收口**：为所有写接口统一接入 `Idempotency-Key`，并让所有查询强制带 `household_id`。
+1. **补齐发布门禁**：完成第 7 节「未测试」清单，尤其 iPhone Safari 实机、双服务器 HTTPS 私网链路实测、前端 E2E；把已人工验证过的备份恢复演练沉淀为自动化脚本。
+2. **补齐 S4/S7 未实现项**：房贷/贷款/保险合同 API、提前结清、分期退款调整、真正的每日幂等调度器、审计查询端点与全覆盖。
+3. **幂等收口**：为剩余写接口统一接入 `Idempotency-Key`（家庭数据隔离已在本轮 FIX-02 修复）。
 4. **口径确认闭环**：用户确认第 8 节 10 项后，把 `Assumption` 常量升级为正式业务规则并补充对应回归测试。
 5. **前端质量**：引入 Vitest + Playwright，覆盖表单校验、金额格式化、日期边界与关键记账流程 E2E；补齐 390/768/1440 视觉回归。
 6. **可观测性与运维**：结构化日志、迁移失败告警、备份校验自动化、健康检查细分到每项依赖。
@@ -270,6 +274,7 @@ dashboard: income=0 expense=10000 cashflow=-10000 net_worth=990000
 | 状态 | 内容 |
 |---|---|
 | **已实现 + 已测试** | Phase 0 全部（含构建修复）、S0 设计、S1/S2 完整闭环、S3 信用账单核心、S4 退款与分期核心、S5 投资核心、S6 首页三套口径、前端真实 API 界面、7 版本迁移、认证/CSRF/审计基础 |
+| **本轮 PR 阻断修复（已测试）** | FIX-01 一次性 Bootstrap Token、FIX-02 全路径家庭隔离、FIX-03 Asia/Shanghai 业务日、FIX-04 显式 Cookie `Secure`、FIX-05 登录失败限流；文档同步、依赖清理、CI 工作流见 `docs/reviews/v0.1-pr-remediation-report.md` |
 | **已实现 + 未测试** | 部分 handler 的边界分支、iPhone PWA 实机、双服务器部署模板的实际连通性 |
 | **未测试** | 见第 7 节清单 |
 | **待确认** | 第 9 节 10 项账务口径 |

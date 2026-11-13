@@ -22,7 +22,7 @@ const errorMsg = ref('')
 const loading = ref(false)
 const me = ref<any>(null)
 
-const authForm = reactive({ mode: 'login' as 'login' | 'setup', username: '', password: '', household_name: '我的小家' })
+const authForm = reactive({ mode: 'login' as 'login' | 'setup', username: '', password: '', household_name: '我的小家', setup_token: '' })
 const range = reactive({ from: currentMonth()[0], to: currentMonth()[1] })
 
 const summary = ref<any>(null)
@@ -88,7 +88,8 @@ async function submitAuth() {
   loading.value = true; errorMsg.value = ''
   try {
     if (authForm.mode === 'setup') {
-      await api.setup(authForm.household_name, authForm.username, authForm.password)
+      await api.setup(authForm.household_name, authForm.username, authForm.password, authForm.setup_token)
+      authForm.setup_token = ''
       toast('家庭账本已初始化，请登录')
       authForm.mode = 'login'
     } else {
@@ -267,12 +268,13 @@ const metricCards = computed(() => {
       </div>
       <form @submit.prevent="submitAuth">
         <label v-if="authForm.mode === 'setup'">家庭名称<input v-model="authForm.household_name" required /></label>
+        <label v-if="authForm.mode === 'setup'">一次性初始化令牌<input v-model="authForm.setup_token" type="password" autocomplete="off" required placeholder="由部署者在后端设置，仅使用一次" /></label>
         <label>用户名<input v-model="authForm.username" autocomplete="username" required /></label>
         <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
         <p v-if="errorMsg" class="err">{{ errorMsg }}</p>
         <button class="primary" type="submit" :disabled="loading">{{ loading ? '处理中…' : (authForm.mode === 'setup' ? '创建家庭账本' : '登录') }}</button>
       </form>
-      <p class="authhint">{{ authForm.mode === 'setup' ? '仅可初始化一次；密码使用 Argon2id 哈希存储。' : '会话为 HttpOnly Cookie，写操作需 CSRF 校验。' }}</p>
+      <p class="authhint">{{ authForm.mode === 'setup' ? '仅可初始化一次；必须填写后端 TINYNEST_SETUP_TOKEN，令牌不会存入浏览器。密码使用 Argon2id 哈希存储。' : '会话为 HttpOnly Cookie，写操作需 CSRF 校验。' }}</p>
     </div>
 
     <div v-else-if="authed" class="website">
