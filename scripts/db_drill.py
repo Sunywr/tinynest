@@ -168,13 +168,24 @@ def main() -> None:
     assert snap_after["debit_minor"] == snap_after["credit_minor"], "journal lines are not balanced"
     print(f"  repeat-migration snapshot unchanged: {snap_after}")
 
-    print("[6/8] online backup -> restore into a NEW file")
-    backup = work / "backups" / "restored-source.sqlite3"
-    backup.parent.mkdir()
-    src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    dst = sqlite3.connect(str(backup))
-    src.backup(dst)
-    dst.commit(); dst.close(); src.close()
+    print("[6/8] online backup via the REAL operator script -> restore into a NEW file")
+    # Step 6 exercises scripts/backup-sqlite.py itself (quick_check,
+    # foreign_key_check, migration versions, business snapshot and SHA-256),
+    # rather than re-implementing backup() inline. An operator's restore is
+    # only as trustworthy as the script that produced the artifact.
+    backup_dir = work / "backups"
+    backup_dir.mkdir()
+    script = Path(__file__).with_name("backup-sqlite.py")
+    backup_result = subprocess.run(
+        [sys.executable, str(script), "--db", str(db), "--out-dir", str(backup_dir)],
+        check=True, capture_output=True, text=True,
+    )
+    for line in backup_result.stdout.strip().splitlines():
+        print("  " + line)
+    produced = sorted(backup_dir.glob("tinynest-*.sqlite3"))
+    assert len(produced) == 1, f"expected exactly one backup artifact, got {produced}"
+    backup = produced[0]
+    check(backup)
     restored = work / "backups" / "restored-copy.sqlite3"
     shutil.copy2(backup, restored)
     check(restored)

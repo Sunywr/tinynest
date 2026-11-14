@@ -107,6 +107,20 @@ jobs:
           else
             git diff --check HEAD^ HEAD
           fi
+      - name: No trailing whitespace anywhere in tracked text files
+        # `git diff --check` only inspects the PR's changed lines. A file with
+        # trailing whitespace that was already merged can silently keep CI red
+        # on later PRs, and a new hand-written doc can reintroduce it. This
+        # whole-tree gate closes that gap (runs #10-#15 all failed here).
+        run: |
+          set -euo pipefail
+          if git grep -nI -E '[[:blank:]]+$' -- \
+            '*.md' '*.go' '*.ts' '*.vue' '*.css' '*.py' '*.sql' \
+            '*.yml' '*.yaml' '*.json' '*.html' '*.js'; then
+            echo "::error::Trailing whitespace in tracked files; remove it before merging."
+            exit 1
+          fi
+          echo "tracked-text-hygiene: clean"
       - name: No secrets / databases / local state tracked
         run: |
           set -euo pipefail
