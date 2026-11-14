@@ -325,6 +325,10 @@ func TestV01EndToEnd(t *testing.T) {
 		t.Errorf("net dividend = %v, want 9000", pos["net_dividend_minor"])
 	}
 
+	if pos["dividend_tax_unknown"] != false {
+		t.Errorf("known dividend tax must be reported as known: %v", pos)
+	}
+
 	// --- S6: dashboard exposes three separate accounting views ---
 	_, summary := c.do("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
 	for _, field := range []string{"income_minor", "expense_minor", "cashflow_minor", "liabilities_due_minor", "net_worth_minor", "investment_total_return_minor"} {
@@ -351,6 +355,14 @@ func TestV01EndToEnd(t *testing.T) {
 	_ = database.QueryRow(`SELECT COUNT(*) FROM journal_entries WHERE status='reversed'`).Scan(&reversedCount)
 	if reversedCount != 1 {
 		t.Errorf("original entry should be preserved as reversed, got %d", reversedCount)
+	}
+	c.mustOK("POST", "/api/v1/investments/dividends", map[string]any{
+		"asset_id": asset, "received_on": "2026-11-16",
+		"gross_minor": 1_000, "to_account_id": sec,
+	})
+	pos = findRow(t, c.mustOK("GET", "/api/v1/investments/positions", nil), "asset_id", asset)
+	if pos["dividend_tax_unknown"] != true {
+		t.Errorf("missing dividend tax must stay marked after reloading positions: %v", pos)
 	}
 }
 

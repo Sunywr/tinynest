@@ -341,6 +341,20 @@ func (a *API) handlePatchStatementCycle(w http.ResponseWriter, r *http.Request) 
 			stmtID, p.HouseholdID).Scan(&start, &end, &due); err != nil {
 			return errors.New("账单不存在")
 		}
+		newStart, newEnd, newDue := start, end, due
+		if in.CycleStartOn != nil {
+			newStart = *in.CycleStartOn
+		}
+		if in.CycleEndOn != nil {
+			newEnd = *in.CycleEndOn
+		}
+		if in.DueOn != nil {
+			newDue = *in.DueOn
+		}
+		if newStart > newEnd || newEnd > newDue {
+			return errors.New("周期开始、周期结束、还款日顺序不正确")
+		}
+
 		old := map[string]string{"cycle_start_on": start, "cycle_end_on": end, "due_on": due}
 		for _, f := range fields {
 			if f.val == nil || *f.val == old[f.name] {

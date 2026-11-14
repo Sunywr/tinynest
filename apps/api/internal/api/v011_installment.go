@@ -13,9 +13,6 @@ import (
 	"tinynest/api/internal/money"
 )
 
-// errSplitRequired marks the safe-mode refusal of an unallocated partial payment.
-var errSplitRequired = errors.New("split_required")
-
 func (a *API) registerV011Installment(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/installments/{id}", a.handleGetInstallment)
 	a.route(mux, "POST /api/v1/installments/{id}/refunds", a.handleInstallmentRefund)

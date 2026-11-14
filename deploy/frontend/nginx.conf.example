@@ -7,7 +7,7 @@ server {
     return 301 https://$host$request_uri;
 }
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
     server_name YOUR_PUBLIC_DOMAIN;
     ssl_certificate /etc/ssl/tinynest/fullchain.pem;
     ssl_certificate_key /etc/ssl/tinynest/privkey.pem;
@@ -27,12 +27,15 @@ server {
         proxy_set_header Host api.internal.example;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # This is the public edge. Discard client-supplied forwarding headers.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Forwarded "";
         proxy_connect_timeout 5s;
         proxy_read_timeout 15s;
         proxy_hide_header Access-Control-Allow-Origin;
         add_header Cache-Control "no-store" always;
     }
+    location = /manifest.webmanifest { types { application/manifest+json webmanifest; } try_files $uri =404; }
     location = /sw.js { add_header Cache-Control "no-cache" always; try_files $uri =404; }
     location = /index.html { add_header Cache-Control "no-cache" always; try_files $uri =404; }
     location / { try_files $uri $uri/ /index.html; }

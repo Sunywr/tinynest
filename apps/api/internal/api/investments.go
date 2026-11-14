@@ -296,6 +296,8 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT p.asset_id,a.code,a.name,p.quantity_scaled,p.total_cost_minor,p.avg_cost_minor,
 		       p.realized_pnl_minor,p.net_dividend_minor,p.last_valued_on,
+	       EXISTS(SELECT 1 FROM investment_dividends d
+	              WHERE d.household_id=a.household_id AND d.asset_id=p.asset_id AND d.tax_minor IS NULL),
 		       (SELECT market_value_minor FROM investment_valuations v WHERE v.asset_id=p.asset_id ORDER BY v.valued_on DESC LIMIT 1)
 		FROM investment_positions p JOIN investment_assets a ON a.id=p.asset_id
 		WHERE a.household_id=? ORDER BY a.code`, p.HouseholdID)
@@ -310,7 +312,8 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 		var qty, cost, avg, realized, netDiv int64
 		var valued *string
 		var market *int64
-		if err := rows.Scan(&id, &code, &name, &qty, &cost, &avg, &realized, &netDiv, &valued, &market); err != nil {
+		var dividendTaxUnknown bool
+		if err := rows.Scan(&id, &code, &name, &qty, &cost, &avg, &realized, &netDiv, &valued, &dividendTaxUnknown, &market); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -318,7 +321,7 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 			"asset_id": id, "code": code, "name": name, "quantity_scaled": qty,
 			"total_cost_minor": cost, "avg_cost_minor": avg,
 			"realized_pnl_minor": realized, "net_dividend_minor": netDiv,
-			"last_valued_on": valued,
+			"last_valued_on": valued, "dividend_tax_unknown": dividendTaxUnknown,
 		}
 		if market != nil {
 			m["market_value_minor"] = *market

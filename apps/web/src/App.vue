@@ -50,9 +50,10 @@ const f = reactive<any>({
   account: { kind: 'cash', name: '', opening_balance: '' },
   project: { name: '' },
   credit: { kind: 'credit_card', name: '', cycle_start_day: 1, cycle_end_day: 31, due_day: 10, due_month_offset: 1, credit_limit: '' },
+  statementCycle: { id: '', cycle_start_on: '', cycle_end_on: '', due_on: '', reason: '' },
   payment: { statement_id: '', amount: '', from_account_id: '', paid_on: today() },
   installment: { name: '', category_id: '', principal: '', fee: '0', periods: 3, first_due_on: today() },
-  instPayment: { contract_id: '', installment_no: 1, amount: '', principal: '', fee: '', channel: 'cash', channel_id: '', paid_on: today() },
+  instPayment: { contract_id: '', installment_no: 1, amount: '', channel: 'cash', channel_id: '', paid_on: today() },
   instRefund: { contract_id: '', amount: '', destination_type: 'cash', destination_id: '', note: '' },
   debt: { kind: 'mortgage', name: '', principal: '', start_on: today(), due_day: 10 },
   debtSchedule: { contract_id: '', items: [] as any[] },
@@ -191,6 +192,21 @@ function createCredit() {
   if (limit !== null && (limit === undefined || limit <= 0)) return toast('额度必须为正数或留空（未配置）')
   return run(() => api.createCreditInstrument({ ...f.credit, credit_limit_minor: limit ?? undefined }), '信用工具已创建')
 }
+function editStatementCycle(statement: { id: string; cycle_start_on: string; cycle_end_on: string; due_on: string }) {
+  const { id, cycle_start_on, cycle_end_on, due_on } = statement
+  Object.assign(f.statementCycle, { id, cycle_start_on, cycle_end_on, due_on, reason: '' })
+}
+async function saveStatementCycle() {
+  const { id, cycle_start_on, cycle_end_on, due_on, reason } = f.statementCycle
+  if (!reason.trim()) return toast('请填写修正原因')
+  if (!cycle_start_on || !cycle_end_on || !due_on || cycle_start_on > cycle_end_on || cycle_end_on > due_on) {
+    return toast('请按周期开始、周期结束、还款日的顺序填写日期')
+  }
+  await run(async () => {
+    await api.adjustStatementCycle(id, { cycle_start_on, cycle_end_on, due_on, reason: reason.trim() })
+    f.statementCycle.id = ''
+  }, '账单日期已修正')
+}
 function payStatement() {
   const amount = minor(f.payment.amount)
   if (!f.payment.statement_id || amount === null || amount <= 0 || !f.payment.from_account_id) return toast('请填写账单、金额与付款账户')
@@ -208,14 +224,10 @@ function createInstallment() {
 function payInstallment() {
   const amount = minor(f.instPayment.amount)
   if (!f.instPayment.contract_id || amount === null || amount <= 0 || !f.instPayment.channel_id) return toast('请填写合同、金额与付款渠道')
-  // V0.1.1 安全模式：部分付款必须显式填写本金/手续费拆分（口径未确认，不自动分配）。
-  const principal = minor(f.instPayment.principal), fee = minor(f.instPayment.fee)
-  if (principal === null || fee === null || principal < 0 || fee < 0) return toast('请显式填写本次付款的本金/手续费拆分（可为 0）')
   return run(() => api.payInstallment(f.instPayment.contract_id, {
     installment_no: f.instPayment.installment_no, amount_minor: amount,
-    principal_minor: principal, fee_minor: fee,
     paid_on: f.instPayment.paid_on, channel: f.instPayment.channel, channel_id: f.instPayment.channel_id,
-  }), '期次付款已确认入账（显式拆分）')
+  }), '期次付款已确认入账')
 }
 async function selectInstallment(id: string) {
   f.instPayment.contract_id = id
@@ -593,15 +605,23 @@ const metricCards = computed(() => {
             <div class="ranklist"><div v-for="s in statements" :key="s.id" class="rankrow">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ s.status }}</span>
               <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}</b>
-              <span class="rowacts"><button class="ghost" @click="f.payment.statement_id = s.id; f.payment.amount = (s.remaining_minor / 100).toFixed(2)">还款</button></span>
+              <span class="rowacts"><button class="ghost" @click="f.payment.statement_id = s.id; f.payment.amount = (s.remaining_minor / 100).toFixed(2)">还款</button><button class="ghost" @click="editStatementCycle(s)">修正日期</button></span>
             </div>
               <p v-if="!statements.length" class="empty">暂无账单，记一笔信用消费后自动归集</p></div>
+          <form v-if="f.statementCycle.id" class="formgrid" @submit.prevent="saveStatementCycle()">
+              <label>周期开始<input v-model="f.statementCycle.cycle_start_on" type="date" required /></label>
+              <label>周期结束<input v-model="f.statementCycle.cycle_end_on" type="date" required /></label>
+              <label>还款日<input v-model="f.statementCycle.due_on" type="date" required /></label>
+              <label>修正原因<input v-model="f.statementCycle.reason" required /></label>
+              <button class="primary" type="submit" :disabled="loading">保存账单日期</button>
+              <button class="ghost" type="button" @click="f.statementCycle.id = ''">取消</button>
+            </form>
           </section>
         </template>
 
         <!-- 分期与负债 -->
         <template v-else-if="view === 'debt'">
-          <section class="greeting"><div><h1>分期与固定负债</h1><p>部分付款采用显式本金/费用拆分（安全模式）；到期事项只进入「待支付」。</p></div></section>
+          <section class="greeting"><div><h1>分期与固定负债</h1><p>分期付款按比例确认手续费，固定负债付款按实际本金、利息和费用录入。</p></div></section>
 
           <section class="panel formpanel"><div class="paneltitle"><div><h2>新建固定负债合同</h2><span class="subinfo">房贷/贷款/保险/其他；保险不能设本金</span></div></div>
             <div class="formgrid">
@@ -667,20 +687,18 @@ const metricCards = computed(() => {
             </div><button class="primary" @click="createInstallment()">创建合同</button>
           </section>
 
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>分期：期次付款与调整</h2><span class="subinfo">部分付款必须显式拆分本金/手续费；退款保留已付历史</span></div></div>
+          <section class="panel formpanel"><div class="paneltitle"><div><h2>分期：期次付款与调整</h2><span class="subinfo">部分付款按比例确认手续费；退款保留已付历史</span></div></div>
             <div class="formgrid">
               <label>合同<select v-model="f.instPayment.contract_id" @change="selectInstallment(($event.target as HTMLSelectElement).value)"><option value="">请选择</option>
                 <option v-for="i in installments" :key="i.id" :value="i.id">{{ i.name }} · 剩 {{ formatMinor(i.remaining_minor) }}</option></select></label>
               <label>期次<input type="number" min="1" v-model.number="f.instPayment.installment_no" /></label>
               <label>实付金额（元）<input v-model="f.instPayment.amount" inputmode="decimal" /></label>
-              <label>本金拆分（元）<input v-model="f.instPayment.principal" inputmode="decimal" placeholder="必填，可为 0" /></label>
-              <label>手续费拆分（元）<input v-model="f.instPayment.fee" inputmode="decimal" placeholder="必填，可为 0" /></label>
               <label>渠道<select v-model="f.instPayment.channel"><option value="cash">现金账户</option><option value="credit">信用工具（新增信用负债）</option></select></label>
               <label>账户/工具<select v-model="f.instPayment.channel_id"><option value="">请选择</option>
                 <option v-for="a in (f.instPayment.channel === 'cash' ? accounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></label>
               <label>付款日期<input type="date" v-model="f.instPayment.paid_on" /></label>
             </div>
-            <button class="primary" @click="payInstallment()">确认期次付款（显式拆分）</button>
+            <button class="primary" @click="payInstallment()">确认期次付款</button>
             <template v-if="instDetail">
               <div class="note-box">合同本金 {{ formatMinor(instDetail.principal_minor) }} · 总费用 {{ formatMinor(instDetail.total_fee_minor) }} ·
                 守恒 {{ instDetail.conservation?.principal_balanced ? '✓本金' : '✗本金' }} / {{ instDetail.conservation?.fee_balanced ? '✓费用' : '✗费用' }} ·
@@ -768,7 +786,7 @@ const metricCards = computed(() => {
           <section class="panel"><div class="paneltitle"><div><h2>持仓</h2><span class="subinfo">可重建投影，历史交易不可变</span></div></div>
             <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
               <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
-              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}</b></div>
+              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
               <p v-if="!positions.length" class="empty">暂无持仓</p></div>
           </section>
         </template>

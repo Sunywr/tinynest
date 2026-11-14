@@ -203,33 +203,17 @@ test('13 新建分期合同 3000+90 三期，守恒可见', async ({ page }) => 
   await expect(page.getByText(/守恒 ✓本金 \/ ✓费用/)).toBeVisible()
 })
 
-test('14 分期期次显式拆分部分付款 515（500 本 / 15 费）', async ({ page }) => {
+test('14 分期期次按比例拆分部分付款 515（500 本 / 15 费）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '分期与负债' }).click()
   const p3 = page.locator('.formpanel').nth(3)
   await p3.getByLabel('合同').selectOption({ index: 1 })
   await p3.getByLabel('期次').fill('1')
   await p3.getByLabel('实付金额（元）').fill('515')
-  await p3.getByLabel('本金拆分（元）').fill('500')
-  await p3.getByLabel('手续费拆分（元）').fill('15')
   await p3.getByLabel(/^账户\/工具/).selectOption({ label: 'E2E 工资卡' })
-  await page.getByRole('button', { name: '确认期次付款（显式拆分）' }).click()
-  await expect(page.getByText('期次付款已确认入账（显式拆分）')).toBeVisible()
+  await page.getByRole('button', { name: '确认期次付款' }).click()
+  await expect(page.getByText('期次付款已确认入账')).toBeVisible()
   await expect(page.locator('.rankrow', { hasText: '第 1 期' })).toContainText('余 ¥515.00')
-})
-
-test('15 拆分必填：未填拆分被拒（安全模式）', async ({ page }) => {
-  await ensureLogin(page)
-  await page.getByRole('button', { name: '分期与负债' }).click()
-  const p3 = page.locator('.formpanel').nth(3)
-  await p3.getByLabel('合同').selectOption({ index: 1 })
-  await p3.getByLabel('期次').fill('2')
-  await p3.getByLabel('实付金额（元）').fill('100')
-  await p3.getByLabel('本金拆分（元）').fill('')
-  await p3.getByLabel('手续费拆分（元）').fill('')
-  await p3.getByLabel(/^账户\/工具/).selectOption({ label: 'E2E 工资卡' })
-  await page.getByRole('button', { name: '确认期次付款（显式拆分）' }).click()
-  await expect(page.getByText(/显式填写本次付款的本金\/手续费拆分/)).toBeVisible()
 })
 
 test('16 结清第 1 期剩余 515', async ({ page }) => {
@@ -239,11 +223,9 @@ test('16 结清第 1 期剩余 515', async ({ page }) => {
   await p3.getByLabel('合同').selectOption({ index: 1 })
   await p3.getByLabel('期次').fill('1')
   await p3.getByLabel('实付金额（元）').fill('515')
-  await p3.getByLabel('本金拆分（元）').fill('500')
-  await p3.getByLabel('手续费拆分（元）').fill('15')
   await p3.getByLabel(/^账户\/工具/).selectOption({ label: 'E2E 工资卡' })
-  await page.getByRole('button', { name: '确认期次付款（显式拆分）' }).click()
-  await expect(page.getByText('期次付款已确认入账（显式拆分）')).toBeVisible()
+  await page.getByRole('button', { name: '确认期次付款' }).click()
+  await expect(page.getByText('期次付款已确认入账')).toBeVisible()
 })
 
 test('17 分期退款 50 回现金并显式调整第 2 期', async ({ page }) => {
@@ -358,4 +340,21 @@ test('22 三视口响应式无横向溢出（1440 / 768 / 390）', async ({ page
     }
     await page.screenshot({ path: `e2e/artifacts/viewport-${vp.width}.png`, fullPage: false })
   }
+})
+
+test('账单日期修正保留应还和已还金额', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '信用账单' }).click()
+  const row = page.locator('.rankrow').filter({ hasText: /还款日.*应还/ }).first()
+  const amounts = await row.locator('b').innerText()
+  await row.getByRole('button', { name: '修正日期' }).click()
+  const date = await page.locator('form').getByLabel('还款日', { exact: true }).inputValue()
+  const next = new Date(date + 'T00:00:00Z')
+  next.setUTCDate(next.getUTCDate() + 1)
+  const dueOn = next.toISOString().slice(0, 10)
+  await page.locator('form').getByLabel('还款日', { exact: true }).fill(dueOn)
+  await page.getByLabel('修正原因').fill('还款日延期')
+  await page.getByRole('button', { name: '保存账单日期' }).click()
+  await expect(row).toContainText(dueOn)
+  await expect(row.locator('b')).toHaveText(amounts)
 })

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -44,19 +45,26 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 		return err
 	}
 	start, end, due := cycle.Start.Format("2006-01-02"), cycle.End.Format("2006-01-02"), cycle.Due.Format("2006-01-02")
-	if _, err := tx.ExecContext(r.Context(), `
-		INSERT OR IGNORE INTO credit_statements
-		  (id,household_id,instrument_id,cycle_start_on,cycle_end_on,due_on,system_due_minor,paid_minor,status)
-		VALUES(?,?,?,?,?,?,0,0,'unbilled')`,
-		newID("stmt"), p.HouseholdID, instrumentID, start, end, due); err != nil {
-		return err
-	}
 	var stmtID string
-	if err := tx.QueryRowContext(r.Context(),
-		`SELECT id FROM credit_statements WHERE instrument_id=? AND cycle_start_on=?`, instrumentID, start).
-		Scan(&stmtID); err != nil {
+	err = tx.QueryRowContext(r.Context(), `
+		SELECT s.id FROM credit_statements s
+		WHERE s.household_id=? AND s.instrument_id=? AND COALESCE((
+			SELECT a.old_value FROM credit_statement_adjustments a
+			WHERE a.household_id=s.household_id AND a.statement_id=s.id AND a.field='cycle_start_on'
+			ORDER BY a.rowid LIMIT 1
+		), s.cycle_start_on)=?`, p.HouseholdID, instrumentID, start).Scan(&stmtID)
+	if errors.Is(err, sql.ErrNoRows) {
+		stmtID = newID("stmt")
+		_, err = tx.ExecContext(r.Context(), `
+			INSERT INTO credit_statements
+			  (id,household_id,instrument_id,cycle_start_on,cycle_end_on,due_on,system_due_minor,paid_minor,status)
+			VALUES(?,?,?,?,?,?,0,0,'unbilled')`,
+			stmtID, p.HouseholdID, instrumentID, start, end, due)
+	}
+	if err != nil {
 		return err
 	}
+
 	if _, err := tx.ExecContext(r.Context(),
 		`INSERT OR IGNORE INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?)`,
 		stmtID, sourceType, sourceID, amount, occurredOn); err != nil {
@@ -529,25 +537,23 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		remainP, remainF := pv-usedP, fv-usedF
-		settling := int64(amount) == total-paid
-		var payP, payF int64
-		if in.PrincipalMinor == nil || in.FeeMinor == nil {
-			// A final settlement consumes the remaining PLAN amounts (explicit).
-			// A partial payment must NEVER be auto-allocated: all 10 accounting
-			// policies are still PENDING_USER_CONFIRMATION.
-			if !settling {
-				return errSplitRequired
-			}
-			payP, payF = remainP, remainF
-		} else {
-			payP, payF = *in.PrincipalMinor, *in.FeeMinor
+		if remainP < 0 || remainF < 0 || remainP+remainF != total-paid {
+			return errors.New("历史付款拆分与期次余额不一致")
 		}
-		if payP < 0 || payF < 0 || payP+payF != int64(amount) {
-			return errors.New("拆分金额之和必须等于本次实付金额")
+
+		// Round the cumulative target so splitting a payment into smaller
+		// requests does not lose the same fractional cent on every payment.
+		newPaid := paid + int64(amount)
+		targetFee := new(big.Int).Mul(big.NewInt(fv), big.NewInt(newPaid))
+		targetFee.Add(targetFee, big.NewInt(total/2))
+		targetFee.Quo(targetFee, big.NewInt(total))
+		payF := min(remainF, int64(amount), max(0, int64(amount)-remainP, targetFee.Int64()-usedF))
+		payP := int64(amount) - payF
+		if (in.PrincipalMinor != nil || in.FeeMinor != nil) &&
+			(in.PrincipalMinor == nil || in.FeeMinor == nil || *in.PrincipalMinor != payP || *in.FeeMinor != payF) {
+			return errors.New("付款拆分必须与系统按比例计算的本金和手续费一致")
 		}
-		if payP > remainP || payF > remainF {
-			return errors.New("拆分金额超过该期本金/手续费剩余金额")
-		}
+
 		paySubject := ledger.CreditSubject(in.ChannelID)
 		if in.Channel == "cash" {
 			if _, err := a.validateAccount(tx, r, p.HouseholdID, in.ChannelID); err != nil {
@@ -587,7 +593,6 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		newPaid := paid + int64(amount)
 		if _, err := tx.ExecContext(r.Context(),
 			`UPDATE installment_schedule_items SET paid_minor=?, status=? WHERE id=?`,
 			newPaid, derivePeriodStatus(dueOn, a.businessDate(), total, newPaid), itemID); err != nil {
@@ -600,10 +605,6 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 		return audit(r.Context(), tx, p, "installment_payment", "installment_payment", payID, in.PaidOn)
 	})
 	if err != nil {
-		if errors.Is(err, errSplitRequired) {
-			writeErr(w, 400, "split_required", "部分付款口径未确认，请显式填写本金/手续费拆分")
-			return
-		}
 		writeErr(w, 400, "invalid_request", err.Error())
 		return
 	}

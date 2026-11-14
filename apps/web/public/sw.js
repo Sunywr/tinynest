@@ -1,7 +1,7 @@
 /* TinyNest V0.1: only cache the PUBLIC app shell and icons.
    Never cache /api responses or any private financial data (all API replies are no-store). */
-const CACHE = 'tinynest-shell-v0.1-1';
-const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE = 'tinynest-shell-v0.1-2';
+const SHELL = ['/offline.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
@@ -14,7 +14,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   if (req.mode === 'navigate') {
-    event.respondWith(fetch(req).catch(() => caches.match('/index.html')));
+    event.respondWith(fetch(req).catch(() => caches.open(CACHE).then((cache) => cache.match('/offline.html'))));
     return;
   }
   if (/^\/(assets\/|icons\/|manifest\.webmanifest$|favicon\.ico$)/.test(url.pathname)) {

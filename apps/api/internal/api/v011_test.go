@@ -6,6 +6,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -246,7 +247,7 @@ func TestV011_CreditInstrumentPatchAndStatementAdjust(t *testing.T) {
 
 	// Explicit single-period adjustment, with reason + audit trail.
 	adj := c.mustOK("PATCH", "/api/v1/credit-statements/"+stmtID+"/cycle", map[string]any{
-		"due_on": "2026-12-20", "reason": "平台延期",
+		"cycle_start_on": "2026-11-02", "due_on": "2026-12-20", "reason": "平台延期",
 	})
 	if adj["status"] != "adjusted" {
 		t.Fatalf("adjust response: %v", adj)
@@ -255,8 +256,18 @@ func TestV011_CreditInstrumentPatchAndStatementAdjust(t *testing.T) {
 	if detail["due_on"] != "2026-12-20" || number(detail["system_due_minor"]) != 50_000 {
 		t.Fatalf("adjustment must change dates only, never amounts: %v", detail)
 	}
-	if number(detail["adjustment_count"]) != 1 {
+	if number(detail["adjustment_count"]) != 2 {
 		t.Fatalf("adjustment must be audited: %v", detail)
+	}
+
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 10_000, "occurred_on": "2026-11-14",
+		"payment_kind": "credit", "credit_instrument_id": ci,
+		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 10_000}},
+	})
+	detail = c.mustOK("GET", "/api/v1/credit-statements/"+stmtID, nil)
+	if detail["cycle_start_on"] != "2026-11-02" || number(detail["system_due_minor"]) != 60_000 {
+		t.Fatalf("new spending must stay on the manually adjusted statement: %v", detail)
 	}
 
 	// Deactivate: further credit spending on this instrument is refused.
@@ -643,27 +654,14 @@ func TestV011_T3_InstallmentConservationAndPartialPayment(t *testing.T) {
 		t.Fatalf("period 1 = %v", first)
 	}
 
-	// A partial payment WITHOUT an explicit split must be refused: none of the
-	// 10 accounting policies (fee-first / principal-first / pro-rata) is confirmed.
-	code, _ := c.do("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
-		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
-		"channel": "cash", "channel_id": cash,
-	})
-	if code == 200 || code == 201 {
-		t.Fatal("partial payment without explicit split must be refused")
-	}
-
-	// Explicit split: 51500 = 50000 principal + 1500 fee.
 	c.headers = map[string]string{"Idempotency-Key": "inst-pay-1"}
 	p1 := c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
 		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
 		"channel": "cash", "channel_id": cash,
-		"principal_minor": 50_000, "fee_minor": 1_500,
 	})
 	p1Again := c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
 		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
 		"channel": "cash", "channel_id": cash,
-		"principal_minor": 50_000, "fee_minor": 1_500,
 	})
 	c.headers = nil
 	if p1["id"] != p1Again["id"] || p1Again["replayed"] != true {
@@ -686,12 +684,21 @@ func TestV011_T3_InstallmentConservationAndPartialPayment(t *testing.T) {
 		t.Errorf("period fee recognised = %d, want 1500", got)
 	}
 
-	// Settle the rest of period 1 explicitly.
+	// Settle the rest in the following month.
 	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
-		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-02",
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2027-01-02",
 		"channel": "cash", "channel_id": cash,
 		"principal_minor": 50_000, "fee_minor": 1_500,
 	})
+	for _, period := range []struct {
+		query string
+		want  int64
+	}{{"from=2026-12-01&to=2026-12-31", 301_500}, {"from=2027-01-01&to=2027-01-31", 1_500}} {
+		report := c.mustOK("GET", "/api/v1/dashboard/summary?"+period.query, nil)
+		if got := number(report["expense_minor"]); got != period.want {
+			t.Errorf("expense for %s = %d, want %d", period.query, got, period.want)
+		}
+	}
 	detail = c.mustOK("GET", "/api/v1/installments/"+inst, nil)
 	sched, _ = detail["schedule"].([]any)
 	if sched[0].(map[string]any)["status"] != "paid" {
@@ -915,7 +922,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // journal entry, and confirms to-do items inside the paying transaction.
 func TestV011_M4_SchedulerBackfillTickConfirmAndIsolation(t *testing.T) {
 	// 2026-11-13 20:00 Asia/Shanghai, frozen except where the test advances it.
-	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	var clock atomic.Value
+	clock.Store(time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC))
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "test.sqlite3"))
 	if err != nil {
@@ -927,7 +935,7 @@ func TestV011_M4_SchedulerBackfillTickConfirmAndIsolation(t *testing.T) {
 	}
 	a := New(database, Options{
 		SetupToken:        testSetupToken,
-		Clock:             func() time.Time { return now },
+		Clock:             func() time.Time { return clock.Load().(time.Time) },
 		SchedulerInterval: 20 * time.Millisecond, // test cadence
 	})
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
@@ -1037,7 +1045,7 @@ func TestV011_M4_SchedulerBackfillTickConfirmAndIsolation(t *testing.T) {
 	// and the run log keeps growing (daily tick is traceable).
 	runsBefore := 0
 	_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_runs`).Scan(&runsBefore)
-	now = now.AddDate(0, 0, 1)
+	clock.Store(clock.Load().(time.Time).AddDate(0, 0, 1))
 	waitFor(t, "daily tick after clock advance", func() bool {
 		var n int
 		_ = database.QueryRow(`SELECT COUNT(*) FROM schedule_runs`).Scan(&n)
@@ -1288,5 +1296,40 @@ func TestV011_T4_ThreeAccountingBasesAcrossMonthsAndYears(t *testing.T) {
 	}
 	if got := subjectMinor(t, database, "2030:"+loan); got != -100_000 {
 		t.Fatalf("remaining loan liability = %d, want -100000", got)
+	}
+}
+
+func TestLegacyInstallmentSplitRecoveredBeforeSettlement(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+
+	cash := cashIDForTest(t, c)
+	inst := makeInstallment(t, c, 300_000, 9_000, 3, "2026-12-01")
+	path := "/api/v1/installments/" + inst + "/payments"
+	payment := c.mustOK("POST", path, map[string]any{
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
+		"channel": "cash", "channel_id": cash,
+	})
+	// Migration 008 added these columns with zero defaults to V0.1 rows.
+	if _, err := database.Exec("UPDATE installment_payments SET principal_minor=0, fee_minor=0 WHERE id=?", payment["id"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("DELETE FROM schema_migrations WHERE version=9"); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := database.Migrate(context.Background())
+	if err != nil || len(applied) != 1 || applied[0] != 9 {
+		t.Fatalf("expected migration 009, got %v: %v", applied, err)
+	}
+	c.mustOK("POST", path, map[string]any{
+		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2027-01-01",
+		"channel": "cash", "channel_id": cash,
+	})
+	if got := subjectMinor(t, database, "2020:"+inst); got != -200_000 {
+		t.Errorf("installment liability after settlement = %d, want -200000", got)
+	}
+	if got := subjectMinor(t, database, "5110"); got != 3_000 {
+		t.Errorf("fees after settlement = %d, want 3000", got)
 	}
 }
