@@ -69,3 +69,21 @@ body.dialog-open{overflow:hidden;}
     scroll-behavior:auto !important;
   }
 }
+
+
+@media (min-width: 841px) {
+  .stage:not(.mobile-stage) .website {
+    height: calc(100dvh - 48px);
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .stage:not(.mobile-stage) .website > .main,
+  .stage:not(.mobile-stage) .website > .sidebar {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .stage:not(.mobile-stage) .website > .main {
+    scrollbar-gutter: stable;
+  }
+}

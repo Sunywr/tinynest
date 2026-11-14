@@ -203,9 +203,19 @@ test('L14 390 / 768 / 1440px 三视口无横向溢出且 CTA 与表单可用', a
   }
 })
 
+test('iPhone 安装图标可从根路径获取', async ({ page, request }) => {
+  await page.goto('/')
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href', '/apple-touch-icon.png')
+  const icon = await request.get('/apple-touch-icon.png')
+  expect(icon.ok()).toBe(true)
+  expect(icon.headers()['content-type']).toContain('image/png')
+  expect((await icon.body()).readUInt32BE(16)).toBe(180)
+  expect((await icon.body()).readUInt32BE(20)).toBe(180)
+})
+
 test('L15 PWA SW 更新清除旧壳，/api 不被缓存，离线页无初始化入口', async ({ page }) => {
   const sw = await (await page.request.get('/sw.js')).text()
-  expect(sw).toContain("const CACHE = 'tinynest-shell-v0.2-landing-1'")
+  expect(sw).toContain("const CACHE = 'tinynest-shell-v0.2-landing-2'")
   expect(sw).toContain("url.pathname.startsWith('/api/')")
   expect(sw).toContain("cache.addAll(SHELL)")
   const offline = await (await page.request.get('/offline.html')).text()
@@ -235,7 +245,7 @@ test('L15 PWA SW 更新清除旧壳，/api 不被缓存，离线页无初始化�
     return { supported: true, caches: keys, apiEntries }
   })
   expect(cacheInfo.supported).toBe(true)
-  expect(cacheInfo.caches.some(k => k === 'tinynest-shell-v0.2-landing-1')).toBe(true)
+  expect(cacheInfo.caches.some(k => k === 'tinynest-shell-v0.2-landing-2')).toBe(true)
   expect(cacheInfo.apiEntries).toEqual([])
 })
 

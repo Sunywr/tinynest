@@ -345,6 +345,19 @@ test('21 首页三套口径与信用总览闭环（自定义跨月区间）', as
   await expect(page.locator('.rankrow', { hasText: 'E2E 工资卡' })).toContainText('¥9,720.00')
 })
 
+test('桌面账本独立滚动，侧栏固定', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 650 })
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await expect(page.getByRole('heading', { name: /记一笔/ })).toBeVisible()
+  const sidebar = page.locator('.sidebar')
+  const before = await sidebar.boundingBox()
+  await page.locator('.main').evaluate(el => { el.scrollTop = el.scrollHeight })
+  expect(await page.locator('.main').evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+  expect(await page.evaluate(() => window.scrollY)).toBe(0)
+  expect(await sidebar.boundingBox()).toEqual(before)
+})
+
 test('22 三视口响应式无横向溢出（1440 / 768 / 390）', async ({ page }) => {
   await ensureLogin(page)
   const viewports = [

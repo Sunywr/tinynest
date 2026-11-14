@@ -41,7 +41,7 @@
 
 ## iPhone 安装
 
-完成 HTTPS 部署后，在 iPhone Safari 打开 TinyNest 域名 -> 分享 -> 添加到主屏幕 -> 如有“作为 Web App 打开”选项则开启 -> 添加。PWA 不是 App Store 原生应用。
+完成 HTTPS 部署后，在 iPhone Safari 打开 TinyNest 域名 -> 分享 -> 添加到主屏幕 -> 如有“作为 Web App 打开”选项则开启 -> 添加。PWA 不是 App Store 原生应用。安装图标使用站点根目录的原版奶油团子 Logo（`/apple-touch-icon.png`，180×180）。若已添加的图标仍为灰色「小」，删除旧主屏幕快捷方式，再从 Safari 重新添加。
 
 ## 上线前仍需用户提供
 
