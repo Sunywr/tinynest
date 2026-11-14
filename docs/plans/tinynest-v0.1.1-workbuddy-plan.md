@@ -1,10 +1,10 @@
 # TinyNest V0.1.1 · WorkBuddy 下一阶段实施与量化验收计划
 
-> 执行模型：WorkBuddy Hy4；专家技能：「高级开发工程师」吴八哥  
-> 项目：https://github.com/Sunywr/tinynest  
-> 起点：用户已完成 V0.1 的 PR 验证、合并，`main` 工作区干净（以实际 `git status` 与最新 SHA 再次核实）。  
-> 目标版本：**V0.1.1 核心家庭财务闭环**，不是 V0.2，不直接发布生产。  
-> 架构不变：Vue 3 / TypeScript / Vite + Go + SQLite + 双服务器 + iPhone PWA。  
+> 执行模型：WorkBuddy Hy4；专家技能：「高级开发工程师」吴八哥
+> 项目：https://github.com/Sunywr/tinynest
+> 起点：用户已完成 V0.1 的 PR 验证、合并，`main` 工作区干净（以实际 `git status` 与最新 SHA 再次核实）。
+> 目标版本：**V0.1.1 核心家庭财务闭环**，不是 V0.2，不直接发布生产。
+> 架构不变：Vue 3 / TypeScript / Vite + Go + SQLite + 双服务器 + iPhone PWA。
 > 品牌不变：TinyNest / 小家、A「奶油团子」、用户原始糯米团子图标不改绘。
 
 ## 1. 本轮目标
