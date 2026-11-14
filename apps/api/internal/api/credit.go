@@ -46,12 +46,16 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 	}
 	start, end, due := cycle.Start.Format("2006-01-02"), cycle.End.Format("2006-01-02"), cycle.Due.Format("2006-01-02")
 	var stmtID string
+	orderColumn := "a.rowid"
+	if a.DB.IsMySQL() {
+		orderColumn = "a.sequence_id"
+	}
 	err = tx.QueryRowContext(r.Context(), `
 		SELECT s.id FROM credit_statements s
 		WHERE s.household_id=? AND s.instrument_id=? AND COALESCE((
 			SELECT a.old_value FROM credit_statement_adjustments a
 			WHERE a.household_id=s.household_id AND a.statement_id=s.id AND a.field='cycle_start_on'
-			ORDER BY a.rowid LIMIT 1
+			ORDER BY `+orderColumn+` LIMIT 1
 		), s.cycle_start_on)=?`, p.HouseholdID, instrumentID, start).Scan(&stmtID)
 	if errors.Is(err, sql.ErrNoRows) {
 		stmtID = newID("stmt")
@@ -65,9 +69,11 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 		return err
 	}
 
-	if _, err := tx.ExecContext(r.Context(),
-		`INSERT OR IGNORE INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?)`,
-		stmtID, sourceType, sourceID, amount, occurredOn); err != nil {
+	insertItem := "INSERT OR IGNORE INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?)"
+	if a.DB.IsMySQL() {
+		insertItem = "INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE statement_id=statement_id"
+	}
+	if _, err := tx.ExecContext(r.Context(), insertItem, stmtID, sourceType, sourceID, amount, occurredOn); err != nil {
 		return err
 	}
 	// Recompute from items instead of trusting a mutable running total.

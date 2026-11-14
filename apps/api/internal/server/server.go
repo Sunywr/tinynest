@@ -12,6 +12,7 @@ import (
 // readiness probe without changing the Phase-0 health check semantics by default.
 type Options struct {
 	ReadyCheck func() error
+	ReadyLabel string
 	Register   func(*http.ServeMux)
 }
 
@@ -48,7 +49,10 @@ func NewMux(dataDir string, opts ...Options) *http.ServeMux {
 				jsonOK(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "database_unavailable"})
 				return
 			}
-			check = "sqlite_quick_check_and_migrations"
+			check = opt.ReadyLabel
+			if check == "" {
+				check = "sqlite_quick_check_and_migrations"
+			}
 		}
 		jsonOK(w, http.StatusOK, map[string]string{"status": "ready", "phase": phase, "check": check})
 	})

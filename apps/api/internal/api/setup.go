@@ -116,7 +116,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 			userID, hhID, in.Username, hash); err != nil {
 			return err
 		}
-		return db.SeedForHousehold(r.Context(), tx, hhID)
+		return a.DB.SeedForHousehold(r.Context(), tx, hhID)
 	})
 	if errors.Is(err, errConflict) {
 		// Once initialized the bootstrap token can never create another admin.

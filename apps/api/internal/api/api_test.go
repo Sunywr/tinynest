@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -25,7 +26,17 @@ type testClient struct {
 func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
 	t.Helper()
 	dir := t.TempDir()
-	database, err := db.Open(filepath.Join(dir, "test.sqlite3"))
+	var database *db.DB
+	var err error
+	if socket := os.Getenv("TINYNEST_TEST_MYSQL_SOCKET"); socket != "" {
+		password, readErr := os.ReadFile(os.Getenv("TINYNEST_TEST_MYSQL_PASSWORD_FILE"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		database, err = db.OpenMySQL(socket, os.Getenv("TINYNEST_TEST_MYSQL_DATABASE"), os.Getenv("TINYNEST_TEST_MYSQL_USER"), string(bytes.TrimSpace(password)))
+	} else {
+		database, err = db.Open(filepath.Join(dir, "test.sqlite3"))
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +44,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	expected, err := db.EmbeddedVersions()
+	expected, err := database.ExpectedVersions()
 	if err != nil {
 		t.Fatal(err)
 	}

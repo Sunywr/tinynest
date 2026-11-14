@@ -452,12 +452,13 @@ func (a *API) handleCreateValuation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO investment_valuations(asset_id,valued_on,price_scaled,market_value_minor,note)
-			VALUES(?,?,?,?,?)
-			ON CONFLICT(asset_id,valued_on) DO UPDATE SET price_scaled=excluded.price_scaled,
-			  market_value_minor=excluded.market_value_minor,note=excluded.note`,
-			in.AssetID, in.ValuedOn, in.PriceScaled, in.MarketValueMinor, in.Note); err != nil {
+		upsert := "INSERT INTO investment_valuations(asset_id,valued_on,price_scaled,market_value_minor,note) VALUES(?,?,?,?,?) "
+		if a.DB.IsMySQL() {
+			upsert += "AS incoming ON DUPLICATE KEY UPDATE price_scaled=incoming.price_scaled, market_value_minor=incoming.market_value_minor,note=incoming.note"
+		} else {
+			upsert += "ON CONFLICT(asset_id,valued_on) DO UPDATE SET price_scaled=excluded.price_scaled,market_value_minor=excluded.market_value_minor,note=excluded.note"
+		}
+		if _, err := tx.ExecContext(r.Context(), upsert, in.AssetID, in.ValuedOn, in.PriceScaled, in.MarketValueMinor, in.Note); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(r.Context(),

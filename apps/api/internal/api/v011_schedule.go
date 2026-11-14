@@ -113,11 +113,13 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 			}
 			_ = rows.Close()
 		}
+		insertDue := "INSERT OR IGNORE INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label) VALUES(?,?,?,?,?,?,?,'pending',?)"
+		if a.DB.IsMySQL() {
+			insertDue = "INSERT INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label) VALUES(?,?,?,?,?,?,?,'pending',?) ON DUPLICATE KEY UPDATE id=id"
+		}
 		for _, f := range founds {
 			bizKey := householdID + ":" + f.kind + ":" + f.id
-			res, err := tx.ExecContext(ctx, `
-				INSERT OR IGNORE INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label)
-				VALUES(?,?,?,?,?,?,?,'pending',?)`,
+			res, err := tx.ExecContext(ctx, insertDue,
 				newID("due"), householdID, f.kind, f.id, bizKey, f.due, f.remaining, f.label)
 			if err != nil {
 				return err
@@ -127,7 +129,7 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO schedule_runs(id,household_id,run_on,trigger,horizon_days,generated,status,detail)
+			INSERT INTO schedule_runs(id,household_id,run_on,`+"`trigger`"+`,horizon_days,`+"`generated`"+`,status,detail)
 			VALUES(?,?,?,?,?,?,'ok',NULL)`,
 			newID("run"), householdID, a.businessDate(), trigger, horizonDays, generated); err != nil {
 			return err
@@ -235,8 +237,8 @@ func (a *API) runSchedulerOnce(ctx context.Context, trigger string) {
 func (a *API) handleListScheduleRuns(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT run_on,trigger,horizon_days,generated,status,detail,created_at FROM schedule_runs
-		 WHERE household_id=? ORDER BY created_at DESC LIMIT 50`, p.HouseholdID)
+		("SELECT run_on,`trigger`,horizon_days,`generated`,status,detail,created_at FROM schedule_runs " +
+			"WHERE household_id=? ORDER BY created_at DESC LIMIT 50"), p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
