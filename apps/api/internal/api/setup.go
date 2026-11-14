@@ -23,6 +23,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/admin/audit-logs", a.handleAuditLogs)
 	a.route(mux, "DELETE /api/v1/auth/session", a.handleLogout)
 
+	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
+	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)
 	a.route(mux, "POST /api/v1/categories", a.handleCreateCategory)
 	a.route(mux, "PATCH /api/v1/categories/{id}", a.handleUpdateCategory)

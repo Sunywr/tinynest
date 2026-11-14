@@ -51,6 +51,8 @@ export const api = {
   me: () => get('/auth/me'),
   logout: () => del('/auth/session'),
 
+  members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
+  createMember: (name: string) => post('/household/members', { name }),
   categories: () => get('/categories'),
   createCategory: (body: any) => post('/categories', body),
   updateCategory: (id: string, body: { name: string; sort: number; active: boolean }) =>

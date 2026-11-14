@@ -104,6 +104,15 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		var err error
 		var splits []splitInput
 
+		if in.MemberID != nil {
+			var id string
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT id FROM household_members WHERE id=? AND household_id=? AND status='active'`,
+				*in.MemberID, p.HouseholdID).Scan(&id); err != nil {
+				return errors.New("家庭成员不存在或已停用")
+			}
+		}
+
 		switch in.Type {
 		case "transfer":
 			if in.AccountID == nil || in.ToAccountID == nil {

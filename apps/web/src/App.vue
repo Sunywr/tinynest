@@ -45,6 +45,9 @@ const features = [
 const summary = ref<any>(null)
 const creditDash = ref<any>(null)
 const accounts = ref<any[]>([])
+const members = ref<{ id: string; name: string; status: string }[]>([])
+const memberName = ref('')
+const selectedMember = ref('')
 const categories = ref<any[]>([])
 const projects = ref<any[]>([])
 const creditInstruments = ref<any[]>([])
@@ -110,6 +113,7 @@ function clearPrivateState() {
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
+  members.value = []; memberName.value = ''; selectedMember.value = ''
   accounts.value = []; categories.value = []; projects.value = []; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
@@ -247,6 +251,7 @@ onBeforeUnmount(() => {
 async function loadAll() {
   loading.value = true
   const reqs: [Promise<any>, (v: any) => void][] = [
+    [api.members(), v => members.value = v.items],
     [api.categories(), v => categories.value = v.items || []],
     [api.projects(), v => projects.value = v.items || []],
     [api.accounts(), v => accounts.value = v.items || []],
@@ -322,18 +327,28 @@ async function run(fn: () => Promise<any>, okMsg: string) {
   finally { loading.value = false }
 }
 
+async function addMember() {
+  const name = memberName.value.trim()
+  if (!name) return
+  await run(async () => {
+    await api.createMember(name)
+    memberName.value = ''
+  }, '成员已新增')
+}
+
 function createTx() {
   const amount = minor(f.tx.amount)
   if (amount === null || amount <= 0) return toast('请输入有效金额（最多两位小数）')
   if (f.tx.type === 'transfer') {
     return run(() => api.createTransaction({
       type: 'transfer', amount_minor: amount, occurred_on: f.tx.occurred_on,
-      account_id: f.tx.account_id, to_account_id: f.tx.to_account_id, note: f.tx.note || undefined,
+      member_id: selectedMember.value || undefined, account_id: f.tx.account_id, to_account_id: f.tx.to_account_id, note: f.tx.note || undefined,
     }), '转账已入账')
   }
   if (!f.tx.category_id) return toast('请选择分类')
   return run(() => api.createTransaction({
     type: f.tx.type, amount_minor: amount, occurred_on: f.tx.occurred_on,
+    member_id: selectedMember.value || undefined,
     payment_kind: f.tx.type === 'expense' ? f.tx.payment_kind : 'cash',
     account_id: f.tx.account_id || undefined,
     credit_instrument_id: f.tx.credit_instrument_id || undefined,
@@ -802,6 +817,10 @@ const metricCards = computed(() => {
                   <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></label>
               <label v-if="f.tx.type === 'transfer'">转入账户<select v-model="f.tx.to_account_id"><option value="">请选择</option>
                 <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></label>
+              <label>家庭成员（可选）<select v-model="selectedMember">
+                <option value="">不关联</option>
+                <option v-for="member in members.filter(m => m.status === 'active')" :key="member.id" :value="member.id">{{ member.name }}</option>
+              </select></label>
               <label>备注<input v-model="f.tx.note" placeholder="可选" /></label>
             </div>
             <button class="primary" @click="createTx()" :disabled="loading">确认入账</button>
@@ -1142,6 +1161,16 @@ const metricCards = computed(() => {
 
         <template v-else>
           <section class="greeting"><div><h1>设置</h1><p>账本信息与安全说明</p></div></section>
+          <section class="panel formpanel">
+            <div class="paneltitle"><h2>家庭成员档案</h2></div>
+            <p>用于标记流水归属。成员档案不会创建登录账号。</p>
+            <form @submit.prevent="addMember">
+              <label>成员名称<input v-model="memberName" maxlength="100" required /></label>
+              <button class="ghost" type="submit" :disabled="loading">新增成员</button>
+            </form>
+            <ul v-if="members.length"><li v-for="member in members" :key="member.id">{{ member.name }}</li></ul>
+            <p v-else class="empty">暂无成员档案</p>
+          </section>
           <section class="panel"><div class="note-box">
             当前登录：{{ me?.username }}<br />家庭 ID：{{ me?.household_id }}<br /><br />
             V0.1 已实现单家庭管理员登录、Argon2id 密码哈希、HttpOnly 会话 Cookie、写操作 CSRF 校验、审计日志与冲正机制。<br /><br />

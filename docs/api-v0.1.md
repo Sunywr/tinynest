@@ -62,7 +62,8 @@
 | GET/POST | `/projects` | IMPLEMENTED | 项目列表 / 新建 |
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | PLANNED | 详情 / 编辑 |
-| GET/POST | `/household/current` · `/household/members` | PLANNED | 家庭信息与成员档案（非登录账号） |
+| GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
+| GET | `/household/current` | PLANNED | 家庭信息 |
 
 ### `/accounts`（S1）
 
