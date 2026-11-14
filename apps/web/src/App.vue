@@ -1345,6 +1345,12 @@ form label { margin-bottom: 13px; }
 .landing-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0;}
 .landing-brand{display:flex;align-items:center;gap:12px;}
 .landing-brand-icon{width:46px;height:46px;object-fit:contain;border-radius:14px;}
+.landing-brand-icon, .footer-brand img, .dialog-logo, .mochi-float img {
+  mask-image: radial-gradient(ellipse closest-side, #000 80%, transparent);
+}
+.mochi-float img {
+  mask-image: radial-gradient(ellipse closest-side, #000 84%, transparent);
+}
 .landing-brand strong{display:block;font-size:19px;font-weight:820;letter-spacing:-.5px;}
 .landing-brand span{display:block;font-size:11px;color:var(--muted);margin-top:3px;}
 .landing-nav{display:flex;align-items:center;gap:18px;font-size:13px;}
@@ -1374,7 +1380,7 @@ form label { margin-bottom: 13px; }
 .hero-visual{position:relative;display:grid;place-items:center;min-height:320px;}
 .mochi-glow{position:absolute;width:min(340px,80%);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,rgba(249,232,223,.95) 0%,rgba(249,232,223,0) 70%);}
 .mochi-float{position:relative;animation:mochi-breathe var(--motion-breathe) ease-in-out infinite;will-change:transform;}
-.mochi-float img{width:min(260px,72%);max-width:100%;height:auto;object-fit:contain;display:block;margin:0 auto;filter:drop-shadow(0 16px 26px rgba(118,91,65,.12));}
+.mochi-float img{width:min(260px,72%);max-width:100%;height:auto;object-fit:contain;display:block;margin:0 auto;}
 .features{padding:12px 0 56px;scroll-margin-top:24px;}
 .section-head h2{font-size:24px;letter-spacing:-.7px;margin:0 0 10px;font-weight:820;}
 .section-head p{font-size:12px;color:var(--muted);margin:0 0 26px;line-height:1.7;}
