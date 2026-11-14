@@ -358,6 +358,21 @@ test('桌面账本独立滚动，侧栏固定', async ({ page }) => {
   expect(await sidebar.boundingBox()).toEqual(before)
 })
 
+test('账户选择可按名称搜索并清空筛选', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  const field = page.locator('label').filter({ hasText: '收/付款账户' })
+  await field.getByRole('button', { name: '搜索' }).click()
+  const search = field.getByRole('searchbox')
+  await search.fill('不存在的账户')
+  await expect(field.getByRole('status')).toHaveText('没有匹配的选项')
+  await expect(field.locator('option', { hasText: 'E2E 工资卡' })).toHaveAttribute('hidden', '')
+  await search.fill('工资卡')
+  await expect(field.locator('option', { hasText: 'E2E 工资卡' })).not.toHaveAttribute('hidden', '')
+  await search.press('Escape')
+  await expect(search).toHaveCount(0)
+})
+
 test('22 三视口响应式无横向溢出（1440 / 768 / 390）', async ({ page }) => {
   await ensureLogin(page)
   const viewports = [
