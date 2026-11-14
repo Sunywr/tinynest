@@ -20,6 +20,8 @@ const apiStatus = ref('检测中')
 const notice = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
+const users = ref<{ id: string; username: string; role: string; status: string }[]>([])
+const userDraft = reactive({ username: '', password: '' })
 const me = ref<any>(null)
 
 // Public landing state. The login dialog is closed until the visitor asks for it.
@@ -118,6 +120,7 @@ function clearPrivateState() {
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
+  users.value = []; userDraft.username = ''; userDraft.password = '';
   members.value = []; memberName.value = ''; selectedMember.value = ''
   accounts.value = []; accountEdit.value = null; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
@@ -291,7 +294,7 @@ async function reloadSummary() {
     catRanking.value = (await api.categoryRanking(range.from, range.to)).items || []
   } catch (e) { fail(e) }
 }
-function go(v: View) { view.value = v; errorMsg.value = '' }
+function go(v: View) { view.value = v; errorMsg.value = ''; if (v === 'settings') void refreshUsers() }
 
 function selectCategory(event: Event) {
   const id = (event.target as HTMLSelectElement).value
@@ -369,6 +372,32 @@ async function addProject() {
     projectSearch.value = ''
     projectName.value = ''
   }, '项目已新增')
+}
+
+async function refreshUsers() {
+  if (me.value?.role !== 'admin') return
+  try {
+    const result = await api.users()
+    if (me.value?.role === 'admin') users.value = result.items
+  } catch (e) { fail(e) }
+}
+
+async function addUser() {
+  const { username, password } = userDraft
+  await run(async () => {
+    await api.createUser(username, password)
+    userDraft.username = ''
+    userDraft.password = ''
+    await refreshUsers()
+  }, '成员账号已创建')
+}
+
+async function disableUser(id: string, username: string) {
+  if (!window.confirm(`停用「${username}」并退出该账号的所有会话？`)) return
+  await run(async () => {
+    await api.disableUser(id)
+    await refreshUsers()
+  }, '成员账号已停用')
 }
 
 async function addMember() {
@@ -1274,6 +1303,22 @@ const metricCards = computed(() => {
 
         <template v-else>
           <section class="greeting"><div><h1>设置</h1><p>账本信息与安全说明</p></div></section>
+          <section v-if="me?.role === 'admin'" class="panel formpanel">
+            <div class="paneltitle"><h2>登录账号</h2></div>
+            <form @submit.prevent="addUser">
+              <div class="formgrid">
+                <label>成员登录名<input v-model.trim="userDraft.username" maxlength="100" autocomplete="off" required /></label>
+                <label>成员密码（至少 12 位）<input v-model="userDraft.password" type="password" autocomplete="new-password" minlength="12" required /></label>
+              </div>
+              <button class="ghost" type="submit" :disabled="loading">创建成员账号</button>
+            </form>
+            <div class="ranklist">
+              <div v-for="user in users" :key="user.id" class="rankrow">
+                <span>{{ user.username }} · {{ user.role === 'admin' ? '管理员' : user.status === 'disabled' ? '已停用' : '成员' }}</span>
+                <button v-if="user.role === 'member' && user.status === 'active'" class="ghost" :disabled="loading" @click="disableUser(user.id, user.username)">停用</button>
+              </div>
+            </div>
+          </section>
           <section class="panel formpanel">
             <div class="paneltitle"><h2>家庭成员档案</h2></div>
             <p>用于标记流水归属。成员档案不会创建登录账号。</p>
@@ -1286,8 +1331,8 @@ const metricCards = computed(() => {
           </section>
           <section class="panel"><div class="note-box">
             当前登录：{{ me?.username }}<br />家庭 ID：{{ me?.household_id }}<br /><br />
-            V0.1 已实现单家庭管理员登录、Argon2id 密码哈希、HttpOnly 会话 Cookie、写操作 CSRF 校验、审计日志与冲正机制。<br /><br />
-            尚未开发：多成员登录与细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
+            管理员可创建或停用成员账号。成员可使用家庭账本。<br /><br />
+            尚未开发：邀请链接、细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
           </div></section>
         </template>
         </div>

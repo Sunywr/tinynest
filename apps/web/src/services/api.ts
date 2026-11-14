@@ -51,6 +51,9 @@ export const api = {
   me: () => get('/auth/me'),
   logout: () => del('/auth/session'),
 
+  users: () => get<{ items: { id: string; username: string; role: string; status: string }[] }>('/admin/users'),
+  createUser: (username: string, password: string) => post('/admin/users', { username, password }),
+  disableUser: (id: string) => post(`/admin/users/${encodeURIComponent(id)}/disable`),
   members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
   createMember: (name: string) => post('/household/members', { name }),
   categories: () => get('/categories'),

@@ -27,6 +27,7 @@ const principalKey contextKey = 1
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {
+	Role        string
 	UserID      string
 	HouseholdID string
 	Username    string
@@ -240,10 +241,10 @@ func (a *API) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		var p Principal
 		var expiresAt string
 		err = a.DB.QueryRowContext(r.Context(), `
-			SELECT s.csrf_token, s.expires_at, u.id, u.household_id, u.username
+			SELECT s.csrf_token, s.expires_at, u.id, u.household_id, u.username, u.role
 			FROM sessions s JOIN users u ON u.id = s.user_id
 			WHERE s.token_hash = ? AND s.revoked_at IS NULL AND u.status = 'active'`,
-			auth.HashToken(cookie.Value)).Scan(&p.CSRFToken, &expiresAt, &p.UserID, &p.HouseholdID, &p.Username)
+			auth.HashToken(cookie.Value)).Scan(&p.CSRFToken, &expiresAt, &p.UserID, &p.HouseholdID, &p.Username, &p.Role)
 		if err != nil || expiresAt < a.nowUTC() {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "会话无效或已过期")
 			return

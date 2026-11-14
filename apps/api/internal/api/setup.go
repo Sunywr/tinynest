@@ -20,7 +20,10 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/v1/auth/session", a.handleLogin)
 	a.route(mux, "GET /api/v1/auth/me", a.handleMe)
-	a.route(mux, "GET /api/v1/admin/audit-logs", a.handleAuditLogs)
+	a.adminRoute(mux, "GET /api/v1/admin/audit-logs", a.handleAuditLogs)
+	a.adminRoute(mux, "GET /api/v1/admin/users", a.handleListUsers)
+	a.adminRoute(mux, "POST /api/v1/admin/users", a.handleCreateUser)
+	a.adminRoute(mux, "POST /api/v1/admin/users/{id}/disable", a.handleDisableUser)
 	a.route(mux, "DELETE /api/v1/auth/session", a.handleLogout)
 
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
@@ -211,7 +214,7 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	writeJSON(w, 200, map[string]string{
 		"user_id": p.UserID, "household_id": p.HouseholdID,
-		"username": p.Username, "csrf_token": p.CSRFToken,
+		"username": p.Username, "csrf_token": p.CSRFToken, "role": p.Role,
 	})
 }
 
