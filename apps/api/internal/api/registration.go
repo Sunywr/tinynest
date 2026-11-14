@@ -219,3 +219,65 @@ func (a *API) handleDecideApplication(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]string{"status": "decided"})
 }
+
+func (a *API) handleListInvitations(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT i.token_hash,m.name,COALESCE(i.target_username,''),i.expires_at
+		FROM household_invites i JOIN household_members m
+		  ON m.id=i.member_id AND m.household_id=i.household_id
+		WHERE i.household_id=? AND i.decided_at IS NULL AND i.expires_at>?
+		ORDER BY i.expires_at DESC,i.token_hash`, p.HouseholdID, a.nowUTC())
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	items := []map[string]string{}
+	for rows.Next() {
+		var id, name, target, expires string
+		if err := rows.Scan(&id, &name, &target, &expires); err != nil {
+			internalErr(w, err)
+			return
+		}
+		items = append(items, map[string]string{"id": id, "member_name": name, "target_username": target, "expires_at": expires})
+	}
+	if err := rows.Err(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (a *API) handleRevokeInvitation(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	id := r.PathValue("id")
+	unavailable := errors.New("邀请码已失效或不存在")
+	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		now := a.nowUTC()
+		result, err := tx.ExecContext(r.Context(), `
+			UPDATE household_invites SET decided_at=?
+			WHERE token_hash=? AND household_id=? AND decided_at IS NULL AND expires_at>?`,
+			now, id, p.HouseholdID, now)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return unavailable
+		}
+		return audit(r.Context(), tx, p, "revoke_invitation", "household_invite", id, "{}")
+	})
+	if errors.Is(err, unavailable) {
+		writeErr(w, 404, "not_found", unavailable.Error())
+		return
+	}
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

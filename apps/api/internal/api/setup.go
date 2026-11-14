@@ -22,6 +22,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/register", a.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/join", a.handleApplyInvite)
 	a.route(mux, "POST /api/v1/household/invitations", a.handleIssueInvite)
+	a.adminRoute(mux, "GET /api/v1/admin/invitations", a.handleListInvitations)
+	a.adminRoute(mux, "DELETE /api/v1/admin/invitations/{id}", a.handleRevokeInvitation)
 	a.adminRoute(mux, "GET /api/v1/admin/join-applications", a.handleListApplications)
 	a.adminRoute(mux, "POST /api/v1/admin/join-applications/{id}", a.handleDecideApplication)
 	a.route(mux, "GET /api/v1/auth/me", a.handleMe)

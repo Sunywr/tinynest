@@ -30,3 +30,20 @@ func TestRegistrationRequiresApproval(t *testing.T) {
 		t.Fatalf("invalid binding: %s %v", bound, err)
 	}
 }
+func TestRevokedInvitationCannotBeUsed(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+	member := c.mustOK("POST", "/api/v1/household/members", map[string]string{"name": "邀请对象"})
+	invite := c.mustOK("POST", "/api/v1/household/invitations", map[string]any{"member_id": member["id"]})
+	path := "/api/v1/admin/invitations"
+	items := c.mustOK("GET", path, nil)["items"].([]any)
+	id := items[0].(map[string]any)["id"].(string)
+	c.mustOK("DELETE", path+"/"+id, nil)
+	credentials := map[string]string{"username": "revoked-test", "password": "valid-password-123"}
+	c.mustOK("POST", "/api/v1/auth/register", credentials)
+	credentials["code"] = invite["code"].(string)
+	if code, _ := c.do("POST", "/api/v1/auth/join", credentials); code != 400 {
+		t.Fatalf("revoked invite returned %d", code)
+	}
+}

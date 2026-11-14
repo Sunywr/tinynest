@@ -26,6 +26,7 @@ const inviteCode = ref('')
 const joinNotice = ref('')
 const inviteDraft = reactive({ member_id: '', username: '' })
 const issuedCode = ref('')
+const invitations = ref<Awaited<ReturnType<typeof api.invitations>>['items']>([])
 const applications = ref<{ id: string; username: string; member_name: string }[]>([])
 const me = ref<any>(null)
 
@@ -126,7 +127,7 @@ function clearPrivateState() {
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
-  applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.username = '';
+  invitations.value = []; applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.username = '';
   users.value = [];
   members.value = []; memberName.value = ''; selectedMember.value = ''
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
@@ -408,15 +409,27 @@ async function makeInvite() {
   await run(async () => {
     const result = await api.issueInvite({ ...inviteDraft })
     issuedCode.value = result.code
+    await refreshApplications()
   }, '邀请码已生成')
 }
 
 async function refreshApplications() {
   if (me.value?.role !== 'admin') return
   try {
-    const result = await api.joinApplications()
-    if (me.value?.role === 'admin') applications.value = result.items
+    const [pending, active] = await Promise.all([api.joinApplications(), api.invitations()])
+    if (me.value?.role !== 'admin') return
+    applications.value = pending.items
+    invitations.value = active.items
   } catch (e) { fail(e) }
+}
+
+async function revokeInvitation(id: string) {
+  if (!window.confirm('撤销后，关联的待审批申请也将失效。确定撤销？')) return
+  await run(async () => {
+    await api.revokeInvitation(id)
+    issuedCode.value = ''
+    await refreshApplications()
+  }, '邀请码已撤销')
 }
 
 async function decideApplication(id: string, approve: boolean) {
@@ -1374,6 +1387,12 @@ const metricCards = computed(() => {
               <label v-if="issuedCode">邀请码（48 小时有效）<input :value="issuedCode" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
             </form>
             <div v-if="me?.role === 'admin'" class="ranklist">
+              <h2>有效邀请</h2>
+              <div v-for="invite in invitations" :key="invite.id" class="rankrow">
+                <span>{{ invite.member_name }}<template v-if="invite.target_username"> · {{ invite.target_username }}</template> · {{ new Date(invite.expires_at).toLocaleString('zh-CN') }} 到期</span>
+                <button class="ghost" type="button" :disabled="loading" @click="revokeInvitation(invite.id)">撤销</button>
+              </div>
+              <p v-if="!invitations.length" class="empty">暂无有效邀请</p>
               <h2>加入审批</h2>
               <div v-for="item in applications" :key="item.id" class="rankrow">
                 <span>{{ item.username }} → {{ item.member_name }}</span>
