@@ -569,12 +569,12 @@ test('31 分红历史/年度汇总、税额未知与估值日期提示', async (
   await page.getByRole('button', { name: '更新估值' }).click()
   await expect(page.getByText('估值已更新')).toBeVisible()
   // The dividend-history rows also contain the asset code, so scope to the
-  // holdings panel ("可重建投影") instead of a global .rankrow filter.
+  // holdings panel instead of a global .rankrow filter.
   const positions = (await (await page.request.get('/api/v1/investments/positions')).json()).items as any[]
   const p = positions.find(x => x.code === 'E2E600')
   expect(p.last_valued_on).toBe(staleDay)
   expect(p.market_value_minor).toBe(140000)
-  const holding = page.locator('section.panel', { hasText: '可重建投影' }).locator('.rankrow', { hasText: 'E2E600' })
+  const holding = page.locator('section.panel', { has: page.getByRole('heading', { name: '持仓', exact: true }) }).locator('.rankrow', { hasText: 'E2E600' })
   await expect(holding).toContainText('估值日')
   await expect(holding).toContainText('估值待更新')
   await expect(holding).toContainText('非年化')
