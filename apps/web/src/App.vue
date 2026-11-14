@@ -57,6 +57,7 @@ const creditDash = ref<any>(null)
 const accountJournal = ref<Awaited<ReturnType<typeof api.accountJournal>>['items']>([])
 const accountEdit = ref<{ id: string; name: string; subtype: string; owner_member_id: string; note: string } | null>(null)
 const accounts = ref<any[]>([])
+const household = ref<Awaited<ReturnType<typeof api.household>> | null>(null)
 const members = ref<{ id: string; name: string; status: string }[]>([])
 const memberName = ref('')
 const selectedMember = ref('')
@@ -135,7 +136,7 @@ function clearPrivateState() {
   instDetail.value = null; debtDetail.value = null
   invitations.value = []; applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.member_name = ''; inviteDraft.username = '';
   users.value = [];
-  members.value = []; memberName.value = ''; selectedMember.value = ''
+  household.value = null; members.value = []; memberName.value = ''; selectedMember.value = ''
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
@@ -275,6 +276,7 @@ onBeforeUnmount(() => {
 async function loadAll() {
   loading.value = true
   const reqs: [Promise<any>, (v: any) => void][] = [
+    [api.household(), v => household.value = v],
     [api.members(), v => members.value = v.items],
     [api.categories(), v => categories.value = v.items || []],
     [api.projects(), v => projects.value = v.items || []],
@@ -1447,7 +1449,7 @@ const metricCards = computed(() => {
             <p v-else class="empty">暂无成员档案</p>
           </section>
           <section class="panel"><div class="note-box">
-            当前登录：{{ me?.username }}<br /><span v-if="me?.member_name">绑定档案：{{ me.member_name }}<br /></span><br />
+            <template v-if="household">家庭：{{ household.name }}<br />账本币种：{{ household.currency }}<br /></template>当前登录：{{ me?.username }}<br /><span v-if="me?.member_name">绑定档案：{{ me.member_name }}<br /></span><br />
             管理员可审批加入申请和停用成员账号。成员可使用家庭账本。<br /><br />
             尚未开发：细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
           </div></section>

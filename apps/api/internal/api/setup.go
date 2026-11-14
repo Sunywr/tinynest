@@ -32,6 +32,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.adminRoute(mux, "POST /api/v1/admin/users/{id}/disable", a.handleDisableUser)
 	a.route(mux, "DELETE /api/v1/auth/session", a.handleLogout)
 
+	a.route(mux, "GET /api/v1/household/current", a.handleCurrentHousehold)
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
 	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)

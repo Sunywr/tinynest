@@ -60,6 +60,7 @@ export const api = {
   decideApplication: (id: string, approve: boolean) => post(`/admin/join-applications/${encodeURIComponent(id)}`, { approve }),
   users: () => get<{ items: { id: string; username: string; role: string; status: string }[] }>('/admin/users'),
   disableUser: (id: string) => post(`/admin/users/${encodeURIComponent(id)}/disable`),
+  household: () => get<{ name: string; currency: string; timezone: string }>('/household/current'),
   members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
   createMember: (name: string) => post('/household/members', { name }),
   categories: () => get('/categories'),

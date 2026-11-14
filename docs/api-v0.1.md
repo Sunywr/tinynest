@@ -63,7 +63,7 @@
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出、分类构成与最近 100 条拆分流水 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
 | GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
-| GET | `/household/current` | PLANNED | 家庭信息 |
+| GET | `/household/current` | IMPLEMENTED | 当前会话所属家庭的名称、币种和业务时区 |
 
 ### `/accounts`（S1）
 
@@ -73,7 +73,6 @@
 | GET | `/accounts/{id}/balance` | IMPLEMENTED | 由分录重建余额 |
 | GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注），余额由分录计算 |
 | GET | `/ledger/accounts` | PLANNED | 科目表（调试/对账） |
-
 | GET | `/accounts/{id}/journal` | IMPLEMENTED | 本家庭账户最近 100 笔分录净变动，含期初余额和冲正 |
 
 ### `/transactions` · `/refunds`（S2 / S4）
