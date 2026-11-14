@@ -51,6 +51,8 @@ const selectedMember = ref('')
 const categories = ref<any[]>([])
 const projectSearch = ref('')
 const projectName = ref('')
+const projectEdit = ref<{ id: string; name: string; start_on: string; end_on: string; note: string; status: string } | null>(null)
+const projectTotals = ref<{ income_minor: number; net_expense_minor: number } | null>(null)
 const projects = ref<any[]>([])
 const creditInstruments = ref<any[]>([])
 const statements = ref<any[]>([])
@@ -116,7 +118,7 @@ function clearPrivateState() {
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
   members.value = []; memberName.value = ''; selectedMember.value = ''
-  accounts.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; categoryEdit.value = null
+  accounts.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   debts.value = []; dueItems.value = []; transactions.value = []
@@ -327,6 +329,34 @@ async function run(fn: () => Promise<any>, okMsg: string) {
   }
   catch (e) { fail(e) }
   finally { loading.value = false }
+}
+
+async function openProject(event: Event) {
+  const id = (event.target as HTMLSelectElement).value
+  projectEdit.value = null
+  projectTotals.value = null
+  if (!id) return
+  loading.value = true
+  try {
+    const [project, totals] = await Promise.all([api.project(id), api.projectSummary(id)])
+    if (!authed.value) return
+    projectEdit.value = {
+      id, name: project.name, start_on: project.start_on ?? '', end_on: project.end_on ?? '',
+      note: project.note ?? '', status: project.status,
+    }
+    projectTotals.value = totals
+  } catch (e) { fail(e) }
+  finally { loading.value = false }
+}
+
+async function saveProject() {
+  const draft = projectEdit.value
+  if (!draft) return
+  const { id, ...patch } = draft
+  await run(async () => {
+    await api.updateProject(id, patch)
+    if (patch.status === 'archived' && f.tx.project_id === id) f.tx.project_id = ''
+  }, '项目已更新')
 }
 
 async function addProject() {
@@ -840,6 +870,28 @@ const metricCards = computed(() => {
             <form @submit.prevent="addProject">
               <label>项目名称<input v-model="projectName" required /></label>
               <button class="ghost" type="submit" :disabled="loading">创建并关联</button>
+            </form>
+          </details>
+          <details class="panel">
+            <summary>项目管理</summary>
+            <form @submit.prevent="saveProject">
+              <label>编辑项目<select :disabled="loading" @change="openProject">
+                <option value="">请选择</option>
+                <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}{{ p.status === 'archived' ? '（已归档）' : '' }}</option>
+              </select></label>
+              <template v-if="projectEdit">
+                <div class="formgrid">
+                  <label>项目名称<input v-model.trim="projectEdit.name" required /></label>
+                  <label>开始日期<input v-model="projectEdit.start_on" type="date" /></label>
+                  <label>结束日期<input v-model="projectEdit.end_on" type="date" /></label>
+                  <label>项目说明<input v-model="projectEdit.note" /></label>
+                  <label>项目状态<select v-model="projectEdit.status">
+                    <option value="active">启用</option><option value="archived">归档</option>
+                  </select></label>
+                </div>
+                <p v-if="projectTotals">累计收入 {{ formatMinor(projectTotals.income_minor) }} · 净支出 {{ formatMinor(projectTotals.net_expense_minor) }}</p>
+                <button class="ghost" type="submit" :disabled="loading">保存项目</button>
+              </template>
             </form>
           </details>
           <section class="panel formpanel">

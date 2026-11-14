@@ -145,7 +145,7 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 				if s.ProjectID != nil {
 					var n int
 					if err := tx.QueryRowContext(r.Context(),
-						`SELECT COUNT(*) FROM projects WHERE id=? AND household_id=?`, *s.ProjectID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
+						`SELECT COUNT(*) FROM projects WHERE id=? AND household_id=? AND status='active'`, *s.ProjectID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
 						return errors.New("项目不存在")
 					}
 				}

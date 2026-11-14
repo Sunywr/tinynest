@@ -59,6 +59,9 @@ export const api = {
     request(`/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   projects: () => get('/projects'),
   createProject: (name: string) => post('/projects', { name }),
+  project: (id: string) => get(`/projects/${encodeURIComponent(id)}`),
+  updateProject: (id: string, body: { name: string; start_on: string; end_on: string; note: string; status: string }) =>
+    request(`/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   projectSummary: (id: string) => get(`/projects/${id}/summary`),
 
   accounts: () => get('/accounts'),
