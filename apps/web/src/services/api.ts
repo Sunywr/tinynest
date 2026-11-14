@@ -102,8 +102,12 @@ export const api = {
   positions: () => get('/investments/positions'),
   createDividend: (body: any) => post('/investments/dividends', body),
   createValuation: (body: any) => post('/investments/valuations', body),
+  feeRules: (accountId = '') => get(`/investments/fee-rules${accountId ? `?account_id=${accountId}` : ''}`),
+  createFeeRule: (body: any) => post('/investments/fee-rules', body),
+  previewFee: (body: any) => post('/investments/fee-rules/preview', body),
 
   summary: (from = '', to = '') => get(`/dashboard/summary?from=${from}&to=${to}`),
+  netWorth: (from = '', to = '') => get(`/dashboard/net-worth?from=${from}&to=${to}`),
   categoryRanking: (from = '', to = '') => get(`/dashboard/categories?from=${from}&to=${to}`),
   projectRanking: (from = '', to = '') => get(`/dashboard/projects?from=${from}&to=${to}`),
   dashboardCredit: (from = '', to = '') => get(`/dashboard/credit?from=${from}&to=${to}`),

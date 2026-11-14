@@ -41,6 +41,9 @@ const transactions = ref<any[]>([])
 const catRanking = ref<any[]>([])
 const assets = ref<any[]>([])
 const positions = ref<any[]>([])
+const feeRules = ref<any[]>([])
+const feePreview = ref<any>(null)
+const netWorth = ref<any>(null)
 
 const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense'))
 const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income'))
@@ -60,7 +63,9 @@ const f = reactive<any>({
   debtPayment: { contract_id: '', installment_no: 1, amount: '', principal: '', interest: '', fee: '0', channel: 'cash', channel_id: '', paid_on: today() },
   convert: { credit_instrument_id: '', statement_id: '', name: '', principal: '', fee: '0', periods: 3, first_due_on: today() },
   asset: { code: '', name: '', kind: 'stock', account_id: '' },
-  trade: { asset_id: '', side: 'buy', trade_on: today(), quantity: '', gross: '', fee: '0', from_account_id: '' },
+  // fee 留空 = 由账户费率规则自动计算；填入具体金额才是单笔覆盖。
+  trade: { asset_id: '', side: 'buy', trade_on: today(), quantity: '', gross: '', fee: '', from_account_id: '' },
+  feeRule: { account_id: '', effective_from: today(), commission_bps: '0', commission_min: '0', stamp_duty_bps: '0', transfer_fee_bps: '0' },
   dividend: { asset_id: '', gross: '', tax: '', received_on: today(), to_account_id: '' },
   valuation: { asset_id: '', market_value: '', valued_on: today() },
   refund: { transaction_id: '', amount: '', destination_type: 'cash', destination_id: '' },
@@ -130,6 +135,8 @@ async function loadAll() {
     [api.dueItems(30), v => dueItems.value = v.items || []],
     [api.assets(), v => assets.value = v.items || []],
     [api.positions(), v => positions.value = v.items || []],
+    [api.feeRules(), v => feeRules.value = v.items || []],
+    [api.netWorth(range.from, range.to), v => netWorth.value = v],
     [api.summary(range.from, range.to), v => summary.value = v],
     [api.dashboardCredit(range.from, range.to), v => creditDash.value = v],
     [api.categoryRanking(range.from, range.to), v => catRanking.value = v.items || []],
@@ -146,6 +153,7 @@ async function reloadSummary() {
   try {
     summary.value = await api.summary(range.from, range.to)
     creditDash.value = await api.dashboardCredit(range.from, range.to)
+    netWorth.value = await api.netWorth(range.from, range.to)
     catRanking.value = (await api.categoryRanking(range.from, range.to)).items || []
   } catch (e) { fail(e) }
 }
@@ -333,13 +341,43 @@ function createAsset() {
   return run(() => api.createAsset({ ...f.asset }), '投资资产已创建')
 }
 function createTrade() {
-  const qty = Number(f.trade.quantity), gross = minor(f.trade.gross), fee = minor(f.trade.fee)
-  if (!f.trade.asset_id || !f.trade.from_account_id || !Number.isFinite(qty) || qty <= 0 || gross === null || gross <= 0 || fee === null) return toast('请填写资产、账户、数量(股)与成交金额')
-  return run(() => api.createTrade({
+  const qty = Number(f.trade.quantity), gross = minor(f.trade.gross)
+  // Empty fee => do NOT send fee_minor, so the account's active fee rule applies.
+  const fee = f.trade.fee === '' ? null : minor(f.trade.fee)
+  if (!f.trade.asset_id || !f.trade.from_account_id || !Number.isFinite(qty) || qty <= 0 || gross === null || gross <= 0) return toast('请填写资产、账户、数量(股)与成交金额')
+  if (f.trade.fee !== '' && (fee === null || fee < 0)) return toast('费用请输入有效金额，或留空由费率规则自动计算')
+  const body: any = {
     asset_id: f.trade.asset_id, side: f.trade.side, trade_on: f.trade.trade_on,
-    quantity_scaled: Math.round(qty * 1000000), gross_minor: gross, fee_minor: fee,
+    quantity_scaled: Math.round(qty * 1000000), gross_minor: gross,
     from_account_id: f.trade.from_account_id,
-  }), '投资交易已入账')
+  }
+  if (fee !== null) body.fee_minor = fee
+  return run(() => api.createTrade(body), '投资交易已入账')
+}
+function createFeeRule() {
+  const r = f.feeRule
+  const min = minor(r.commission_min)
+  const toBps = (s: string) => { const n = Number(s); return Number.isFinite(n) ? Math.trunc(n) : -1 }
+  if (!r.account_id || !r.effective_from || min === null || min < 0) return toast('请选择投资账户、生效日期与有效的最低佣金')
+  const commission = toBps(r.commission_bps), stamp = toBps(r.stamp_duty_bps), transfer = toBps(r.transfer_fee_bps)
+  if ([commission, stamp, transfer].some(v => v < 0 || v > 10000)) return toast('费率须为 0–10000 基点（0.01%–100%）')
+  return run(() => api.createFeeRule({
+    account_id: r.account_id, effective_from: r.effective_from,
+    commission_bps: commission, commission_min_minor: min,
+    stamp_duty_bps: stamp, transfer_fee_bps: transfer,
+  }), '费率版本已新增（历史快照不变）')
+}
+async function previewTradeFee() {
+  const gross = minor(f.trade.gross)
+  const asset = assets.value.find((a: any) => a.id === f.trade.asset_id)
+  if (!asset || gross === null || gross <= 0 || !f.trade.trade_on) return toast('请选择资产并填写成交金额与日期')
+  feePreview.value = null
+  try {
+    feePreview.value = await api.previewFee({
+      account_id: asset.account_id, side: f.trade.side,
+      trade_on: f.trade.trade_on, gross_minor: gross,
+    })
+  } catch (e) { fail(e) }
 }
 function createDividend() {
   const gross = minor(f.dividend.gross)
@@ -475,6 +513,22 @@ const metricCards = computed(() => {
               </section>
             </div>
             <div>
+              <section class="panel"><div class="paneltitle"><div><h2>家庭资产构成</h2><span class="subinfo">按分录重建 · 投资按成本，另列手工估值</span></div></div>
+                <div class="ranklist" v-if="netWorth">
+                  <div class="rankrow"><span>现金及存款</span><b>{{ formatMinor(netWorth.assets?.cash_minor) }}</b></div>
+                  <div class="rankrow"><span>证券 / 理财资金</span><b>{{ formatMinor(netWorth.assets?.broker_cash_minor) }}</b></div>
+                  <div class="rankrow"><span>投资持仓（成本）</span><b>{{ formatMinor(netWorth.assets?.investment_cost_minor) }}</b></div>
+                  <div class="rankrow"><span>资产合计</span><b>{{ formatMinor(netWorth.assets?.total_minor) }}</b></div>
+                  <div class="rankrow"><span>信用卡负债</span><b>{{ formatMinor(netWorth.liabilities?.credit_minor) }}</b></div>
+                  <div class="rankrow"><span>分期负债</span><b>{{ formatMinor(netWorth.liabilities?.installment_minor) }}</b></div>
+                  <div class="rankrow"><span>贷款本金</span><b>{{ formatMinor(netWorth.liabilities?.loan_minor) }}</b></div>
+                  <div class="rankrow"><span>负债合计</span><b>{{ formatMinor(netWorth.liabilities?.total_minor) }}</b></div>
+                  <div class="rankrow"><span>家庭净资产</span><b>{{ formatMinor(netWorth.net_worth_minor) }}</b></div>
+                  <div class="rankrow"><span>按估值参考净资产</span><b>{{ formatMinor(netWorth.net_worth_at_market_minor) }}</b></div>
+                </div>
+                <p v-if="!netWorth" class="empty">暂无资产数据</p>
+                <div class="note-box" v-if="netWorth">♡ 估值日期：{{ netWorth.investment?.valued_on || '尚未录入' }} · 未估值持仓 {{ netWorth.investment?.missing_valuations || 0 }} 项<br />手工估值，非实时行情；未估值持仓继续按成本计入净资产。</div>
+              </section>
               <section class="panel"><div class="paneltitle"><div><h2>各账户余额</h2><span class="subinfo">由分录重建</span></div></div>
                 <div class="ranklist"><div v-for="a in (summary?.accounts || [])" :key="a.id" class="rankrow">
                   <span>{{ a.name }}</span><b>{{ formatMinor(a.balance_minor) }}</b></div></div>
@@ -754,6 +808,25 @@ const metricCards = computed(() => {
                 <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></label>
             </div><button class="primary" @click="createAsset()">创建资产</button>
           </section>
+          <section class="panel formpanel"><div class="paneltitle"><div><h2>账户费率规则</h2><span class="subinfo">按账户与生效日追加版本；交易自动计费，单笔可覆盖并保留快照</span></div></div>
+            <div class="formgrid">
+              <label>费率适用账户<select v-model="f.feeRule.account_id"><option value="">请选择</option>
+                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></label>
+              <label>生效日期<input type="date" v-model="f.feeRule.effective_from" /></label>
+              <label>佣金费率（基点，25 = 0.25%）<input v-model="f.feeRule.commission_bps" inputmode="numeric" /></label>
+              <label>最低佣金（元）<input v-model="f.feeRule.commission_min" inputmode="decimal" /></label>
+              <label>印花税（基点，仅卖出）<input v-model="f.feeRule.stamp_duty_bps" inputmode="numeric" /></label>
+              <label>过户费（基点）<input v-model="f.feeRule.transfer_fee_bps" inputmode="numeric" /></label>
+            </div><button class="ghost" @click="createFeeRule()">新增费率版本</button>
+            <div class="ranklist" style="margin-top:14px">
+              <div class="rankrow" v-for="r in feeRules" :key="r.id">
+                <span>{{ r.account_name }} · v{{ r.version }} · {{ r.effective_from }} 起</span>
+                <b>佣金 {{ (r.commission_bps / 100).toFixed(2) }}%（最低 {{ formatMinor(r.commission_min_minor) }}）· 印花 {{ (r.stamp_duty_bps / 100).toFixed(2) }}% · 过户 {{ (r.transfer_fee_bps / 100).toFixed(2) }}%</b>
+              </div>
+              <p v-if="!feeRules.length" class="empty">尚未配置费率规则，交易费用需单笔填写</p>
+            </div>
+            <div class="note-box">♡ 修改费率请新增一个生效日版本，历史费率快照不可变；不提供硬删除，避免已入账交易失去依据。</div>
+          </section>
           <section class="panel formpanel"><div class="paneltitle"><div><h2>买入 / 卖出</h2><span class="subinfo">移动加权平均成本，买入费用计入成本</span></div></div>
             <div class="formgrid">
               <label>资产<select v-model="f.trade.asset_id"><option value="">请选择</option>
@@ -761,11 +834,17 @@ const metricCards = computed(() => {
               <label>方向<select v-model="f.trade.side"><option value="buy">买入</option><option value="sell">卖出</option></select></label>
               <label>数量（股/份）<input v-model="f.trade.quantity" inputmode="decimal" /></label>
               <label>成交金额（元）<input v-model="f.trade.gross" inputmode="decimal" /></label>
-              <label>费用（元）<input v-model="f.trade.fee" inputmode="decimal" /></label>
+              <label>费用（元，留空自动计算）<input v-model="f.trade.fee" inputmode="decimal" placeholder="留空按费率规则计费" /></label>
               <label>资金账户<select v-model="f.trade.from_account_id"><option value="">请选择</option>
                 <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></label>
               <label>日期<input type="date" v-model="f.trade.trade_on" /></label>
             </div><button class="primary" @click="createTrade()">确认交易</button>
+            <button class="ghost" @click="previewTradeFee()">预览费用</button>
+            <div class="note-box" v-if="feePreview">
+              ♡ 费用预览（成交 {{ formatMinor(feePreview.gross_minor) }} · 规则 v{{ feePreview.fee_rule_version ?? '未配置' }} · 生效 {{ feePreview.effective_from || '—' }}）：<br />
+              佣金 {{ formatMinor(feePreview.commission_minor) }} · 印花税 {{ formatMinor(feePreview.stamp_duty_minor) }} · 过户费 {{ formatMinor(feePreview.transfer_fee_minor) }} ＝ 预计费用 {{ formatMinor(feePreview.total_fee_minor) }}<br />
+              {{ feePreview.note }}
+            </div>
           </section>
           <section class="panel formpanel"><div class="paneltitle"><div><h2>分红与手工估值</h2><span class="subinfo">红利税留空代表未知，不会默认为免税</span></div></div>
             <div class="formgrid">

@@ -130,12 +130,13 @@
 |---|---|---|---|
 | GET/POST | `/investments/assets` | IMPLEMENTED | 股票/ETF/理财/自定义资产 |
 | GET/POST | `/investments/trades` | IMPLEMENTED | 买入/卖出（移动加权平均成本） |
-| GET | `/investments/positions` | IMPLEMENTED（PARTIAL 口径） | 数量/总成本/移动均价/未实现收益；**收益率口径待用户确认** |
+| GET | `/investments/positions` | IMPLEMENTED | 数量/总成本/移动均价/已实现·未实现收益/净分红/参考收益率；口径第 9 项已确认为「总收益 ÷ 累计买入成本」，**不得标为年化** |
 | POST | `/investments/dividends` | IMPLEMENTED | `tax_minor: null` = 未填写（不默认 0） |
-| POST | `/investments/valuations` | IMPLEMENTED | 手工录入估值 |
+| POST | `/investments/valuations` | IMPLEMENTED | 手工录入估值，估值日期显式展示 |
 | POST | `/investments/fee-rules` | IMPLEMENTED | 按投资账户追加版本。交易按成交日选择已生效版本并保存快照 |
-| GET | `/investments/fee-rules` · `/fee-preview` | PLANNED | 费率列表与预览 |
-| GET | `/investments/return` | PLANNED | 独立收益率端点 |
+| GET | `/investments/fee-rules` | IMPLEMENTED（V0.1.2） | 本家庭费率规则列表，支持 `?account_id=`；返回版本、生效日、各项 bps 与最低佣金；SQL 层 `household_id` 隔离 |
+| POST | `/investments/fee-rules/preview` | IMPLEMENTED（V0.1.2） | 纯计算、零写入的费用预览；与真实交易共用 `computeTradeFee`，返回佣金/印花税/过户费/合计及适用规则版本 |
+| GET | `/investments/return` | PLANNED | 独立收益率端点（当前由 `/positions` 与 `/dashboard/summary` 给出） |
 
 ### `/dashboard`（S6）
 
@@ -144,6 +145,7 @@
 | GET | `/dashboard/summary` | IMPLEMENTED | 收入/支出/结余/现金净流量/应还负债/投资总收益/净资产；**全部按 household_id 隔离** |
 | GET | `/dashboard/categories` | IMPLEMENTED | 分类支出排行（一级汇总二级） |
 | GET | `/dashboard/projects` | IMPLEMENTED | 项目累计收支 |
+| GET | `/dashboard/net-worth` | IMPLEMENTED（V0.1.2） | 资产构成 / 负债结构 / 投资成本·市值·估值日期 / 净资产，逐项带 `ledger_code` 可下钻；与 `summary` 使用同一统计窗口，`net_worth_minor` 一致 |
 | GET | `/dashboard/cashflow` · `/liabilities` · `/investment-dividends` | PLANNED | 独立口径端点 |
 
 **三套口径（收支 / 现金流 / 负债到期）不得合并成一个「本月支出」**；当前三套数值均由 `/dashboard/summary` 分别给出。
@@ -162,4 +164,5 @@
 - Service Worker 继续显式跳过 `/api/`，且对所有 `/api/v1/*` 响应强制 `no-store`。
 - Phase 0 的「无登录、纯虚构 Demo」描述仅适用于 `previews/*` 静态存档，不适用于当前 `apps/web`。
 
-> 未完成模块与正式发布门禁见 `IMPLEMENTATION_REPORT.md` 第 8/9 节、`docs/reviews/v0.1-release-gates.md`；10 项账务口径状态见 `docs/reviews/v0.1-accounting-decisions.md`（全部 `PENDING_USER_CONFIRMATION`）。
+> 未完成模块与正式发布门禁见 `IMPLEMENTATION_REPORT.md` 第 8/9 节、`docs/reviews/v0.1-release-gates.md`；10 项账务口径状态见 `docs/reviews/v0.1-accounting-decisions.md`（**2026-11-14 用户已确认 1–10 全部推荐值，十项 `CONFIRMED`**；旧报告中的「0/10 待确认」为历史记录）。
+> V0.1.2 追加端点的实施与测试证据见 `docs/reviews/latest-feature-evidence-matrix.md`、`docs/reviews/next-version-test-report.md`。
