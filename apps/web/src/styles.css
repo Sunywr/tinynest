@@ -52,3 +52,20 @@ body{background:#f4eee8;}
   .graph{height:140px;}
   .topright{gap:6px;}
 }
+
+/* ---- A · Cream Mochi motion tokens (single source of truth) ---- */
+:root{
+  --motion-fast:160ms;
+  --motion-base:240ms;
+  --motion-hero:320ms;
+  --motion-breathe:5.2s;
+  --ease-soft:cubic-bezier(.22,.61,.36,1);
+}
+body.dialog-open{overflow:hidden;}
+@media(prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation:none !important;
+    transition:none !important;
+    scroll-behavior:auto !important;
+  }
+}

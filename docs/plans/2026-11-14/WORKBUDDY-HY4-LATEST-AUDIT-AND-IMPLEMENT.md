@@ -1,8 +1,8 @@
 # WorkBuddy Hy4 · TinyNest 最新源码验收 + 自适应增量实施 Prompt
 
-**工作模式：完整执行型（不是建议型）。**  
-**模型：Hy4；专家技能：高级开发工程师（吴八哥）。**  
-**仓库：https://github.com/Sunywr/tinynest.git。**  
+**工作模式：完整执行型（不是建议型）。**
+**模型：Hy4；专家技能：高级开发工程师（吴八哥）。**
+**仓库：https://github.com/Sunywr/tinynest.git。**
 **输入计划：`TINYNEST-ACCEPTANCE-AND-NEXT-PLAN.md`（本文件同目录）。**
 
 ## 最高优先任务

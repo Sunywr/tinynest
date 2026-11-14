@@ -1,6 +1,9 @@
 /* TinyNest V0.1: only cache the PUBLIC app shell and icons.
    Never cache /api responses or any private financial data (all API replies are no-store). */
-const CACHE = 'tinynest-shell-v0.1-2';
+// Bumped for the public-landing release: activating this version deletes every
+// older tinynest-shell-* cache, so an installed PWA can never serve a stale
+// login/initialization shell. Navigations stay network-first (HTML is not cached).
+const CACHE = 'tinynest-shell-v0.2-landing-1';
 const SHELL = ['/offline.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));

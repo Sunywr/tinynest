@@ -29,13 +29,14 @@
 | `GET /healthz` | IMPLEMENTED | 无 | 仅进程存活 |
 | `GET /readyz` | IMPLEMENTED | 无 | SQLite `PRAGMA quick_check` + 迁移版本校验 |
 | `POST /auth/session` | IMPLEMENTED | 无（口令校验 + 失败限流） | 成功后签发会话 Cookie |
-| `POST /setup` | IMPLEMENTED | **一次性 `X-Setup-Token`** | 仅空库可调用一次，创建首个家庭与唯一 admin |
+| `POST /setup` | IMPLEMENTED（运维专用，无公开 UI） | **一次性 `X-Setup-Token`** | 仅空库可调用一次，创建首个家庭与唯一 admin；`TINYNEST_SETUP_DISABLED=true` 时全量拒绝 |
 
 - Bootstrap Token 由部署者在后端主机通过 `TINYNEST_SETUP_TOKEN` 主动设置；**未配置时端点返回 403 `setup_disabled`（fail closed）**，绝不隐式开放。
+- **生产初始化完成后**：设置 `TINYNEST_SETUP_DISABLED=true`，端点在令牌校验与任何数据库读取之前即返回 403 `setup_disabled`，即使令牌外泄也无法调用。该开关只是附加保护，不替代单次创建约束与令牌校验；取值严格为 `true`/`false`，非法值服务拒绝启动。
 - 令牌比较在固定长度 SHA-256 摘要上做常量时间比较；不写入日志、不进入仓库、不进入浏览器打包代码。
 - 已初始化后（含并发请求）一律返回 409 `conflict`，令牌不可再用于新增 admin。
 - **不能**用 `RemoteAddr == 127.0.0.1` 代替令牌：Nginx 反代会让公网请求在 Go 侧显示为本机。可在 Nginx 额外限制初始化入口，但不可替代令牌。
-- 初始化流程：在 B 机生成随机令牌 → 注入服务环境 → 启动 API → 管理员在初始化页面填入令牌提交一次 → 确认 `201` → 令牌即失效。
+- **公开前端不再提供任何初始化/创建管理员入口**。首次部署流程：在 B 机生成随机令牌 → 注入服务环境 → 启动 API → 由运维在受控环境用一次 `curl`/HTTP 客户端携带 `X-Setup-Token` 调用 `POST /api/v1/setup` → 确认 `201` → 从环境移除令牌并设置 `TINYNEST_SETUP_DISABLED=true`。普通访客只能登录。
 
 ### 1.2 生产 Cookie 与可信反代（FIX-04 后）
 

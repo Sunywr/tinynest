@@ -22,38 +22,49 @@ test.describe.configure({ mode: 'serial' })
 async function ensureLogin(page: import('@playwright/test').Page) {
   await page.goto('/')
   const dashboard = page.getByText('今天也要好好生活呀')
-  const username = page.getByLabel('用户名')
-  await expect(dashboard.or(username)).toBeVisible()
+  const landing = page.getByRole('heading', { name: '家的每一笔，都值得被温柔记录。' })
+  await expect(dashboard.or(landing)).toBeVisible()
   if (await dashboard.isVisible()) return
-  await username.fill('admin')
+  // The public landing no longer exposes a login form until the CTA is used.
+  await page.getByRole('button', { name: '进入我的小家' }).click()
+  await page.getByLabel('用户名').fill('admin')
   await page.getByLabel('密码').fill('correct-horse-battery')
   await page.locator('form').getByRole('button', { name: '登录' }).click()
   await page.waitForSelector('text=今天也要好好生活呀')
 }
 
-test('01 首次初始化（一次性令牌）', async ({ page }) => {
+test('01 受控初始化：公开页无初始化入口，运维 API 单次创建', async ({ page }) => {
   await page.goto('/')
-  // An anonymous request with a wrong bootstrap token must not be able to claim
-  // the household. This is a real HTTP call through the Vite proxy to the Go API.
+  await expect(page.getByRole('heading', { name: '家的每一笔，都值得被温柔记录。' })).toBeVisible()
+  // No public initialization surface anywhere in the rendered page.
+  await expect(page.getByText('首次初始化')).toHaveCount(0)
+  await expect(page.getByLabel('一次性初始化令牌')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '创建家庭账本' })).toHaveCount(0)
+  // A wrong token cannot claim the household (real HTTP through the Vite proxy).
   const denied = await page.request.post('/api/v1/setup', {
     data: { household_name: '抢注家庭', username: 'attacker', password: 'correct-horse-battery' },
     headers: { 'X-Setup-Token': 'wrong-token' },
   })
-  // Contract: a wrong token is 401 "unauthorized"; a missing configured token
-  // would be 403 "setup_disabled" (setup.go:62-70). Either way no household is created.
   expect(denied.status()).toBe(401)
   expect((await denied.json()).error.code).toBe('unauthorized')
-  await page.getByRole('button', { name: '首次初始化' }).click()
-  await page.getByLabel('家庭名称').fill('E2E 小家')
-  await page.getByLabel('一次性初始化令牌').fill(SETUP_TOKEN)
-  await page.getByLabel('用户名').fill('admin')
-  await page.getByLabel('密码').fill('correct-horse-battery')
-  await page.getByRole('button', { name: '创建家庭账本' }).click()
-  await expect(page.getByText('家庭账本已初始化，请登录')).toBeVisible()
+  // First-boot bootstrap is an operator-side call, never a public UI flow.
+  const created = await page.request.post('/api/v1/setup', {
+    data: { household_name: 'E2E 小家', username: 'admin', password: 'correct-horse-battery' },
+    headers: { 'X-Setup-Token': SETUP_TOKEN },
+  })
+  expect(created.status()).toBe(201)
+  const again = await page.request.post('/api/v1/setup', {
+    data: { household_name: '再次抢注', username: 'admin2', password: 'correct-horse-battery' },
+    headers: { 'X-Setup-Token': SETUP_TOKEN },
+  })
+  expect(again.status()).toBe(409)
 })
 
 test('02 登录', async ({ page }) => {
   await page.goto('/')
+  await expect(page.getByRole('heading', { name: '家的每一笔，都值得被温柔记录。' })).toBeVisible()
+  await expect(page.getByLabel('用户名')).toHaveCount(0)
+  await page.getByRole('button', { name: '进入我的小家' }).click()
   await page.getByLabel('用户名').fill('admin')
   await page.getByLabel('密码').fill('correct-horse-battery')
   await page.locator('form').getByRole('button', { name: '登录' }).click()
@@ -455,13 +466,14 @@ test('26 初始化不可重复（409）', async ({ page }) => {
   expect(res.status()).toBe(409)
 })
 
-test('27 API 不可用时显示错误而非伪造金额', async ({ page }) => {
+test('27 API 不可用时回到公开介绍页而非伪造金额', async ({ page }) => {
   await ensureLogin(page)
   await expect(page.locator('.stats.metrics .stat').first()).toBeVisible()
   await page.route('**/api/v1/**', route => route.abort())
   await page.reload()
-  await expect(page.getByLabel('用户名')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '家的每一笔，都值得被温柔记录。' })).toBeVisible()
   await expect(page.locator('.stats.metrics')).toHaveCount(0)
+  await expect(page.getByText('首次初始化')).toHaveCount(0)
   await page.unroute('**/api/v1/**')
 })
 
