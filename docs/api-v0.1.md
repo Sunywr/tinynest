@@ -51,7 +51,7 @@
 | POST | `/setup` | IMPLEMENTED | 需 `X-Setup-Token`，仅一次 |
 | POST | `/auth/session` | IMPLEMENTED | 登录、建会话；含失败限流 |
 | DELETE | `/auth/session` | IMPLEMENTED | 登出、撤销会话 |
-| GET | `/auth/me` | IMPLEMENTED | 当前用户 + household_id + csrf_token |
+| GET | `/auth/me` | IMPLEMENTED | 当前用户、角色、household_id 与 csrf_token；已绑定且启用的成员档案返回 member_id 和 member_name，否则为空 |
 
 ### `/household` · `/categories` · `/projects`（S1）
 

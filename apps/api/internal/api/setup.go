@@ -217,7 +217,18 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
+	var memberID, memberName string
+	err := a.DB.QueryRowContext(r.Context(), `
+		SELECT m.id,m.name FROM household_user_members b
+		JOIN household_members m ON m.id=b.member_id
+		WHERE b.user_id=? AND m.household_id=? AND m.status='active'`, p.UserID, p.HouseholdID).
+		Scan(&memberID, &memberName)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		internalErr(w, err)
+		return
+	}
 	writeJSON(w, 200, map[string]string{
+		"member_id": memberID, "member_name": memberName,
 		"user_id": p.UserID, "household_id": p.HouseholdID,
 		"username": p.Username, "csrf_token": p.CSRFToken, "role": p.Role,
 	})

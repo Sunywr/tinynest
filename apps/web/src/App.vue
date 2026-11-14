@@ -146,6 +146,7 @@ async function boot() {
   try {
     const m = await api.me()
     me.value = m
+    selectedMember.value = m.member_id || ''
     setCSRFToken(m.csrf_token)
     authed.value = true
     apiStatus.value = '已连接'
@@ -215,6 +216,7 @@ async function submitLogin() {
   try {
     await api.login(authForm.username, authForm.password)
     me.value = await api.me()
+    selectedMember.value = me.value.member_id || ''
     authForm.password = ''
     authed.value = true
     apiStatus.value = '已连接'
@@ -1403,7 +1405,7 @@ const metricCards = computed(() => {
             <p v-else class="empty">暂无成员档案</p>
           </section>
           <section class="panel"><div class="note-box">
-            当前登录：{{ me?.username }}<br />家庭 ID：{{ me?.household_id }}<br /><br />
+            当前登录：{{ me?.username }}<br /><span v-if="me?.member_name">绑定档案：{{ me.member_name }}<br /></span><br />
             管理员可审批加入申请和停用成员账号。成员可使用家庭账本。<br /><br />
             尚未开发：细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
           </div></section>

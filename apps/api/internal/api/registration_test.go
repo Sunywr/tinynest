@@ -22,6 +22,9 @@ func TestRegistrationRequiresApproval(t *testing.T) {
 	}
 	c.mustOK("POST", "/api/v1/auth/session", credentials)
 	me := c.mustOK("GET", "/api/v1/auth/me", nil)
+	if me["member_id"] != member["id"] {
+		t.Fatalf("missing member identity: %v", me)
+	}
 	var bound string
 	if err := database.QueryRow("SELECT member_id FROM household_user_members WHERE user_id=?", me["user_id"]).Scan(&bound); err != nil || bound != member["id"] {
 		t.Fatalf("invalid binding: %s %v", bound, err)
