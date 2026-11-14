@@ -63,8 +63,10 @@ const feePreview = ref<any>(null)
 const netWorth = ref<any>(null)
 const dividendHistory = ref<any>(null)
 
-const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense'))
-const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income'))
+const categoryDraft = reactive({ name: '', kind: 'expense', parent_id: '' })
+const categoryEdit = ref<{ id: string; name: string; sort: number; active: boolean } | null>(null)
+const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense' && c.active === 1))
+const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income' && c.active === 1))
 
 const f = reactive<any>({
   tx: { type: 'expense', amount: '', occurred_on: today(), payment_kind: 'cash', account_id: '', to_account_id: '', credit_instrument_id: '', category_id: '', project_id: '', note: '' },
@@ -108,7 +110,8 @@ function clearPrivateState() {
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
-  accounts.value = []; categories.value = []; projects.value = []
+  accounts.value = []; categories.value = []; projects.value = []; categoryEdit.value = null
+  Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   debts.value = []; dueItems.value = []; transactions.value = []
   catRanking.value = []; assets.value = []; positions.value = []; feeRules.value = []
@@ -279,6 +282,34 @@ async function reloadSummary() {
   } catch (e) { fail(e) }
 }
 function go(v: View) { view.value = v; errorMsg.value = '' }
+
+function selectCategory(event: Event) {
+  const id = (event.target as HTMLSelectElement).value
+  const category = categories.value.find(c => c.id === id)
+  categoryEdit.value = category
+    ? { id, name: category.name, sort: category.sort, active: category.active === 1 }
+    : null
+}
+
+async function addCategory() {
+  const name = categoryDraft.name.trim()
+  if (!name) return
+  await run(async () => {
+    await api.createCategory({ name, kind: categoryDraft.kind, parent_id: categoryDraft.parent_id || null })
+    categoryDraft.name = ''
+  }, '分类已新增')
+}
+
+async function saveCategory() {
+  const category = categoryEdit.value
+  if (!category || !category.name.trim() || !Number.isInteger(category.sort)) return
+  const { id, name, sort, active } = category
+  await run(async () => {
+    await api.updateCategory(id, { name, sort, active })
+    if (!active && f.tx.category_id === id) f.tx.category_id = ''
+    if (!active && f.installment.category_id === id) f.installment.category_id = ''
+  }, '分类已更新')
+}
 
 async function run(fn: () => Promise<any>, okMsg: string) {
   loading.value = true; errorMsg.value = ''
@@ -774,6 +805,40 @@ const metricCards = computed(() => {
               <label>备注<input v-model="f.tx.note" placeholder="可选" /></label>
             </div>
             <button class="primary" @click="createTx()" :disabled="loading">确认入账</button>
+          </section>
+          <section class="panel formpanel">
+            <div class="paneltitle"><h2>分类管理</h2></div>
+            <form @submit.prevent="addCategory">
+              <div class="formgrid">
+                <label>新分类名称<input v-model="categoryDraft.name" required /></label>
+                <label>分类方向<select v-model="categoryDraft.kind" @change="categoryDraft.parent_id = ''">
+                  <option value="expense">支出</option><option value="income">收入</option>
+                </select></label>
+                <label>上级分类<select v-model="categoryDraft.parent_id">
+                  <option value="">无（一级分类）</option>
+                  <option v-for="c in categories.filter(c => c.level === 1 && c.kind === categoryDraft.kind && c.active === 1)" :key="c.id" :value="c.id">{{ c.name }}</option>
+                </select></label>
+              </div>
+              <button class="ghost" type="submit" :disabled="loading">新增分类</button>
+            </form>
+            <form @submit.prevent="saveCategory">
+              <div class="formgrid">
+                <label>编辑分类<select :value="categoryEdit?.id ?? ''" @change="selectCategory">
+                  <option value="">请选择</option>
+                  <option v-for="c in categories" :key="c.id" :value="c.id">
+                    {{ c.kind === 'income' ? '收入' : '支出' }} · {{ c.name }}{{ c.active ? '' : '（已停用）' }}
+                  </option>
+                </select></label>
+                <template v-if="categoryEdit">
+                  <label>分类名称<input v-model="categoryEdit.name" required /></label>
+                  <label>分类排序<input v-model.number="categoryEdit.sort" type="number" step="1" required /></label>
+                  <label>分类状态<select v-model="categoryEdit.active">
+                    <option :value="true">启用</option><option :value="false">停用</option>
+                  </select></label>
+                </template>
+              </div>
+              <button v-if="categoryEdit" class="ghost" type="submit" :disabled="loading">保存分类</button>
+            </form>
           </section>
           <section class="panel formpanel"><div class="paneltitle"><div><h2>退款</h2><span class="subinfo">关联原交易，冲减原支出而非计入收入</span></div></div>
             <div class="formgrid">

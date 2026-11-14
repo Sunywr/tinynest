@@ -12,9 +12,11 @@
 | 公开首页 | [登录、动效与 PWA 说明](public-landing.md)。本地 49 条浏览器测试通过，发布分支 [CI 四项通过](https://github.com/Sunywr/tinynest/actions/runs/43583991039) |
 | 账务口径 | [十项已确认](reviews/v0.1-accounting-decisions.md)。实施缺口按当前代码逐项核对 |
 
+在「记一笔 → 分类管理」可新增两级收支分类、改名、排序和停用。停用的分类仍可查看、重新启用，并保留历史流水关联。
+
 ## 待实施与待验收
 
-- [核心账本计划](plan-v0.1.md)保留，家庭成员档案、分类编辑和部分资料管理仍需补齐。
+- [核心账本计划](plan-v0.1.md)保留，家庭成员档案、项目和账户资料管理仍需补齐。
 - [短期发布缺口](plans/next-implementation-plan.md)保留。iPhone Safari 实机 PWA、生产 MySQL 隔离恢复、异地备份与并发性能仍待验收。
 - 生产浏览器抽查覆盖访客路径。账务回归使用隔离测试库。
 

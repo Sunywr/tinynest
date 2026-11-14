@@ -25,6 +25,7 @@ func (a *API) Register(mux *http.ServeMux) {
 
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)
 	a.route(mux, "POST /api/v1/categories", a.handleCreateCategory)
+	a.route(mux, "PATCH /api/v1/categories/{id}", a.handleUpdateCategory)
 	a.route(mux, "GET /api/v1/projects", a.handleListProjects)
 	a.route(mux, "POST /api/v1/projects", a.handleCreateProject)
 	a.route(mux, "GET /api/v1/projects/{id}/summary", a.handleProjectSummary)
@@ -292,6 +293,53 @@ func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, map[string]string{"id": id, "name": in.Name, "kind": in.Kind})
+}
+
+func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	var in struct {
+		Name   *string `json:"name"`
+		Sort   *int    `json:"sort"`
+		Active *bool   `json:"active"`
+	}
+	if err := decode(r, &in); err != nil || (in.Name == nil && in.Sort == nil && in.Active == nil) {
+		writeErr(w, 400, "invalid_request", "请提供要更新的分类字段")
+		return
+	}
+	if in.Name != nil {
+		*in.Name = strings.TrimSpace(*in.Name)
+		if *in.Name == "" {
+			writeErr(w, 400, "invalid_request", "分类名称不可为空")
+			return
+		}
+	}
+	id := r.PathValue("id")
+	result, err := a.DB.ExecContext(r.Context(),
+		`UPDATE categories SET name=COALESCE(?,name), sort=COALESCE(?,sort), active=COALESCE(?,active)
+		 WHERE id=? AND household_id=?`, in.Name, in.Sort, in.Active, id, p.HouseholdID)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	if affected == 0 {
+		var exists int
+		err := a.DB.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM categories WHERE id=? AND household_id=?`, id, p.HouseholdID).Scan(&exists)
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		if exists == 0 {
+			writeErr(w, 404, "not_found", "分类不存在")
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]string{"id": id})
 }
 
 func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {

@@ -58,7 +58,7 @@
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
 | GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（两级，level<=2） |
-| PATCH | `/categories/{id}` | PLANNED | 改名/排序/停用 |
+| PATCH | `/categories/{id}` | IMPLEMENTED | 传入任一字段：`name`（非空）、`sort`（整数）、`active`（布尔值）；仅更新本家庭分类。停用后不可用于新流水，历史关联保留 |
 | GET/POST | `/projects` | IMPLEMENTED | 项目列表 / 新建 |
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | PLANNED | 详情 / 编辑 |
