@@ -13,6 +13,7 @@ import (
 )
 
 func (a *API) registerInvestments(mux *http.ServeMux) {
+	a.route(mux, "POST /api/v1/investments/fee-rules", a.handleCreateFeeRule)
 	a.route(mux, "GET /api/v1/investments/assets", a.handleListAssets)
 	a.route(mux, "POST /api/v1/investments/assets", a.handleCreateAsset)
 	a.route(mux, "GET /api/v1/investments/trades", a.handleListTrades)
@@ -99,21 +100,26 @@ func (a *API) handleListAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 // feeSnapshot loads the account's active fee rule and returns a versioned JSON snapshot.
-func feeSnapshot(tx *sql.Tx, r *http.Request, accountID string) (string, int64, int64, int64, int64, string) {
+func feeSnapshot(tx *sql.Tx, r *http.Request, householdID, accountID, tradeOn string) (string, int64, int64, int64, int64, string, error) {
 	var id string
 	var commissionBPS, minFee, stampBPS, transferBPS int64
 	err := tx.QueryRowContext(r.Context(), `
-		SELECT id,commission_bps,commission_min_minor,stamp_duty_bps,transfer_fee_bps
-		FROM investment_fee_rules WHERE account_id=? ORDER BY version DESC LIMIT 1`, accountID).
+		SELECT f.id,commission_bps,commission_min_minor,stamp_duty_bps,transfer_fee_bps
+		FROM investment_fee_rules f JOIN accounts a ON a.id=f.account_id
+		WHERE a.household_id=? AND f.account_id=? AND f.effective_from<=?
+		ORDER BY f.effective_from DESC, f.version DESC LIMIT 1`, householdID, accountID, tradeOn).
 		Scan(&id, &commissionBPS, &minFee, &stampBPS, &transferBPS)
 	if err != nil {
-		return "", 0, 0, 0, 0, "{}"
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", 0, 0, 0, 0, "{}", nil
+		}
+		return "", 0, 0, 0, 0, "", err
 	}
 	b, _ := json.Marshal(map[string]any{
 		"fee_rule_id": id, "commission_bps": commissionBPS, "commission_min_minor": minFee,
 		"stamp_duty_bps": stampBPS, "transfer_fee_bps": transferBPS,
 	})
-	return id, commissionBPS, minFee, stampBPS, transferBPS, string(b)
+	return id, commissionBPS, minFee, stampBPS, transferBPS, string(b), nil
 }
 
 func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +155,10 @@ func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
 			Scan(&cashSubject); err != nil {
 			return errors.New("资金账户不存在")
 		}
-		ruleID, cBPS, minFee, stampBPS, transferBPS, snapshot := feeSnapshot(tx, r, assetAccount)
+		ruleID, cBPS, minFee, stampBPS, transferBPS, snapshot, feeErr := feeSnapshot(tx, r, p.HouseholdID, assetAccount, in.TradeOn)
+		if feeErr != nil {
+			return feeErr
+		}
 		computed := money.Minor(0)
 		if ruleID != "" {
 			base, err := money.FeeWithMinimum(money.Minor(in.GrossMinor), cBPS, money.Minor(minFee))
@@ -296,7 +305,11 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT p.asset_id,a.code,a.name,p.quantity_scaled,p.total_cost_minor,p.avg_cost_minor,
 		       p.realized_pnl_minor,p.net_dividend_minor,p.last_valued_on,
-		       (SELECT market_value_minor FROM investment_valuations v WHERE v.asset_id=p.asset_id ORDER BY v.valued_on DESC LIMIT 1)
+	       EXISTS(SELECT 1 FROM investment_dividends d
+	              WHERE d.household_id=a.household_id AND d.asset_id=p.asset_id AND d.tax_minor IS NULL),
+		       (SELECT market_value_minor FROM investment_valuations v WHERE v.asset_id=p.asset_id ORDER BY v.valued_on DESC LIMIT 1),
+	       (SELECT COALESCE(SUM(t.gross_minor+t.fee_minor),0) FROM investment_trades t
+	        WHERE t.asset_id=p.asset_id AND t.household_id=a.household_id AND t.side='buy')
 		FROM investment_positions p JOIN investment_assets a ON a.id=p.asset_id
 		WHERE a.household_id=? ORDER BY a.code`, p.HouseholdID)
 	if err != nil {
@@ -310,7 +323,9 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 		var qty, cost, avg, realized, netDiv int64
 		var valued *string
 		var market *int64
-		if err := rows.Scan(&id, &code, &name, &qty, &cost, &avg, &realized, &netDiv, &valued, &market); err != nil {
+		var dividendTaxUnknown bool
+		var cumulativeBuyCost int64
+		if err := rows.Scan(&id, &code, &name, &qty, &cost, &avg, &realized, &netDiv, &valued, &dividendTaxUnknown, &market, &cumulativeBuyCost); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -318,12 +333,22 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 			"asset_id": id, "code": code, "name": name, "quantity_scaled": qty,
 			"total_cost_minor": cost, "avg_cost_minor": avg,
 			"realized_pnl_minor": realized, "net_dividend_minor": netDiv,
-			"last_valued_on": valued,
+			"last_valued_on": valued, "dividend_tax_unknown": dividendTaxUnknown,
+		}
+		if qty == 0 {
+			zero := int64(0)
+			market = &zero
 		}
 		if market != nil {
 			m["market_value_minor"] = *market
 			m["unrealized_pnl_minor"] = *market - cost
 			m["total_return_minor"] = realized + (*market - cost) + netDiv
+			position := invest.Position{
+				TotalCostMinor: money.Minor(cost), RealizedPnLMinor: money.Minor(realized), NetDividendMinor: money.Minor(netDiv),
+			}
+			if bps, err := position.ReferenceReturnBPS(money.Minor(*market), money.Minor(cumulativeBuyCost)); err == nil {
+				m["reference_return_bps"] = bps
+			}
 		} else {
 			m["unrealized_pnl_minor"] = nil
 			m["note"] = "尚未录入估值"
@@ -427,12 +452,13 @@ func (a *API) handleCreateValuation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO investment_valuations(asset_id,valued_on,price_scaled,market_value_minor,note)
-			VALUES(?,?,?,?,?)
-			ON CONFLICT(asset_id,valued_on) DO UPDATE SET price_scaled=excluded.price_scaled,
-			  market_value_minor=excluded.market_value_minor,note=excluded.note`,
-			in.AssetID, in.ValuedOn, in.PriceScaled, in.MarketValueMinor, in.Note); err != nil {
+		upsert := "INSERT INTO investment_valuations(asset_id,valued_on,price_scaled,market_value_minor,note) VALUES(?,?,?,?,?) "
+		if a.DB.IsMySQL() {
+			upsert += "AS incoming ON DUPLICATE KEY UPDATE price_scaled=incoming.price_scaled, market_value_minor=incoming.market_value_minor,note=incoming.note"
+		} else {
+			upsert += "ON CONFLICT(asset_id,valued_on) DO UPDATE SET price_scaled=excluded.price_scaled,market_value_minor=excluded.market_value_minor,note=excluded.note"
+		}
+		if _, err := tx.ExecContext(r.Context(), upsert, in.AssetID, in.ValuedOn, in.PriceScaled, in.MarketValueMinor, in.Note); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(r.Context(),

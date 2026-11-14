@@ -20,6 +20,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/v1/auth/session", a.handleLogin)
 	a.route(mux, "GET /api/v1/auth/me", a.handleMe)
+	a.route(mux, "GET /api/v1/admin/audit-logs", a.handleAuditLogs)
 	a.route(mux, "DELETE /api/v1/auth/session", a.handleLogout)
 
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)
@@ -35,6 +36,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerCredit(mux)
 	a.registerInvestments(mux)
 	a.registerDashboard(mux)
+	a.registerV011(mux)
 }
 
 // --- bootstrap & identity ---------------------------------------------------
@@ -114,7 +116,7 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 			userID, hhID, in.Username, hash); err != nil {
 			return err
 		}
-		return db.SeedForHousehold(r.Context(), tx, hhID)
+		return a.DB.SeedForHousehold(r.Context(), tx, hhID)
 	})
 	if errors.Is(err, errConflict) {
 		// Once initialized the bootstrap token can never create another admin.

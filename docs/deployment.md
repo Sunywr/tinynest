@@ -45,3 +45,11 @@
 ## 上线前仍需用户提供
 
 正式域名/两台服务器操作系统/是否已有 VPN 或私网/证书获取方式/更新策略/备份保留周期与存储位置。暂不索取任何账号、密码或私钥。
+
+## 生产 MySQL 8
+
+本地开发默认使用 SQLite。生产通过后端本机 Unix socket 使用独立 MySQL 数据库和受限账号。设置 `TINYNEST_DB_DRIVER=mysql`，并配置 `TINYNEST_MYSQL_SOCKET`、`TINYNEST_MYSQL_DATABASE` 和 `TINYNEST_MYSQL_USER`。密码通过 systemd `LoadCredential=mysql-password:/path/to/password-file` 注入，或设置 `TINYNEST_MYSQL_PASSWORD_FILE` 指向服务可读的受保护文件。
+
+首次启动应用会创建 MySQL 专用基线结构。切换已有环境前暂停写入并备份。旧 SQLite 含业务数据时需要先迁移并逐表核验，不可直接更换驱动。就绪接口在 MySQL 模式返回 `mysql_ping_and_migrations`。把备份定时任务同步切换为 MySQL 一致性导出，并用独立库验证恢复。
+
+首次创建家庭和管理员仍在 HTTPS 页面使用后端的一次性初始化令牌。

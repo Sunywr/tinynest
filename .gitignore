@@ -28,3 +28,7 @@ __pycache__/
 # Local agent/session working notes: never part of a PR.
 # Kept on disk, excluded from version control.
 .workbuddy/
+
+# Playwright E2E outputs: committed artifacts live under apps/web/e2e/artifacts
+test-results/
+playwright-report/

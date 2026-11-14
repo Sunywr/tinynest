@@ -117,6 +117,7 @@
 |---|---|---|---|
 | GET/POST | `/installments` | IMPLEMENTED | 合同；校验期次本金/费用合计 |
 | POST | `/installments/{id}/payments` | IMPLEMENTED | 确认实付（`channel=cash\|credit`） |
+| POST | `/installments/convert-from-credit` | IMPLEMENTED（V0.1.1） | 指定 `credit_instrument_id` 与 `statement_id`，同一事务重分类本金、冲减原账单及已有待办。仅当该工具恰有一张未还账单时可省略 `statement_id` |
 | GET | `/schedule/due-items` | IMPLEMENTED | 待支付事项（只读，业务日时钟） |
 | POST | `/schedule/generate` | IMPLEMENTED（PARTIAL 语义） | **手动**幂等投影未来 30 天期次；每日自动调度器仍为 PLANNED |
 | GET | `/installments/{id}` | PLANNED | 合同 + 期次计划 |
@@ -132,7 +133,8 @@
 | GET | `/investments/positions` | IMPLEMENTED（PARTIAL 口径） | 数量/总成本/移动均价/未实现收益；**收益率口径待用户确认** |
 | POST | `/investments/dividends` | IMPLEMENTED | `tax_minor: null` = 未填写（不默认 0） |
 | POST | `/investments/valuations` | IMPLEMENTED | 手工录入估值 |
-| GET/POST | `/investments/fee-rules` · `/fee-preview` | PLANNED | 费率模板写入与预览（读取/快照已实现） |
+| POST | `/investments/fee-rules` | IMPLEMENTED | 按投资账户追加版本。交易按成交日选择已生效版本并保存快照 |
+| GET | `/investments/fee-rules` · `/fee-preview` | PLANNED | 费率列表与预览 |
 | GET | `/investments/return` | PLANNED | 独立收益率端点 |
 
 ### `/dashboard`（S6）
@@ -150,7 +152,8 @@
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| GET | `/admin/audit-logs` · `/admin/migrations` · POST `/admin/backup` | PLANNED | 审计查询 / 迁移状态 / 触发备份；审计**写入**已实现，查询端点未接线 |
+| GET | `/admin/audit-logs` | IMPLEMENTED | 当前家庭最近审计事件，`limit` 默认 50，范围 1–100，响应排除事件原始载荷 |
+| GET | `/admin/migrations` · POST `/admin/backup` | PLANNED | 迁移状态与手动触发备份 |
 
 ## 3. 与 Phase 0 的兼容边界
 

@@ -25,7 +25,10 @@ var migrationFS embed.FS
 
 var ErrMigration = errors.New("db: migration failed")
 
-type DB struct{ *sql.DB }
+type DB struct {
+	*sql.DB
+	mysql bool
+}
 
 // Queryer lets store functions work with either *sql.DB or *sql.Tx.
 type Queryer interface {
@@ -70,7 +73,7 @@ func Open(path string) (*DB, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	return &DB{conn}, nil
+	return &DB{DB: conn}, nil
 }
 
 type migrationFile struct {
@@ -117,6 +120,9 @@ func EmbeddedVersions() ([]int, error) {
 // Migrate applies missing versions in order, each in its own transaction.
 // Re-running is a no-op; the database is never rebuilt unconditionally.
 func (d *DB) Migrate(ctx context.Context) ([]int, error) {
+	if d.mysql {
+		return d.migrateMySQL(ctx)
+	}
 	files, err := migrationFiles()
 	if err != nil {
 		return nil, err

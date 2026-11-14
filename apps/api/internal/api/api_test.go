@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -25,7 +26,17 @@ type testClient struct {
 func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
 	t.Helper()
 	dir := t.TempDir()
-	database, err := db.Open(filepath.Join(dir, "test.sqlite3"))
+	var database *db.DB
+	var err error
+	if socket := os.Getenv("TINYNEST_TEST_MYSQL_SOCKET"); socket != "" {
+		password, readErr := os.ReadFile(os.Getenv("TINYNEST_TEST_MYSQL_PASSWORD_FILE"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		database, err = db.OpenMySQL(socket, os.Getenv("TINYNEST_TEST_MYSQL_DATABASE"), os.Getenv("TINYNEST_TEST_MYSQL_USER"), string(bytes.TrimSpace(password)))
+	} else {
+		database, err = db.Open(filepath.Join(dir, "test.sqlite3"))
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +44,12 @@ func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if len(applied) != 7 {
-		t.Fatalf("expected 7 migrations, got %v", applied)
+	expected, err := database.ExpectedVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != len(expected) {
+		t.Fatalf("expected %d migrations, got %v", len(expected), applied)
 	}
 	a := New(database, Options{SetupToken: testSetupToken})
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
@@ -256,9 +271,10 @@ func TestV01EndToEnd(t *testing.T) {
 	})["id"].(string)
 	gen1 := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
 	gen2 := c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
-	// The daily task only projects obligations due within 30 days, so with monthly
-	// periods just the first one is created; a second run must create nothing at all.
-	if number(gen1["generated"]) != 1 || number(gen2["generated"]) != 0 {
+	// V0.1.1 M4 projects ALL unpaid obligations within 30 days: the credit card
+	// statement (remaining 40000 after the partial repayment above) plus the
+	// first installment period. A second run must create nothing at all.
+	if number(gen1["generated"]) != 2 || number(gen2["generated"]) != 0 {
 		t.Errorf("due-item generation not idempotent: first=%v second=%v", gen1["generated"], gen2["generated"])
 	}
 	c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
@@ -320,6 +336,10 @@ func TestV01EndToEnd(t *testing.T) {
 		t.Errorf("net dividend = %v, want 9000", pos["net_dividend_minor"])
 	}
 
+	if pos["dividend_tax_unknown"] != false {
+		t.Errorf("known dividend tax must be reported as known: %v", pos)
+	}
+
 	// --- S6: dashboard exposes three separate accounting views ---
 	_, summary := c.do("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
 	for _, field := range []string{"income_minor", "expense_minor", "cashflow_minor", "liabilities_due_minor", "net_worth_minor", "investment_total_return_minor"} {
@@ -346,6 +366,14 @@ func TestV01EndToEnd(t *testing.T) {
 	_ = database.QueryRow(`SELECT COUNT(*) FROM journal_entries WHERE status='reversed'`).Scan(&reversedCount)
 	if reversedCount != 1 {
 		t.Errorf("original entry should be preserved as reversed, got %d", reversedCount)
+	}
+	c.mustOK("POST", "/api/v1/investments/dividends", map[string]any{
+		"asset_id": asset, "received_on": "2026-11-16",
+		"gross_minor": 1_000, "to_account_id": sec,
+	})
+	pos = findRow(t, c.mustOK("GET", "/api/v1/investments/positions", nil), "asset_id", asset)
+	if pos["dividend_tax_unknown"] != true {
+		t.Errorf("missing dividend tax must stay marked after reloading positions: %v", pos)
 	}
 }
 

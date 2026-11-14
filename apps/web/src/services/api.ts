@@ -65,16 +65,35 @@ export const api = {
 
   creditInstruments: () => get('/credit-instruments'),
   createCreditInstrument: (body: any) => post('/credit-instruments', body),
-  statements: () => get('/credit-statements'),
+  patchCreditInstrument: (id: string, body: any) => request(`/credit-instruments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  statements: (params = '') => get(`/credit-statements${params}`),
+  creditStatement: (id: string) => get(`/credit-statements/${id}`),
+  adjustStatementCycle: (id: string, body: any) => request(`/credit-statements/${id}/cycle`, { method: 'PATCH', body: JSON.stringify(body) }),
   payStatement: (id: string, body: any) => post(`/credit-statements/${id}/payments`, body),
   reconcile: (id: string, platform_amount_minor: number) =>
     post(`/credit-statements/${id}/reconcile`, { platform_amount_minor }),
 
   installments: () => get('/installments'),
   createInstallment: (body: any) => post('/installments', body),
+  installment: (id: string) => get(`/installments/${id}`),
   payInstallment: (id: string, body: any) => post(`/installments/${id}/payments`, body),
+  installmentRefund: (id: string, body: any) => post(`/installments/${id}/refunds`, body),
+  adjustInstallmentSchedule: (id: string, body: any) => post(`/installments/${id}/adjust-schedule`, body),
+  settleInstallmentEarly: (id: string, reason: string) => post(`/installments/${id}/settle-early`, { reason }),
+  convertInstallment: (body: any) => post('/installments/convert-from-credit', body),
   generateDueItems: () => post('/schedule/generate', {}),
-  dueItems: (days = 30) => get(`/schedule/due-items?days=${days}`),
+  dueItems: (days = 30, status = '') => get(`/schedule/due-items?days=${days}${status ? `&status=${status}` : ''}`),
+  scheduleRuns: () => get('/schedule/runs'),
+
+  debts: () => get('/debts'),
+  createDebt: (body: any) => post('/debts', body),
+  debt: (id: string) => get(`/debts/${id}`),
+  patchDebt: (id: string, body: any) => request(`/debts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  createDebtSchedule: (id: string, items: any[]) => post(`/debts/${id}/schedule`, { items }),
+  payDebt: (id: string, body: any) => post(`/debts/${id}/payments`, body),
+  reverseDebtPayment: (id: string, paymentId: string, reason: string) =>
+    post(`/debts/${id}/payments/${paymentId}/reverse`, { reason }),
+  settleDebtEarly: (id: string, reason: string) => post(`/debts/${id}/settle-early`, { reason }),
 
   assets: () => get('/investments/assets'),
   createAsset: (body: any) => post('/investments/assets', body),
@@ -87,6 +106,7 @@ export const api = {
   summary: (from = '', to = '') => get(`/dashboard/summary?from=${from}&to=${to}`),
   categoryRanking: (from = '', to = '') => get(`/dashboard/categories?from=${from}&to=${to}`),
   projectRanking: (from = '', to = '') => get(`/dashboard/projects?from=${from}&to=${to}`),
+  dashboardCredit: (from = '', to = '') => get(`/dashboard/credit?from=${from}&to=${to}`),
 
   checkHealth: async () => {
     try { const r = await get('/healthz'); return r?.status === 'ok' } catch { return false }

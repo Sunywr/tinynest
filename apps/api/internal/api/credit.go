@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -44,22 +45,35 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 		return err
 	}
 	start, end, due := cycle.Start.Format("2006-01-02"), cycle.End.Format("2006-01-02"), cycle.Due.Format("2006-01-02")
-	if _, err := tx.ExecContext(r.Context(), `
-		INSERT OR IGNORE INTO credit_statements
-		  (id,household_id,instrument_id,cycle_start_on,cycle_end_on,due_on,system_due_minor,paid_minor,status)
-		VALUES(?,?,?,?,?,?,0,0,'unbilled')`,
-		newID("stmt"), p.HouseholdID, instrumentID, start, end, due); err != nil {
-		return err
-	}
 	var stmtID string
-	if err := tx.QueryRowContext(r.Context(),
-		`SELECT id FROM credit_statements WHERE instrument_id=? AND cycle_start_on=?`, instrumentID, start).
-		Scan(&stmtID); err != nil {
+	orderColumn := "a.rowid"
+	if a.DB.IsMySQL() {
+		orderColumn = "a.sequence_id"
+	}
+	err = tx.QueryRowContext(r.Context(), `
+		SELECT s.id FROM credit_statements s
+		WHERE s.household_id=? AND s.instrument_id=? AND COALESCE((
+			SELECT a.old_value FROM credit_statement_adjustments a
+			WHERE a.household_id=s.household_id AND a.statement_id=s.id AND a.field='cycle_start_on'
+			ORDER BY `+orderColumn+` LIMIT 1
+		), s.cycle_start_on)=?`, p.HouseholdID, instrumentID, start).Scan(&stmtID)
+	if errors.Is(err, sql.ErrNoRows) {
+		stmtID = newID("stmt")
+		_, err = tx.ExecContext(r.Context(), `
+			INSERT INTO credit_statements
+			  (id,household_id,instrument_id,cycle_start_on,cycle_end_on,due_on,system_due_minor,paid_minor,status)
+			VALUES(?,?,?,?,?,?,0,0,'unbilled')`,
+			stmtID, p.HouseholdID, instrumentID, start, end, due)
+	}
+	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(r.Context(),
-		`INSERT OR IGNORE INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?)`,
-		stmtID, sourceType, sourceID, amount, occurredOn); err != nil {
+
+	insertItem := "INSERT OR IGNORE INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?)"
+	if a.DB.IsMySQL() {
+		insertItem = "INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE statement_id=statement_id"
+	}
+	if _, err := tx.ExecContext(r.Context(), insertItem, stmtID, sourceType, sourceID, amount, occurredOn); err != nil {
 		return err
 	}
 	// Recompute from items instead of trusting a mutable running total.
@@ -167,22 +181,35 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 			internalErr(w, err)
 			return
 		}
-		items = append(items, map[string]any{
+		row := map[string]any{
 			"id": v.id, "kind": v.kind, "name": v.name, "credit_limit_minor": v.limit,
 			"cycle_start_day": v.sd, "cycle_end_day": v.ed, "due_day": v.dd, "due_month_offset": v.off,
 			"status": v.status, "outstanding_minor": -bal,
-		})
+		}
+		// V0.1.1: used/available/usage are derived from the posted journal, not a
+		// cached balance. An unconfigured limit never produces a fake percentage.
+		for k, val := range creditLimitFields(v.limit, -int64(bal)) {
+			row[k] = val
+		}
+		items = append(items, row)
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
 }
 
 func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
+	// Drill-down filters (M5): window on due_on, plus derived status filter.
+	// Status filtering happens on the DERIVED value computed from facts, so a
+	// stale cached status can never leak into the response.
+	q := r.URL.Query()
+	from, to := q.Get("from"), q.Get("to")
+	status := q.Get("status")
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,s.instrument_id,i.name,s.cycle_start_on,s.cycle_end_on,s.due_on,
 		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status
 		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id
-		WHERE s.household_id=? ORDER BY s.cycle_start_on DESC`, p.HouseholdID)
+		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)
+		ORDER BY s.cycle_start_on DESC`, p.HouseholdID, from, from, to, to)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -190,22 +217,29 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, instrID, name, start, end, due, status string
+		var id, instrID, name, start, end, due, stored string
 		var sysDue, paid int64
 		var platform *int64
-		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &status); err != nil {
+		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &stored); err != nil {
 			internalErr(w, err)
 			return
 		}
+		// V0.1.1: status is derived from the business date + posted amounts.
+		// stored_status is kept visible so a stale cached value can be diagnosed.
+		derived := deriveStatementStatus(end, due, a.businessDate(), sysDue, paid)
 		m := map[string]any{
 			"id": id, "instrument_id": instrID, "instrument_name": name,
 			"cycle_start_on": start, "cycle_end_on": end, "due_on": due,
 			"system_due_minor": sysDue, "paid_minor": paid,
-			"remaining_minor": sysDue - paid, "status": status,
+			"remaining_minor": sysDue - paid,
+			"status":          derived, "derived_status": derived, "stored_status": stored,
 			"platform_amount_minor": platform,
 		}
 		if platform != nil {
 			m["reconcile_diff_minor"] = sysDue - *platform
+		}
+		if status != "" && derived != status {
+			continue
 		}
 		items = append(items, m)
 	}
@@ -229,13 +263,28 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_amount", "还款金额必须为正")
 		return
 	}
+	// V0.1.1: replaying the same Idempotency-Key returns the FIRST result,
+	// never a UNIQUE error and never a second journal entry.
+	replayKey := scopedKey(p.HouseholdID, idempotencyKey(r))
+	if replayKey != "" {
+		var existingID, existingEntry string
+		if err := a.DB.QueryRowContext(r.Context(),
+			`SELECT id,entry_id FROM credit_payments WHERE idempotency_key=? AND household_id=? AND statement_id=?`,
+			replayKey, p.HouseholdID, stmtID).Scan(&existingID, &existingEntry); err == nil {
+			writeJSON(w, 200, map[string]any{
+				"id": existingID, "entry_id": existingEntry, "statement_id": stmtID,
+				"status": "confirmed", "replayed": true,
+			})
+			return
+		}
+	}
 	payID, entryID := newID("cpay"), newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var instrID string
+		var instrID, cycleEnd, dueOn string
 		var sysDue, paid int64
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT instrument_id,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
-			stmtID, p.HouseholdID).Scan(&instrID, &sysDue, &paid); err != nil {
+			`SELECT instrument_id,cycle_end_on,due_on,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
+			stmtID, p.HouseholdID).Scan(&instrID, &cycleEnd, &dueOn, &sysDue, &paid); err != nil {
 			return errors.New("账单不存在")
 		}
 		if int64(amount) > sysDue-paid {
@@ -249,19 +298,25 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, idempotencyKey(r), p.Username); err != nil {
+		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, replayKey, p.Username); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO credit_payments(id,household_id,statement_id,amount_minor,paid_on,from_account_id,entry_id,idempotency_key)
 			VALUES(?,?,?,?,?,?,?,?)`,
 			payID, p.HouseholdID, stmtID, int64(amount), in.PaidOn, in.FromAccountID, entryID,
-			nullableKey(idempotencyKey(r))); err != nil {
+			nullableKey(replayKey)); err != nil {
 			return err
 		}
+		// Status is derived from facts + business date, not a mutable running flag.
+		newPaid := paid + int64(amount)
+		newStatus := deriveStatementStatus(cycleEnd, dueOn, a.businessDate(), sysDue, newPaid)
 		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE credit_statements SET paid_minor=paid_minor+?, status=CASE WHEN paid_minor+?>=system_due_minor THEN 'paid' ELSE 'partial' END WHERE id=?`,
-			int64(amount), int64(amount), stmtID); err != nil {
+			`UPDATE credit_statements SET paid_minor=?, status=? WHERE id=?`,
+			newPaid, newStatus, stmtID); err != nil {
+			return err
+		}
+		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "credit_statement", stmtID); err != nil {
 			return err
 		}
 		return nil
@@ -428,31 +483,51 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	contractID := r.PathValue("id")
 	var in struct {
-		InstallmentNo int    `json:"installment_no"`
-		AmountMinor   int64  `json:"amount_minor"`
-		PaidOn        string `json:"paid_on"`
-		Channel       string `json:"channel"`
-		ChannelID     string `json:"channel_id"`
+		InstallmentNo  int    `json:"installment_no"`
+		AmountMinor    int64  `json:"amount_minor"`
+		PaidOn         string `json:"paid_on"`
+		Channel        string `json:"channel"`
+		ChannelID      string `json:"channel_id"`
+		PrincipalMinor *int64 `json:"principal_minor"`
+		FeeMinor       *int64 `json:"fee_minor"`
 	}
 	if err := decode(r, &in); err != nil || !validDate(in.PaidOn) {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
 	amount := money.Minor(in.AmountMinor)
-	if err := money.MustPositive(amount); err != nil || (in.Channel != "cash" && in.Channel != "credit") {
+	if err := money.MustPositive(amount); err != nil ||
+		(in.Channel != "cash" && in.Channel != "credit") || in.ChannelID == "" {
 		writeErr(w, 400, "invalid_request", "金额或付款渠道不正确")
 		return
 	}
+	key := scopedKey(p.HouseholdID, idempotencyKey(r))
+	if key != "" {
+		var existingID, existingEntry string
+		if err := a.DB.QueryRowContext(r.Context(), `
+			SELECT p.id,p.entry_id FROM installment_payments p
+			JOIN installment_schedule_items s ON s.id=p.schedule_item_id
+			JOIN installment_contracts c ON c.id=s.contract_id
+			WHERE p.idempotency_key=? AND c.household_id=? AND c.id=?`,
+			key, p.HouseholdID, contractID).Scan(&existingID, &existingEntry); err == nil {
+			writeJSON(w, 200, map[string]any{
+				"id": existingID, "entry_id": existingEntry, "contract_id": contractID,
+				"status": "confirmed", "replayed": true,
+			})
+			return
+		}
+	}
 	payID, entryID := newID("ipay"), newID("je")
+	var splitPrincipal, splitFee int64
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var itemID string
-		var pv, fv, total, paid int64
-		var status string
+		var itemID, dueOn, status string
+		var pv, fv, total, paid, usedP, usedF int64
 		if err := tx.QueryRowContext(r.Context(), `
-			SELECT i.id,i.principal_minor,i.fee_minor,i.total_minor,i.paid_minor,i.status
+			SELECT i.id,i.due_on,i.status,i.principal_minor,i.fee_minor,i.total_minor,i.paid_minor
 			FROM installment_schedule_items i JOIN installment_contracts c ON c.id=i.contract_id
 			WHERE i.contract_id=? AND i.installment_no=? AND c.household_id=?`,
-			contractID, in.InstallmentNo, p.HouseholdID).Scan(&itemID, &pv, &fv, &total, &paid, &status); err != nil {
+			contractID, in.InstallmentNo, p.HouseholdID).
+			Scan(&itemID, &dueOn, &status, &pv, &fv, &total, &paid); err != nil {
 			return errors.New("期次不存在")
 		}
 		if status == "paid" || status == "cancelled" {
@@ -461,112 +536,96 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 		if int64(amount) > total-paid {
 			return errors.New("付款金额超过该期剩余应付")
 		}
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT COALESCE(SUM(principal_minor),0),COALESCE(SUM(fee_minor),0)
+			 FROM installment_payments WHERE schedule_item_id=? AND reversed=0`, itemID).
+			Scan(&usedP, &usedF); err != nil {
+			return err
+		}
+		remainP, remainF := pv-usedP, fv-usedF
+		if remainP < 0 || remainF < 0 || remainP+remainF != total-paid {
+			return errors.New("历史付款拆分与期次余额不一致")
+		}
+
+		// Round the cumulative target so splitting a payment into smaller
+		// requests does not lose the same fractional cent on every payment.
+		newPaid := paid + int64(amount)
+		targetFee := new(big.Int).Mul(big.NewInt(fv), big.NewInt(newPaid))
+		targetFee.Add(targetFee, big.NewInt(total/2))
+		targetFee.Quo(targetFee, big.NewInt(total))
+		payF := min(remainF, int64(amount), max(0, int64(amount)-remainP, targetFee.Int64()-usedF))
+		payP := int64(amount) - payF
+		if (in.PrincipalMinor != nil || in.FeeMinor != nil) &&
+			(in.PrincipalMinor == nil || in.FeeMinor == nil || *in.PrincipalMinor != payP || *in.FeeMinor != payF) {
+			return errors.New("付款拆分必须与系统按比例计算的本金和手续费一致")
+		}
+
+		paySubject := ledger.CreditSubject(in.ChannelID)
 		if in.Channel == "cash" {
 			if _, err := a.validateAccount(tx, r, p.HouseholdID, in.ChannelID); err != nil {
 				return errors.New("付款账户不存在")
 			}
-		}
-		paySubject := ledger.CreditSubject(in.ChannelID)
-		if in.Channel == "cash" {
 			paySubject = ledger.CashSubject(in.ChannelID)
+		} else {
+			var n int
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT COUNT(*) FROM credit_instruments WHERE id=? AND household_id=? AND status='active'`,
+				in.ChannelID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
+				return errors.New("付款信用工具不存在")
+			}
 		}
-		// Partial payments reduce principal first; fee is recognised on the period's final settlement.
-		principalPart := int64(amount)
-		feePart := int64(0)
-		if int64(amount) >= total-paid {
-			principalPart, feePart = pv, fv
-		} else if principalPart > pv {
-			principalPart = pv
-		}
-		if principalPart <= 0 {
-			return errors.New("付款金额无效")
-		}
-		e, err := ledger.InstallmentPayment(
+		e, err := ledger.InstallmentPaymentWithSplit(
 			ledger.Context{EntryID: entryID, BizID: payID, OccurredOn: in.PaidOn},
-			contractID, paySubject, money.Minor(principalPart), money.Minor(feePart))
+			contractID, paySubject, money.Minor(payP), money.Minor(payF))
 		if err != nil {
 			return err
 		}
-		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, idempotencyKey(r), p.Username); err != nil {
+		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, key, p.Username); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO installment_payments(id,schedule_item_id,amount_minor,paid_on,channel,channel_id,entry_id,idempotency_key)
-			VALUES(?,?,?,?,?,?,?,?)`,
+			INSERT INTO installment_payments(id,schedule_item_id,amount_minor,paid_on,channel,channel_id,
+			  entry_id,idempotency_key,principal_minor,fee_minor,reversed)
+			VALUES(?,?,?,?,?,?,?,?,?,?,0)`,
 			payID, itemID, int64(amount), in.PaidOn, in.Channel, in.ChannelID, entryID,
-			nullableKey(idempotencyKey(r))); err != nil {
+			nullableKey(key), payP, payF); err != nil {
 			return err
 		}
-		newPaid := paid + int64(amount)
-		newStatus := "partial"
-		if newPaid >= total {
-			newStatus = "paid"
+		// A credit-channel instalment payment creates a NEW credit liability;
+		// fold it into that card's billing cycle (no new journal entry here).
+		if in.Channel == "credit" {
+			if err := a.assignStatement(r, tx, p, in.ChannelID, "installment_payment", payID,
+				int64(amount), in.PaidOn); err != nil {
+				return err
+			}
 		}
-		_, err = tx.ExecContext(r.Context(),
-			`UPDATE installment_schedule_items SET paid_minor=?, status=? WHERE id=?`, newPaid, newStatus, itemID)
-		return err
+		if _, err := tx.ExecContext(r.Context(),
+			`UPDATE installment_schedule_items SET paid_minor=?, status=? WHERE id=?`,
+			newPaid, derivePeriodStatus(dueOn, a.businessDate(), total, newPaid), itemID); err != nil {
+			return err
+		}
+		splitPrincipal, splitFee = payP, payF
+		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "installment", itemID); err != nil {
+			return err
+		}
+		return audit(r.Context(), tx, p, "installment_payment", "installment_payment", payID, in.PaidOn)
 	})
 	if err != nil {
 		writeErr(w, 400, "invalid_request", err.Error())
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": payID, "entry_id": entryID, "status": "confirmed"})
+	writeJSON(w, 201, map[string]any{
+		"id": payID, "entry_id": entryID, "status": "confirmed",
+		"split": map[string]any{"principal_minor": splitPrincipal, "fee_minor": splitFee},
+	})
 }
 
-// handleGenerateDueItems is the daily task. It ONLY inserts pending obligations;
-// it NEVER marks anything paid and never changes any balance. biz_key makes it idempotent.
+// handleGenerateDueItems is the manual trigger of the daily projection. It
+// ONLY inserts pending obligations; it NEVER marks anything paid and never
+// changes any balance. The biz_key makes it idempotent.
 func (a *API) handleGenerateDueItems(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	horizon := a.businessToday().AddDate(0, 0, 30).Format("2006-01-02")
-	generated := 0
-	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		// The schedule tables have no household_id column of their own: ownership is
-		// resolved through their parent contract. Filtering here (not after the fact)
-		// is what prevents household A from projecting household B's obligations.
-		for _, src := range []struct{ table, kind, contractTable string }{
-			{"installment_schedule_items", "installment", "installment_contracts"},
-			{"debt_schedule_items", "debt", "debt_contracts"},
-		} {
-			rows, err := tx.QueryContext(r.Context(), fmt.Sprintf(`
-			SELECT s.id,s.due_on,s.total_minor,s.paid_minor
-			FROM %s s JOIN %s c ON c.id = s.contract_id
-			WHERE c.household_id = ? AND s.status='pending' AND s.due_on<=?`,
-				src.table, src.contractTable), p.HouseholdID, horizon)
-			if err != nil {
-				return err
-			}
-			type row struct {
-				id, due     string
-				total, paid int64
-			}
-			var found []row
-			for rows.Next() {
-				var v row
-				if err := rows.Scan(&v.id, &v.due, &v.total, &v.paid); err != nil {
-					_ = rows.Close()
-					return err
-				}
-				found = append(found, v)
-			}
-			_ = rows.Close()
-			for _, v := range found {
-				// Scope the idempotency key to the household so two households can
-				// never contend for the same globally-unique biz_key.
-				bizKey := p.HouseholdID + ":" + src.kind + ":" + v.id
-				res, err := tx.ExecContext(r.Context(), `
-					INSERT OR IGNORE INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status)
-					VALUES(?,?,?,?,?,?,?,'pending')`,
-					newID("due"), p.HouseholdID, src.kind, v.id, bizKey, v.due, v.total-v.paid)
-				if err != nil {
-					return err
-				}
-				if n, _ := res.RowsAffected(); n > 0 {
-					generated++
-				}
-			}
-		}
-		return nil
-	})
+	generated, err := a.projectDueItems(r.Context(), p.HouseholdID, "manual", 30)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -581,9 +640,11 @@ func (a *API) handleListDueItems(w http.ResponseWriter, r *http.Request) {
 		days = 7
 	}
 	to := a.businessToday().AddDate(0, 0, days).Format("2006-01-02")
+	status := r.URL.Query().Get("status")
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id,source_type,source_id,biz_key,due_on,amount_minor,status FROM schedule_due_items
-		 WHERE household_id=? AND due_on<=? ORDER BY due_on`, p.HouseholdID, to)
+		`SELECT id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label FROM schedule_due_items
+		 WHERE household_id=? AND due_on<=? AND (?='' OR status=?) ORDER BY due_on`,
+		p.HouseholdID, to, status, status)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -594,14 +655,15 @@ func (a *API) handleListDueItems(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, typ, sid, key, due, status string
 		var amount int64
-		if err := rows.Scan(&id, &typ, &sid, &key, &due, &amount, &status); err != nil {
+		var label *string
+		if err := rows.Scan(&id, &typ, &sid, &key, &due, &amount, &status, &label); err != nil {
 			internalErr(w, err)
 			return
 		}
 		total += amount
 		items = append(items, map[string]any{
 			"id": id, "source_type": typ, "source_id": sid, "biz_key": key,
-			"due_on": due, "amount_minor": amount, "status": status,
+			"due_on": due, "amount_minor": amount, "status": status, "source_label": label,
 		})
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items), "total_minor": total, "days": days})

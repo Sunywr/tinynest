@@ -55,9 +55,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	database, err := db.Open(dbPath)
+	var database *db.DB
+	var err error
+	readyLabel := "sqlite_quick_check_and_migrations"
+	switch os.Getenv("TINYNEST_DB_DRIVER") {
+	case "", "sqlite":
+		database, err = db.Open(dbPath)
+	case "mysql":
+		var password []byte
+		passwordFile := os.Getenv("TINYNEST_MYSQL_PASSWORD_FILE")
+		if dir := os.Getenv("CREDENTIALS_DIRECTORY"); passwordFile == "" && dir != "" {
+			passwordFile = filepath.Join(dir, "mysql-password")
+		}
+		password, err = os.ReadFile(passwordFile)
+		if err == nil {
+			database, err = db.OpenMySQL(os.Getenv("TINYNEST_MYSQL_SOCKET"), os.Getenv("TINYNEST_MYSQL_DATABASE"),
+				os.Getenv("TINYNEST_MYSQL_USER"), strings.TrimRight(string(password), "\r\n"))
+		}
+		readyLabel = "mysql_ping_and_migrations"
+	default:
+		err = errors.New("unsupported TINYNEST_DB_DRIVER")
+	}
 	if err != nil {
-		slog.Error("cannot open SQLite database", "error", err)
+		slog.Error("cannot open database", "error", err)
 		os.Exit(1)
 	}
 	defer database.Close()
@@ -67,10 +87,10 @@ func main() {
 		slog.Error("database migration failed", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("SQLite ready", "applied_migrations", applied)
+	slog.Info("database ready", "applied_migrations", applied)
 
 	// Derived from the embedded migration files, never a hardcoded count (P2-07).
-	expectedVersions, err := db.EmbeddedVersions()
+	expectedVersions, err := database.ExpectedVersions()
 	if err != nil {
 		slog.Error("cannot enumerate embedded migrations", "error", err)
 		os.Exit(1)
@@ -112,14 +132,22 @@ func main() {
 	}
 
 	readyCheck := func() error {
-		var result string
-		if err := database.QueryRow("PRAGMA quick_check").Scan(&result); err != nil {
-			return err
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if database.IsMySQL() {
+			if err := database.PingContext(ctx); err != nil {
+				return err
+			}
+		} else {
+			var result string
+			if err := database.QueryRow("PRAGMA quick_check").Scan(&result); err != nil {
+				return err
+			}
+			if result != "ok" {
+				return fmt.Errorf("quick_check: %s", result)
+			}
 		}
-		if result != "ok" {
-			return fmt.Errorf("quick_check: %s", result)
-		}
-		versions, err := database.Versions(context.Background())
+		versions, err := database.Versions(ctx)
 		if err != nil {
 			return err
 		}
@@ -147,11 +175,16 @@ func main() {
 	})
 	srv := server.HTTPServer(listen, dataDir, server.Options{
 		ReadyCheck: readyCheck,
+		ReadyLabel: readyLabel,
 		Register:   businessAPI.Register,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// V0.1.1 M4: daily due-item projection (startup backfill + Asia/Shanghai 00:07 tick).
+	businessAPI.StartScheduler(ctx)
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

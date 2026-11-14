@@ -35,6 +35,10 @@ body{background:#f4eee8;}
 .api-indicator{font-size:11px;color:var(--muted);white-space:nowrap;}
 @media(max-width:640px){.api-indicator{display:none;} .stage{padding:0;} .website{border:0;border-radius:0;min-height:100dvh;}}
 @media(max-width:840px){
+  .stage:not(.mobile-stage) .sidebar { display:block; padding:12px 18px 0; border-right:0; }
+  .sidebar .brand, .sidebar .navlabel, .sidebar .sidebottom { display:none; }
+  .sidebar .nav { flex-direction:row; flex-wrap:wrap; gap:4px; }
+  .sidebar .nav button { padding:8px 10px; gap:5px; }
   .mobilehead{display:flex;}
   .website{border-radius:0;box-shadow:none;}
   .greeting h1{font-size:23px;}

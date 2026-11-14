@@ -80,18 +80,22 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		WHERE household_id=? AND status='pending' AND due_on>=? AND due_on<=?`,
 		p.HouseholdID, today, a.businessToday().AddDate(0, 0, 30).Format("2006-01-02")).Scan(&due30)
 
-	var realized, netDiv, cost, market int64
-	_ = a.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(realized_pnl_minor),0), COALESCE(SUM(net_dividend_minor),0), COALESCE(SUM(total_cost_minor),0)
-		FROM investment_positions p JOIN investment_assets a ON a.id=p.asset_id WHERE a.household_id=?`,
-		p.HouseholdID).Scan(&realized, &netDiv, &cost)
-	_ = a.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(v.market_value_minor),0) FROM investment_valuations v
-		JOIN investment_assets a ON a.id=v.asset_id
-		WHERE a.household_id=? AND v.valued_on = (
-		  SELECT MAX(v2.valued_on) FROM investment_valuations v2 WHERE v2.asset_id=v.asset_id)`,
-		p.HouseholdID).Scan(&market)
-	unrealized := market - cost
+	var realized, netDiv, unrealized, missingValuations int64
+	err = a.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(p.realized_pnl_minor),0), COALESCE(SUM(p.net_dividend_minor),0),
+		       COALESCE(SUM(CASE WHEN p.quantity_scaled>0 THEN v.market_value_minor-p.total_cost_minor END),0),
+		       COUNT(CASE WHEN p.quantity_scaled>0 AND v.id IS NULL THEN 1 END)
+		FROM investment_positions p
+		JOIN investment_assets a ON a.id=p.asset_id
+		LEFT JOIN investment_valuations v ON v.id=(
+			SELECT v2.id FROM investment_valuations v2 WHERE v2.asset_id=p.asset_id
+			ORDER BY v2.valued_on DESC LIMIT 1
+		)
+		WHERE a.household_id=?`, p.HouseholdID).Scan(&realized, &netDiv, &unrealized, &missingValuations)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
 
 	accounts := []map[string]any{}
 	rows, err := a.DB.QueryContext(ctx,
@@ -127,6 +131,7 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		"investment_unrealized_minor":   unrealized,
 		"investment_dividend_minor":     netDiv,
 		"investment_total_return_minor": realized + unrealized + netDiv,
+		"investment_missing_valuations": missingValuations,
 		"investment_valuation_note":     "手工估值，非实时行情；该收益率不是年化收益率",
 		"net_worth_minor":               int64(assets) + int64(liabilities),
 		"accounts":                      accounts,

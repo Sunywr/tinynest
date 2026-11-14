@@ -62,3 +62,105 @@ func TestCrossYearCashRefundKeepsProjectAndCashflowSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestInvestmentValuationOmissionAndClosedPosition(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+
+	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "securities", "name": "估值测试", "opening_balance_minor": 100_000,
+	})["id"].(string)
+	asset := c.mustOK("POST", "/api/v1/investments/assets", map[string]any{
+		"code": "VALUATION", "name": "测试资产", "kind": "stock", "account_id": account,
+	})["id"].(string)
+	trade := func(side, date string, amount int64) {
+		t.Helper()
+		c.mustOK("POST", "/api/v1/investments/trades", map[string]any{
+			"asset_id": asset, "side": side, "trade_on": date, "quantity_scaled": 1_000_000,
+			"gross_minor": amount, "fee_minor": 0, "from_account_id": account,
+		})
+	}
+	dashboard := func() map[string]any {
+		return c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
+	}
+	trade("buy", "2026-11-02", 10_000)
+	if summary := dashboard(); number(summary["investment_unrealized_minor"]) != 0 {
+		t.Errorf("missing valuation must not generate a loss: %v", summary)
+	}
+	c.mustOK("POST", "/api/v1/investments/valuations", map[string]any{
+		"asset_id": asset, "valued_on": "2026-11-03", "market_value_minor": 20_000,
+	})
+	trade("sell", "2026-11-04", 13_000)
+	position := findRow(t, c.mustOK("GET", "/api/v1/investments/positions", nil), "asset_id", asset)
+	if position["unrealized_pnl_minor"] != float64(0) || number(position["total_return_minor"]) != 3_000 ||
+		number(position["reference_return_bps"]) != 3_000 {
+		t.Errorf("closed position must show realized gain and reference return: %v", position)
+	}
+	if summary := dashboard(); number(summary["investment_total_return_minor"]) != 3_000 {
+		t.Errorf("stale valuation must not inflate dashboard return after sellout: %v", summary)
+	}
+}
+
+func TestAuditLogReadIsHouseholdScoped(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+
+	if _, err := database.Exec(`
+		INSERT INTO audit_logs(household_id, actor, action, entity, entity_id)
+		VALUES ('other-household','other-admin','create_account','account','other-account')`); err != nil {
+		t.Fatal(err)
+	}
+	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "审计测试", "opening_balance_minor": 0,
+	})["id"].(string)
+	logs := c.mustOK("GET", "/api/v1/admin/audit-logs?limit=100", nil)
+	row := findRow(t, logs, "entity_id", account)
+	if row["entity"] != "account" {
+		t.Errorf("unexpected audit metadata: %v", row)
+	}
+	for _, raw := range logs["items"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["entity_id"] == "other-account" {
+			t.Fatal("audit query returned another household's event")
+		}
+	}
+}
+
+func TestInvestmentFeeRuleUsesTradeDate(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+
+	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "securities", "name": "费率测试", "opening_balance_minor": 1_000_000,
+	})["id"].(string)
+	for _, rule := range []struct {
+		date string
+		bps  int64
+	}{{"2026-11-01", 10}, {"2026-12-01", 20}} {
+		c.mustOK("POST", "/api/v1/investments/fee-rules", map[string]any{
+			"account_id": account, "effective_from": rule.date, "commission_bps": rule.bps,
+		})
+	}
+	asset := c.mustOK("POST", "/api/v1/investments/assets", map[string]any{
+		"code": "FEE", "name": "费率资产", "kind": "stock", "account_id": account,
+	})["id"].(string)
+	for _, trade := range []struct {
+		date string
+		fee  int64
+	}{{"2026-10-31", 0}, {"2026-11-30", 100}, {"2026-12-01", 200}} {
+		body := c.mustOK("POST", "/api/v1/investments/trades", map[string]any{
+			"asset_id": asset, "side": "buy", "trade_on": trade.date,
+			"quantity_scaled": 1_000_000, "gross_minor": 100_000, "from_account_id": account,
+		})
+		var fee int64
+		if err := database.QueryRow("SELECT fee_minor FROM investment_trades WHERE id=?", body["id"]).Scan(&fee); err != nil {
+			t.Fatal(err)
+		}
+		if fee != trade.fee {
+			t.Errorf("fee on %s = %d, want %d", trade.date, fee, trade.fee)
+		}
+	}
+}
