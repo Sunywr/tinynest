@@ -66,6 +66,9 @@ export const api = {
 
   accounts: () => get('/accounts'),
   createAccount: (body: any) => post('/accounts', body),
+  account: (id: string) => get(`/accounts/${encodeURIComponent(id)}`),
+  updateAccount: (id: string, body: { name: string; subtype: string; owner_member_id: string; note: string }) =>
+    request(`/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   accountBalance: (id: string) => get(`/accounts/${id}/balance`),
 
   transactions: (params = '') => get(`/transactions${params}`),

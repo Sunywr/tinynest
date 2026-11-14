@@ -44,6 +44,7 @@ const features = [
 
 const summary = ref<any>(null)
 const creditDash = ref<any>(null)
+const accountEdit = ref<{ id: string; name: string; subtype: string; owner_member_id: string; note: string } | null>(null)
 const accounts = ref<any[]>([])
 const members = ref<{ id: string; name: string; status: string }[]>([])
 const memberName = ref('')
@@ -118,7 +119,7 @@ function clearPrivateState() {
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
   members.value = []; memberName.value = ''; selectedMember.value = ''
-  accounts.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
+  accounts.value = []; accountEdit.value = null; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   debts.value = []; dueItems.value = []; transactions.value = []
@@ -399,6 +400,28 @@ function createTx() {
     splits: [{ category_id: f.tx.category_id, project_id: f.tx.project_id || undefined, amount_minor: amount }],
   }), '记账成功')
 }
+async function openAccount(event: Event) {
+  const id = (event.target as HTMLSelectElement).value
+  accountEdit.value = null
+  if (!id) return
+  loading.value = true
+  try {
+    const account = await api.account(id)
+    if (!authed.value) return
+    accountEdit.value = {
+      id, name: account.name, subtype: account.subtype ?? '',
+      owner_member_id: account.owner_member_id ?? '', note: account.note ?? '',
+    }
+  } catch (e) { fail(e) }
+  finally { loading.value = false }
+}
+
+async function saveAccount() {
+  if (!accountEdit.value) return
+  const { id, ...patch } = accountEdit.value
+  await run(() => api.updateAccount(id, patch), '账户资料已更新')
+}
+
 function createAccount() {
   const opening = f.account.opening_balance === '' ? 0 : minor(f.account.opening_balance)
   if (!f.account.name || opening === null || opening < 0) return toast('请填写账户名称与有效期初余额')
@@ -967,6 +990,27 @@ const metricCards = computed(() => {
               <span>{{ a.name }} <small>{{ a.kind }}</small></span><b>{{ formatMinor(a.balance_minor) }}</b></div>
               <p v-if="!accounts.length" class="empty">还没有账户</p></div>
           </section>
+          <details class="panel">
+            <summary>编辑账户资料</summary>
+            <form @submit.prevent="saveAccount">
+              <label>选择账户<select :disabled="loading" @change="openAccount">
+                <option value="">请选择</option>
+                <option v-for="account in accounts" :key="account.id" :value="account.id">{{ account.name }}</option>
+              </select></label>
+              <template v-if="accountEdit">
+                <div class="formgrid">
+                  <label>账户显示名称<input v-model.trim="accountEdit.name" maxlength="100" required /></label>
+                  <label>子类型或平台<input v-model.trim="accountEdit.subtype" maxlength="100" /></label>
+                  <label>归属成员<select v-model="accountEdit.owner_member_id">
+                    <option value="">未指定</option>
+                    <option v-for="member in members.filter(m => m.status === 'active' || m.id === accountEdit?.owner_member_id)" :key="member.id" :value="member.id">{{ member.name }}</option>
+                  </select></label>
+                  <label>备注<input v-model.trim="accountEdit.note" /></label>
+                </div>
+                <button class="ghost" type="submit" :disabled="loading">保存账户资料</button>
+              </template>
+            </form>
+          </details>
         </template>
 
         <!-- 信用账单 -->

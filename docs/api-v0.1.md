@@ -71,7 +71,7 @@
 |---|---|---|---|
 | GET/POST | `/accounts` | IMPLEMENTED | 现金/证券/理财账户；创建可带 `opening_balance_minor` |
 | GET | `/accounts/{id}/balance` | IMPLEMENTED | 由分录重建余额 |
-| GET/PATCH | `/accounts/{id}` | PLANNED | 详情 / 编辑 |
+| GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注），余额由分录计算 |
 | GET | `/ledger/accounts` | PLANNED | 科目表（调试/对账） |
 
 ### `/transactions` · `/refunds`（S2 / S4）

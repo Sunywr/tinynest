@@ -35,6 +35,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/projects/{id}/summary", a.handleProjectSummary)
 	a.route(mux, "GET /api/v1/accounts", a.handleListAccounts)
 	a.route(mux, "POST /api/v1/accounts", a.handleCreateAccount)
+	a.route(mux, "GET /api/v1/accounts/{id}", a.handleGetAccount)
+	a.route(mux, "PATCH /api/v1/accounts/{id}", a.handleUpdateAccount)
 	a.route(mux, "GET /api/v1/accounts/{id}/balance", a.handleAccountBalance)
 
 	a.registerTransactions(mux)
@@ -496,6 +498,9 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	id := newID("acc")
 	code := ledgerCodeFor(in.Kind, id)
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if err := validateAccountOwner(r, tx, p.HouseholdID, in.OwnerMemberID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(r.Context(),
 			`INSERT INTO accounts(id,household_id,kind,subtype,name,owner_member_id,ledger_code) VALUES(?,?,?,?,?,?,?)`,
 			id, p.HouseholdID, in.Kind, in.Subtype, in.Name, in.OwnerMemberID, code); err != nil {
@@ -523,6 +528,10 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		return audit(r.Context(), tx, p, "create_account", "account", id, "")
 	})
+	if errors.Is(err, errInvalidAccountOwner) {
+		writeErr(w, 400, "invalid_request", err.Error())
+		return
+	}
 	if err != nil {
 		internalErr(w, err)
 		return
