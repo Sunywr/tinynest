@@ -388,7 +388,7 @@ const metricCards = computed(() => {
     { label: '本期结余', value: formatMinor(s.balance_minor), foot: '收入 − 支出' },
     { label: '实际现金净流量', value: formatMinor(s.cashflow_minor), foot: '按现金实际收付日' },
     { label: '本期应还负债', value: formatMinor(s.liabilities_due_minor), foot: `7天 ${formatMinor(s.due_7d_minor)} · 30天 ${formatMinor(s.due_30d_minor)}` },
-    { label: '投资总收益', value: formatMinor(s.investment_total_return_minor), foot: '已实现 + 未实现 + 净分红' },
+    { label: '投资总收益', value: formatMinor(s.investment_total_return_minor), foot: s.investment_missing_valuations ? '部分持仓尚未估值' : '已实现 + 未实现 + 净分红' },
     { label: '家庭净资产', value: formatMinor(s.net_worth_minor), foot: '资产 − 负债（投资按成本）' },
   ]
 })
@@ -786,7 +786,7 @@ const metricCards = computed(() => {
           <section class="panel"><div class="paneltitle"><div><h2>持仓</h2><span class="subinfo">可重建投影，历史交易不可变</span></div></div>
             <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
               <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
-              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
+              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
               <p v-if="!positions.length" class="empty">暂无持仓</p></div>
           </section>
         </template>

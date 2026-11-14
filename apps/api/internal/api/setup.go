@@ -20,6 +20,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/setup", a.handleSetup)
 	mux.HandleFunc("POST /api/v1/auth/session", a.handleLogin)
 	a.route(mux, "GET /api/v1/auth/me", a.handleMe)
+	a.route(mux, "GET /api/v1/admin/audit-logs", a.handleAuditLogs)
 	a.route(mux, "DELETE /api/v1/auth/session", a.handleLogout)
 
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)
