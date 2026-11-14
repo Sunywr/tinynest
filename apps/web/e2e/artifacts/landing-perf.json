@@ -1,7 +1,7 @@
 {
   "sample": "single local dev-server load, Microsoft Edge on Windows, 1440x900, no network throttling",
-  "measured_at": "2026-11-14T09:19:25.804Z",
-  "lcp_ms": 204,
+  "measured_at": "2026-11-14T14:21:32.949Z",
+  "lcp_ms": 200,
   "cls": 0.0375,
   "note": "Local Vite dev server sample only. NOT a production/iPhone/throttled measurement."
 }

@@ -159,6 +159,7 @@ async function boot() {
     authed.value = true
     apiStatus.value = '已连接'
     await loadAll()
+    applyTxPrefs()
   } catch {
     authed.value = false
     clearPrivateState()
@@ -233,6 +234,7 @@ async function submitLogin() {
     document.body.classList.remove('dialog-open')
     window.history.replaceState(null, '', '/')
     await loadAll()
+    applyTxPrefs()
   } catch (e) {
     loginError.value = e instanceof ApiError ? e.message : (e instanceof Error ? e.message : '登录失败，请稍后重试')
   } finally {
@@ -312,7 +314,37 @@ async function reloadSummary() {
     catRanking.value = (await api.categoryRanking(range.from, range.to)).items || []
   } catch (e) { fail(e) }
 }
-function go(v: View) { view.value = v; errorMsg.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
+// Every business view lists its created items first; a form opens only after
+// the user clicks an action button (panel = '' means "list only").
+const panel = ref('')
+function go(v: View) { view.value = v; errorMsg.value = ''; panel.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
+function openPanel(p: string) { panel.value = p; errorMsg.value = '' }
+function closePanel() { panel.value = ''; errorMsg.value = '' }
+// Quick entry (D3): one tap from the home dashboard into the ledger form.
+function quickEntry() { go('ledger'); openPanel('tx') }
+
+// Last-used ledger selections, kept purely as a local UI preference (D4).
+// Only category/account/instrument IDs are stored — never amounts or notes.
+const TX_PREFS_KEY = 'tinynest:tx-prefs'
+function saveTxPrefs() {
+  try {
+    localStorage.setItem(TX_PREFS_KEY, JSON.stringify({
+      type: f.tx.type, payment_kind: f.tx.payment_kind,
+      category_id: f.tx.category_id, account_id: f.tx.account_id,
+      credit_instrument_id: f.tx.credit_instrument_id,
+    }))
+  } catch { /* storage unavailable: preference simply not remembered */ }
+}
+function applyTxPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(TX_PREFS_KEY) || 'null')
+    if (!p) return
+    if (p.category_id && categories.value.some(c => c.id === p.category_id && c.active === 1)) f.tx.category_id = p.category_id
+    if (p.account_id && accounts.value.some(a => a.id === p.account_id)) f.tx.account_id = p.account_id
+    if (p.credit_instrument_id && creditInstruments.value.some(c => c.id === p.credit_instrument_id && c.status === 'active')) f.tx.credit_instrument_id = p.credit_instrument_id
+    if (p.payment_kind === 'cash' || p.payment_kind === 'credit') f.tx.payment_kind = p.payment_kind
+  } catch { /* malformed preference is ignored */ }
+}
 
 function selectCategory(event: Event) {
   const id = (event.target as HTMLSelectElement).value
@@ -479,12 +511,16 @@ function createTx() {
   const amount = minor(f.tx.amount)
   if (amount === null || amount <= 0) return toast('请输入有效金额（最多两位小数）')
   if (f.tx.type === 'transfer') {
+    if (!f.tx.account_id || !f.tx.to_account_id) return toast('请选择转出与转入账户')
+    if (f.tx.account_id === f.tx.to_account_id) return toast('转出与转入账户不能相同')
     return run(() => api.createTransaction({
       type: 'transfer', amount_minor: amount, occurred_on: f.tx.occurred_on,
       member_id: selectedMember.value || undefined, account_id: f.tx.account_id, to_account_id: f.tx.to_account_id, note: f.tx.note || undefined,
-    }), '转账已入账')
+    }).then(() => saveTxPrefs()), '转账已入账')
   }
   if (!f.tx.category_id) return toast('请选择分类')
+  if (f.tx.type === 'expense' && f.tx.payment_kind === 'credit' && !f.tx.credit_instrument_id) return toast('请选择信用工具')
+  if ((f.tx.type === 'income' || f.tx.payment_kind === 'cash') && !f.tx.account_id) return toast('请选择收/付款账户')
   return run(() => api.createTransaction({
     type: f.tx.type, amount_minor: amount, occurred_on: f.tx.occurred_on,
     member_id: selectedMember.value || undefined,
@@ -493,10 +529,12 @@ function createTx() {
     credit_instrument_id: f.tx.credit_instrument_id || undefined,
     note: f.tx.note || undefined,
     splits: [{ category_id: f.tx.category_id, project_id: f.tx.project_id || undefined, amount_minor: amount }],
-  }), '记账成功')
+  }).then(() => saveTxPrefs()), '记账成功')
 }
 async function openAccount(event: Event) {
-  const id = (event.target as HTMLSelectElement).value
+  await openAccountById((event.target as HTMLSelectElement).value)
+}
+async function openAccountById(id: string) {
   accountEdit.value = null; accountJournal.value = []
   if (!id) return
   loading.value = true
@@ -570,6 +608,14 @@ async function selectInstallment(id: string) {
   f.instPayment.contract_id = id
   f.instRefund.contract_id = id
   try { instDetail.value = await api.installment(id) } catch (e) { fail(e) }
+}
+// Row actions jump straight into the matching form panel, prefilled.
+function openDebtPanel(id: string) { void selectDebt(id); openPanel('debtPay') }
+function openInstPanel(id: string) { void selectInstallment(id); openPanel('instPay') }
+function openStatementPay(s: { id: string; remaining_minor: number }) {
+  f.payment.statement_id = s.id
+  f.payment.amount = (s.remaining_minor / 100).toFixed(2)
+  openPanel('pay')
 }
 async function refreshInstDetail() {
   if (f.instPayment.contract_id) {
@@ -735,7 +781,7 @@ function refund(txId: string) {
   f.refund.destination_type = 'cash'
   f.refund.destination_id = accounts.value[0]?.id || ''
   go('ledger')
-  toast('请在下方填写退款金额与去向')
+  openPanel('refund')
 }
 function submitRefund() {
   const amount = minor(f.refund.amount)
@@ -884,7 +930,8 @@ const metricCards = computed(() => {
         <!-- 首页 -->
         <template v-if="view === 'home'">
           <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>所有数字均由后端分录实时汇总，不含演示数据。</p></div>
-            <div class="day">{{ range.from }} ～ {{ range.to }}</div></section>
+            <div class="day">{{ range.from }} ～ {{ range.to }}</div>
+            <button type="button" class="btn-primary quick-entry" @click="quickEntry()">＋ 记一笔</button></section>
           <div class="rangebar">
             <label>起始 <input type="date" v-model="range.from" /></label>
             <label>截止 <input type="date" v-model="range.to" /></label>
@@ -904,7 +951,7 @@ const metricCards = computed(() => {
                   <p v-if="!catRanking.length" class="empty">本周期暂无支出</p></div>
               </section>
               <section class="panel transactions"><div class="paneltitle"><div><h2>最近流水</h2></div>
-                <button class="switch" @click="go('ledger')">去记账 →</button></div>
+                <button class="switch" @click="quickEntry()">去记账 →</button></div>
                 <div class="translist"><div class="transaction" v-for="t in transactions.slice(0, 8)" :key="t.id">
                   <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
                   <div class="txbody"><div class="txname">{{ t.merchant || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '账户转账' : '支出') }}</div>
@@ -954,11 +1001,31 @@ const metricCards = computed(() => {
           </div>
         </template>
 
-        <!-- 记账 -->
+        <!-- 记账流水：默认先展示全部流水，表单经按钮进入 -->
         <template v-else-if="view === 'ledger'">
-          <section class="greeting"><div><h1>记一笔 ♡</h1><p>金额以「元」输入，后端按整数分入账。</p></div></section>
-          <section class="panel formpanel">
-            <div class="tabs"><button v-for="t in ['expense','income','transfer']" :key="t" :class="{ active: f.tx.type === t }" @click="f.tx.type = t">
+          <section class="greeting"><div><h1>记账流水</h1><p>金额以「元」输入，后端按整数分入账；已入账记录只能冲正，不能删除。</p></div></section>
+          <div class="actions-bar">
+            <button type="button" class="ghost" @click="openPanel('tx')">＋ 记一笔</button>
+            <button type="button" class="ghost" @click="openPanel('refund')">退款</button>
+            <button type="button" class="ghost" @click="openPanel('project')">项目管理</button>
+            <button type="button" class="ghost" @click="openPanel('category')">分类管理</button>
+          </div>
+          <section class="panel"><div class="paneltitle"><div><h2>全部流水</h2><span class="subinfo">已入账记录只能冲正，不能删除</span></div></div>
+            <div class="translist"><div class="transaction" v-for="t in transactions" :key="t.id">
+              <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
+              <div class="txbody"><div class="txname">{{ t.merchant || t.type }}</div>
+                <div class="txcat">{{ t.occurred_on }} · {{ t.status }} · {{ t.id.slice(0, 12) }}</div></div>
+              <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
+              <div class="rowacts" v-if="t.status === 'posted'">
+                <button type="button" class="ghost" @click="reverse(t.id)">冲正</button>
+                <button v-if="t.type === 'expense'" type="button" class="ghost" @click="refund(t.id)">退款</button>
+              </div>
+            </div><p v-if="!transactions.length" class="empty">还没有流水，点上方「记一笔」开始吧</p></div>
+          </section>
+          <form v-if="panel === 'tx'" class="panel formpanel" @submit.prevent="createTx">
+            <div class="paneltitle"><div><h2>记一笔</h2><span class="subinfo">常用分类与账户会自动记住（仅本机偏好）</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
+            <div class="tabs"><button type="button" v-for="t in ['expense','income','transfer']" :key="t" :class="{ active: f.tx.type === t }" @click="f.tx.type = t">
               {{ t === 'expense' ? '支出' : t === 'income' ? '收入' : '转账' }}</button></div>
             <div class="formgrid">
               <label>金额（元）<input v-model="f.tx.amount" inputmode="decimal" placeholder="0.00" /></label>
@@ -985,17 +1052,27 @@ const metricCards = computed(() => {
               </select></SearchableSelect></label>
               <label>备注<input v-model="f.tx.note" placeholder="可选" /></label>
             </div>
-            <button class="primary" @click="createTx()" :disabled="loading">确认入账</button>
-          </section>
-          <details class="panel">
-            <summary>新建项目</summary>
+            <button class="primary" type="submit" :disabled="loading">确认入账</button>
+          </form>
+          <form v-if="panel === 'refund'" class="panel formpanel" @submit.prevent="submitRefund">
+            <div class="paneltitle"><div><h2>退款</h2><span class="subinfo">关联原交易，冲减原支出而非计入收入</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
+            <div class="formgrid">
+              <label>原交易<SearchableSelect><select v-model="f.refund.transaction_id"><option value="">请选择</option>
+                <option v-for="t in transactions.filter(t => t.type === 'expense' && t.status === 'posted')" :key="t.id" :value="t.id">{{ t.occurred_on }} · {{ formatMinor(t.amount_minor) }}</option></select></SearchableSelect></label>
+              <label>退款金额<input v-model="f.refund.amount" inputmode="decimal" placeholder="0.00" /></label>
+              <label>退款去向<SearchableSelect><select v-model="f.refund.destination_type"><option value="cash">现金账户</option><option value="credit">原信用工具</option></select></SearchableSelect></label>
+              <label>到账账户 / 信用工具<SearchableSelect><select v-model="f.refund.destination_id"><option value="">请选择</option>
+                <option v-for="a in (f.refund.destination_type === 'cash' ? accounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+            </div><button class="ghost" type="submit">提交退款</button>
+          </form>
+          <section v-if="panel === 'project'" class="panel formpanel">
+            <div class="paneltitle"><div><h2>项目管理</h2><span class="subinfo">新建、编辑、归档与明细下钻</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <form @submit.prevent="addProject">
-              <label>项目名称<input v-model="projectName" required /></label>
+              <label>新项目名称<input v-model="projectName" required /></label>
               <button class="ghost" type="submit" :disabled="loading">创建并关联</button>
             </form>
-          </details>
-          <details class="panel">
-            <summary>项目管理</summary>
             <form @submit.prevent="saveProject">
               <label>编辑项目<SearchableSelect><select :disabled="loading" @change="openProject">
                 <option value="">请选择</option>
@@ -1030,9 +1107,10 @@ const metricCards = computed(() => {
               <p v-if="!projectTotals.transactions.length" class="empty">暂无项目流水</p>
               <p v-else-if="projectTotals.transactions.length === projectTotals.detail_limit" class="subinfo">显示最近 {{ projectTotals.detail_limit }} 条拆分明细</p>
             </template>
-          </details>
-          <section class="panel formpanel">
-            <div class="paneltitle"><h2>分类管理</h2></div>
+          </section>
+          <section v-if="panel === 'category'" class="panel formpanel">
+            <div class="paneltitle"><div><h2>分类管理</h2><span class="subinfo">支持两级分类、改名、排序与停用</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <form @submit.prevent="addCategory">
               <div class="formgrid">
                 <label>新分类名称<input v-model="categoryDraft.name" required /></label>
@@ -1065,47 +1143,33 @@ const metricCards = computed(() => {
               <button v-if="categoryEdit" class="ghost" type="submit" :disabled="loading">保存分类</button>
             </form>
           </section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>退款</h2><span class="subinfo">关联原交易，冲减原支出而非计入收入</span></div></div>
-            <div class="formgrid">
-              <label>原交易<SearchableSelect><select v-model="f.refund.transaction_id"><option value="">请选择</option>
-                <option v-for="t in transactions.filter(t => t.type === 'expense' && t.status === 'posted')" :key="t.id" :value="t.id">{{ t.occurred_on }} · {{ formatMinor(t.amount_minor) }}</option></select></SearchableSelect></label>
-              <label>退款金额<input v-model="f.refund.amount" inputmode="decimal" placeholder="0.00" /></label>
-              <label>退款去向<SearchableSelect><select v-model="f.refund.destination_type"><option value="cash">现金账户</option><option value="credit">原信用工具</option></select></SearchableSelect></label>
-              <label>到账账户 / 信用工具<SearchableSelect><select v-model="f.refund.destination_id"><option value="">请选择</option>
-                <option v-for="a in (f.refund.destination_type === 'cash' ? accounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-            </div><button class="ghost" @click="submitRefund()">提交退款</button>
-          </section>
-          <section class="panel"><div class="paneltitle"><div><h2>全部流水</h2><span class="subinfo">已入账记录只能冲正，不能删除</span></div></div>
-            <div class="translist"><div class="transaction" v-for="t in transactions" :key="t.id">
-              <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
-              <div class="txbody"><div class="txname">{{ t.merchant || t.type }}</div>
-                <div class="txcat">{{ t.occurred_on }} · {{ t.status }} · {{ t.id.slice(0, 12) }}</div></div>
-              <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
-              <div class="rowacts" v-if="t.status === 'posted'">
-                <button class="ghost" @click="reverse(t.id)">冲正</button>
-                <button v-if="t.type === 'expense'" class="ghost" @click="refund(t.id)">退款</button>
-              </div>
-            </div><p v-if="!transactions.length" class="empty">暂无流水</p></div>
-          </section>
         </template>
 
-        <!-- 账户 -->
+        <!-- 账户：默认先展示账户列表，表单经按钮进入 -->
         <template v-else-if="view === 'accounts'">
           <section class="greeting"><div><h1>家庭账户</h1><p>余额全部由分录重建，不由页面维护。</p></div></section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>新建账户</h2><span class="subinfo">期初余额走「期初权益」，不计入收入</span></div></div>
+          <div class="actions-bar">
+            <button type="button" class="ghost" @click="openPanel('create')">＋ 新建账户</button>
+            <button type="button" class="ghost" @click="openPanel('edit')">账户资料与流水</button>
+          </div>
+          <section class="panel"><div class="paneltitle"><div><h2>账户列表</h2></div></div>
+            <div class="ranklist"><div v-for="a in accounts" :key="a.id" class="rankrow">
+              <span>{{ a.name }} <small>{{ a.kind }}</small></span><b>{{ formatMinor(a.balance_minor) }}</b>
+              <span class="rowacts"><button type="button" class="ghost" @click="openAccountById(a.id); openPanel('edit')">资料/流水</button></span></div>
+              <p v-if="!accounts.length" class="empty">还没有账户，点上方「新建账户」开始吧</p></div>
+          </section>
+          <form v-if="panel === 'create'" class="panel formpanel" @submit.prevent="createAccount">
+            <div class="paneltitle"><div><h2>新建账户</h2><span class="subinfo">期初余额走「期初权益」，不计入收入</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>类型<SearchableSelect><select v-model="f.account.kind"><option value="cash">现金/银行</option><option value="securities">证券账户</option><option value="wealth">理财账户</option></select></SearchableSelect></label>
               <label>名称<input v-model="f.account.name" placeholder="如：工资卡" /></label>
               <label>期初余额（元）<input v-model="f.account.opening_balance" inputmode="decimal" placeholder="0.00" /></label>
-            </div><button class="primary" @click="createAccount()">创建账户</button>
-          </section>
-          <section class="panel"><div class="paneltitle"><div><h2>账户列表</h2></div></div>
-            <div class="ranklist"><div v-for="a in accounts" :key="a.id" class="rankrow">
-              <span>{{ a.name }} <small>{{ a.kind }}</small></span><b>{{ formatMinor(a.balance_minor) }}</b></div>
-              <p v-if="!accounts.length" class="empty">还没有账户</p></div>
-          </section>
-          <details class="panel">
-            <summary>账户资料与流水</summary>
+            </div><button class="primary" type="submit">创建账户</button>
+          </form>
+          <section v-if="panel === 'edit'" class="panel formpanel">
+            <div class="paneltitle"><div><h2>账户资料与流水</h2></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <form @submit.prevent="saveAccount">
               <label>选择账户<SearchableSelect><select :disabled="loading" @change="openAccount">
                 <option value="">请选择</option>
@@ -1133,13 +1197,19 @@ const metricCards = computed(() => {
               <p v-if="!accountJournal.length" class="empty">暂无资金流水</p>
               <p v-else-if="accountJournal.length === 100" class="subinfo">显示最近 100 笔</p>
             </div>
-          </details>
+          </section>
         </template>
 
-        <!-- 信用账单 -->
+        <!-- 信用账单：默认先展示信用工具与账单列表，表单经按钮进入 -->
         <template v-else-if="view === 'credit'">
           <section class="greeting"><div><h1>信用账单</h1><p>信用消费增加负债但不减现金；还款只结算负债。</p></div></section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>新增信用工具</h2><span class="subinfo">支持 28/29/30/31 月末规则</span></div></div>
+          <div class="actions-bar">
+            <button type="button" class="ghost" @click="openPanel('create')">＋ 新增信用工具</button>
+            <button type="button" class="ghost" @click="openPanel('pay')">账单还款</button>
+          </div>
+          <form v-if="panel === 'create'" class="panel formpanel" @submit.prevent="createCredit">
+            <div class="paneltitle"><div><h2>新增信用工具</h2><span class="subinfo">支持 28/29/30/31 月末规则</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>类型<SearchableSelect><select v-model="f.credit.kind"><option value="credit_card">信用卡</option><option value="huabei">花呗</option><option value="meituan">美团月付</option><option value="douyin">抖音月付</option><option value="custom">自定义</option></select></SearchableSelect></label>
               <label>名称<input v-model="f.credit.name" /></label>
@@ -1148,9 +1218,11 @@ const metricCards = computed(() => {
               <label>还款日<input type="number" min="1" max="31" v-model.number="f.credit.due_day" /></label>
               <label>还款月偏移<input type="number" min="0" max="12" v-model.number="f.credit.due_month_offset" /></label>
               <label>信用额度（元，留空=未配置）<input v-model="f.credit.credit_limit" inputmode="decimal" placeholder="如 20000" /></label>
-            </div><button class="primary" @click="createCredit()">创建</button>
-          </section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>账单还款</h2></div></div>
+            </div><button class="primary" type="submit">创建</button>
+          </form>
+          <form v-if="panel === 'pay'" class="panel formpanel" @submit.prevent="payStatement">
+            <div class="paneltitle"><div><h2>账单还款</h2></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>账单<SearchableSelect><select v-model="f.payment.statement_id"><option value="">请选择</option>
                 <option v-for="s in statements" :key="s.id" :value="s.id">{{ s.instrument_name }} · {{ s.cycle_start_on }}~{{ s.cycle_end_on }} · 余 {{ formatMinor(s.remaining_minor) }}</option></select></SearchableSelect></label>
@@ -1158,24 +1230,24 @@ const metricCards = computed(() => {
               <label>付款账户<SearchableSelect><select v-model="f.payment.from_account_id"><option value="">请选择</option>
                 <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               <label>日期<input type="date" v-model="f.payment.paid_on" /></label>
-            </div><button class="ghost" @click="payStatement()">确认还款</button>
-          </section>
+            </div><button class="ghost" type="submit">确认还款</button>
+          </form>
           <section class="panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
             <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow">
               <span>{{ c.name }} <small>{{ c.kind }} · {{ c.status }}</small></span>
               <b v-if="creditDash">{{ instrumentUsage(c.id) }}</b>
-              <span class="rowacts" v-if="c.status === 'active'"><button class="ghost" @click="deactivateInstrument(c.id)">停用</button></span>
+              <span class="rowacts" v-if="c.status === 'active'"><button type="button" class="ghost" @click="deactivateInstrument(c.id)">停用</button></span>
             </div>
-              <p v-if="!creditInstruments.length" class="empty">还没有信用工具</p></div>
+              <p v-if="!creditInstruments.length" class="empty">还没有信用工具，点上方「新增信用工具」开始吧</p></div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo">系统应还由明细汇总；点击账单可还款</span></div></div>
+          <section class="panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo">系统应还由明细汇总；点击「还款」直接填入金额</span></div></div>
             <div class="ranklist"><div v-for="s in statements" :key="s.id" class="rankrow">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ s.status }}</span>
               <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}</b>
-              <span class="rowacts"><button class="ghost" @click="f.payment.statement_id = s.id; f.payment.amount = (s.remaining_minor / 100).toFixed(2)">还款</button><button class="ghost" @click="editStatementCycle(s)">修正日期</button></span>
+              <span class="rowacts"><button type="button" class="ghost" @click="openStatementPay(s)">还款</button><button type="button" class="ghost" @click="editStatementCycle(s)">修正日期</button></span>
             </div>
               <p v-if="!statements.length" class="empty">暂无账单，记一笔信用消费后自动归集</p></div>
-          <form v-if="f.statementCycle.id" class="formgrid" @submit.prevent="saveStatementCycle()">
+            <form v-if="f.statementCycle.id" class="formgrid" @submit.prevent="saveStatementCycle()">
               <label>周期开始<input v-model="f.statementCycle.cycle_start_on" type="date" required /></label>
               <label>周期结束<input v-model="f.statementCycle.cycle_end_on" type="date" required /></label>
               <label>还款日<input v-model="f.statementCycle.due_on" type="date" required /></label>
@@ -1186,21 +1258,50 @@ const metricCards = computed(() => {
           </section>
         </template>
 
-        <!-- 分期与负债 -->
+        <!-- 分期与负债：默认先展示合同与待支付列表，表单经按钮进入 -->
         <template v-else-if="view === 'debt'">
           <section class="greeting"><div><h1>分期与固定负债</h1><p>分期付款按比例确认手续费，固定负债付款按实际本金、利息和费用录入。</p></div></section>
-
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>新建固定负债合同</h2><span class="subinfo">房贷/贷款/保险/其他；保险不能设本金</span></div></div>
+          <div class="actions-bar">
+            <button type="button" class="ghost" @click="openPanel('debtCreate')">＋ 新建固定负债</button>
+            <button type="button" class="ghost" @click="openPanel('instCreate')">＋ 新建分期</button>
+            <button type="button" class="ghost" @click="openPanel('convert')">账单转分期</button>
+          </div>
+          <section class="panel"><div class="paneltitle"><div><h2>固定负债合同</h2></div></div>
+            <div class="ranklist"><div v-for="d in debts" :key="d.id" class="rankrow">
+              <span>{{ d.name }} <small>{{ d.kind }} · {{ d.status }}</small></span>
+              <b>本金余额 {{ formatMinor(d.remaining_principal_minor) }}</b>
+              <span class="rowacts"><button type="button" class="ghost" @click="openDebtPanel(d.id)">期次/付款</button></span>
+            </div>
+              <p v-if="!debts.length" class="empty">还没有固定负债合同，点上方「新建固定负债」开始吧</p></div>
+          </section>
+          <section class="panel"><div class="paneltitle"><div><h2>分期合同</h2></div></div>
+            <div class="ranklist"><div v-for="i in installments" :key="i.id" class="rankrow">
+              <span>{{ i.name }} <small>{{ i.status }}</small></span>
+              <b>剩余应付 {{ formatMinor(i.remaining_minor) }}</b>
+              <span class="rowacts"><button type="button" class="ghost" @click="openInstPanel(i.id)">期次/付款</button></span>
+            </div>
+              <p v-if="!installments.length" class="empty">还没有分期合同，点上方「新建分期」开始吧</p></div>
+          </section>
+          <section class="panel"><div class="paneltitle"><div><h2>待支付事项</h2><span class="subinfo">重复执行不会重复生成；付款后自动核销</span></div>
+            <button type="button" class="ghost" @click="generateDue()">重新生成（幂等）</button></div>
+            <div class="ranklist"><div v-for="d in dueItems" :key="d.id" class="rankrow">
+              <span>{{ d.due_on }} · {{ d.source_label || d.source_type }} · {{ d.status }}</span><b>{{ formatMinor(d.amount_minor) }}</b></div>
+              <p v-if="!dueItems.length" class="empty">暂无待支付事项</p></div>
+          </section>
+          <form v-if="panel === 'debtCreate'" class="panel formpanel" @submit.prevent="createDebt">
+            <div class="paneltitle"><div><h2>新建固定负债合同</h2><span class="subinfo">房贷/贷款/保险/其他；保险不能设本金</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>类型<SearchableSelect><select v-model="f.debt.kind"><option value="mortgage">房贷</option><option value="loan">其他贷款</option><option value="insurance">保险</option><option value="other">其他周期付款</option></select></SearchableSelect></label>
               <label>名称<input v-model="f.debt.name" placeholder="如：家里房贷" /></label>
               <label>本金（元）<input v-model="f.debt.principal" inputmode="decimal" placeholder="保险填 0" /></label>
               <label>开始日期<input type="date" v-model="f.debt.start_on" /></label>
               <label>还款日<input type="number" min="1" max="31" v-model.number="f.debt.due_day" /></label>
-            </div><button class="primary" @click="createDebt()">创建合同</button>
-          </section>
-
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>固定负债：期次与付款</h2><span class="subinfo">期次计划显式录入；付款需显式拆分本金/利息/费用</span></div></div>
+            </div><button class="primary" type="submit">创建合同</button>
+          </form>
+          <section v-if="panel === 'debtPay'" class="panel formpanel">
+            <div class="paneltitle"><div><h2>固定负债：期次与付款</h2><span class="subinfo">期次计划显式录入；付款需显式拆分本金/利息/费用</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>合同<SearchableSelect><select v-model="f.debtSchedule.contract_id" @change="selectDebt(($event.target as HTMLSelectElement).value)"><option value="">请选择</option>
                 <option v-for="d in debts" :key="d.id" :value="d.id">{{ d.name }} · {{ d.kind }} · 剩本金 {{ formatMinor(d.remaining_principal_minor) }}</option></select></SearchableSelect></label>
@@ -1221,9 +1322,9 @@ const metricCards = computed(() => {
                   <option v-for="a in (f.debtPayment.channel === 'cash' ? accounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
                 <label>付款日期<input type="date" v-model="f.debtPayment.paid_on" /></label>
               </div>
-              <button class="ghost" @click="payDebt()">确认期次付款</button>
-              <button class="ghost" @click="addDebtScheduleItem()">＋追加期次行</button>
-              <button class="ghost" @click="settleDebt()">提前结清</button>
+              <button type="button" class="ghost" @click="payDebt()">确认期次付款</button>
+              <button type="button" class="ghost" @click="addDebtScheduleItem()">＋追加期次行</button>
+              <button type="button" class="ghost" @click="settleDebt()">提前结清</button>
             </template>
             <template v-if="f.debtSchedule.items.length">
               <div class="formgrid" v-for="(it, idx) in f.debtSchedule.items" :key="idx">
@@ -1233,16 +1334,13 @@ const metricCards = computed(() => {
                 <label>利息（元）<input v-model="it.interest" inputmode="decimal" /></label>
                 <label>费用（元）<input v-model="it.fee" inputmode="decimal" /></label>
               </div>
-              <button class="primary" @click="submitDebtSchedule()">保存期次计划</button>
+              <button type="button" class="primary" @click="submitDebtSchedule()">保存期次计划</button>
             </template>
-            <div class="ranklist" v-if="debts.length"><div v-for="d in debts" :key="d.id" class="rankrow">
-              <span>{{ d.name }} <small>{{ d.kind }} · {{ d.status }}</small></span>
-              <b>本金余额 {{ formatMinor(d.remaining_principal_minor) }}</b>
-              <span class="rowacts"><button class="ghost" @click="selectDebt(d.id)">期次/付款</button></span>
-            </div></div>
           </section>
 
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>新建分期合同</h2><span class="subinfo">本金与手续费按期拆分，最后一期承担尾差</span></div></div>
+          <form v-if="panel === 'instCreate'" class="panel formpanel" @submit.prevent="createInstallment">
+            <div class="paneltitle"><div><h2>新建分期合同</h2><span class="subinfo">本金与手续费按期拆分，最后一期承担尾差</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>名称<input v-model="f.installment.name" placeholder="如：客厅装修" /></label>
               <label>消费分类<SearchableSelect><select v-model="f.installment.category_id"><option value="">请选择</option>
@@ -1251,10 +1349,11 @@ const metricCards = computed(() => {
               <label>总手续费（元）<input v-model="f.installment.fee" inputmode="decimal" /></label>
               <label>期数<input type="number" min="1" v-model.number="f.installment.periods" /></label>
               <label>首期日期<input type="date" v-model="f.installment.first_due_on" /></label>
-            </div><button class="primary" @click="createInstallment()">创建合同</button>
-          </section>
-
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>分期：期次付款与调整</h2><span class="subinfo">部分付款按比例确认手续费；退款保留已付历史</span></div></div>
+            </div><button class="primary" type="submit">创建合同</button>
+          </form>
+          <section v-if="panel === 'instPay'" class="panel formpanel">
+            <div class="paneltitle"><div><h2>分期：期次付款与调整</h2><span class="subinfo">部分付款按比例确认手续费；退款保留已付历史</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>合同<SearchableSelect><select v-model="f.instPayment.contract_id" @change="selectInstallment(($event.target as HTMLSelectElement).value)"><option value="">请选择</option>
                 <option v-for="i in installments" :key="i.id" :value="i.id">{{ i.name }} · 剩 {{ formatMinor(i.remaining_minor) }}</option></select></SearchableSelect></label>
@@ -1265,7 +1364,7 @@ const metricCards = computed(() => {
                 <option v-for="a in (f.instPayment.channel === 'cash' ? accounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               <label>付款日期<input type="date" v-model="f.instPayment.paid_on" /></label>
             </div>
-            <button class="primary" @click="payInstallment()">确认期次付款</button>
+            <button type="button" class="primary" @click="payInstallment()">确认期次付款</button>
             <template v-if="instDetail">
               <div class="note-box">合同本金 {{ formatMinor(instDetail.principal_minor) }} · 总费用 {{ formatMinor(instDetail.total_fee_minor) }} ·
                 守恒 {{ instDetail.conservation?.principal_balanced ? '✓本金' : '✗本金' }} / {{ instDetail.conservation?.fee_balanced ? '✓费用' : '✗费用' }} ·
@@ -1273,7 +1372,7 @@ const metricCards = computed(() => {
               <div class="ranklist"><div v-for="p in instDetail.schedule" :key="p.installment_no" class="rankrow">
                 <span>第 {{ p.installment_no }} 期 · {{ p.due_on }} · {{ p.status === 'cancelled' ? p.status : p.derived_status }}</span>
                 <b>本 {{ formatMinor(p.principal_minor) }} / 费 {{ formatMinor(p.fee_minor) }} · 余 {{ formatMinor(p.remaining_minor) }}</b>
-                <span class="rowacts"><button v-if="p.status !== 'paid' && p.status !== 'cancelled' && p.paid_minor === 0" class="ghost"
+                <span class="rowacts"><button v-if="p.status !== 'paid' && p.status !== 'cancelled' && p.paid_minor === 0" type="button" class="ghost"
                   @click="instAdjustReduce(p.installment_no, p.principal_minor, p.fee_minor)">按退款调整</button></span>
               </div></div>
               <div class="formgrid">
@@ -1283,12 +1382,14 @@ const metricCards = computed(() => {
                   <option v-for="a in (f.instRefund.destination_type === 'cash' ? accounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
                 <label>备注<input v-model="f.instRefund.note" placeholder="可选" /></label>
               </div>
-              <button class="ghost" @click="instRefund()">分期退款（保留已付历史）</button>
-              <button class="ghost" @click="instSettleEarly()">提前结清</button>
+              <button type="button" class="ghost" @click="instRefund()">分期退款（保留已付历史）</button>
+              <button type="button" class="ghost" @click="instSettleEarly()">提前结清</button>
             </template>
           </section>
 
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>信用账单转分期</h2><span class="subinfo">仅重分类负债：本金绝不重复</span></div></div>
+          <form v-if="panel === 'convert'" class="panel formpanel" @submit.prevent="convertFromCredit">
+            <div class="paneltitle"><div><h2>信用账单转分期</h2><span class="subinfo">仅重分类负债：本金绝不重复</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>信用工具<SearchableSelect><select v-model="f.convert.credit_instrument_id" @change="f.convert.statement_id = ''"><option value="">请选择</option>
                 <option v-for="c in creditInstruments.filter(c => c.status === 'active')" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
@@ -1299,81 +1400,24 @@ const metricCards = computed(() => {
               <label>总手续费（元）<input v-model="f.convert.fee" inputmode="decimal" /></label>
               <label>期数<input type="number" min="1" v-model.number="f.convert.periods" /></label>
               <label>首期日期<input type="date" v-model="f.convert.first_due_on" /></label>
-            </div><button class="primary" @click="convertFromCredit()">转分期</button>
-          </section>
-
-          <section class="panel"><div class="paneltitle"><div><h2>待支付事项</h2><span class="subinfo">重复执行不会重复生成；付款后自动核销</span></div>
-            <button class="ghost" @click="generateDue()">重新生成（幂等）</button></div>
-            <div class="ranklist"><div v-for="d in dueItems" :key="d.id" class="rankrow">
-              <span>{{ d.due_on }} · {{ d.source_label || d.source_type }} · {{ d.status }}</span><b>{{ formatMinor(d.amount_minor) }}</b></div>
-              <p v-if="!dueItems.length" class="empty">暂无待支付事项</p></div>
-          </section>
+            </div><button class="primary" type="submit">转分期</button>
+          </form>
         </template>
 
-        <!-- 投资 -->
+        <!-- 投资：默认先展示持仓与记录列表，表单经按钮进入 -->
         <template v-else-if="view === 'invest'">
           <section class="greeting"><div><h1>投资账本</h1><p>买入是资产转换；卖出本金不是收入，收益单独计算。</p></div></section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>新增投资资产</h2></div></div>
-            <div class="formgrid">
-              <label>代码<input v-model="f.asset.code" /></label><label>名称<input v-model="f.asset.name" /></label>
-              <label>类型<SearchableSelect><select v-model="f.asset.kind"><option value="stock">股票</option><option value="etf">ETF</option><option value="wealth">理财产品</option></select></SearchableSelect></label>
-              <label>投资账户<SearchableSelect><select v-model="f.asset.account_id"><option value="">请选择</option>
-                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-            </div><button class="primary" @click="createAsset()">创建资产</button>
-          </section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>账户费率规则</h2><span class="subinfo">按账户与生效日追加版本；交易自动计费，单笔可覆盖并保留快照</span></div></div>
-            <div class="formgrid">
-              <label>费率适用账户<SearchableSelect><select v-model="f.feeRule.account_id"><option value="">请选择</option>
-                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>生效日期<input type="date" v-model="f.feeRule.effective_from" /></label>
-              <label>佣金费率（基点，25 = 0.25%）<input v-model="f.feeRule.commission_bps" inputmode="numeric" /></label>
-              <label>最低佣金（元）<input v-model="f.feeRule.commission_min" inputmode="decimal" /></label>
-              <label>印花税（基点，仅卖出）<input v-model="f.feeRule.stamp_duty_bps" inputmode="numeric" /></label>
-              <label>过户费（基点）<input v-model="f.feeRule.transfer_fee_bps" inputmode="numeric" /></label>
-            </div><button class="ghost" @click="createFeeRule()">新增费率版本</button>
-            <div class="ranklist" style="margin-top:14px">
-              <div class="rankrow" v-for="r in feeRules" :key="r.id">
-                <span>{{ r.account_name }} · v{{ r.version }} · {{ r.effective_from }} 起</span>
-                <b>佣金 {{ (r.commission_bps / 100).toFixed(2) }}%（最低 {{ formatMinor(r.commission_min_minor) }}）· 印花 {{ (r.stamp_duty_bps / 100).toFixed(2) }}% · 过户 {{ (r.transfer_fee_bps / 100).toFixed(2) }}%</b>
-              </div>
-              <p v-if="!feeRules.length" class="empty">尚未配置费率规则，交易费用需单笔填写</p>
-            </div>
-            <div class="note-box">♡ 修改费率请新增一个生效日版本，历史费率快照不可变；不提供硬删除，避免已入账交易失去依据。</div>
-          </section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>买入 / 卖出</h2><span class="subinfo">移动加权平均成本，买入费用计入成本</span></div></div>
-            <div class="formgrid">
-              <label>资产<SearchableSelect><select v-model="f.trade.asset_id"><option value="">请选择</option>
-                <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.code }} {{ a.name }}</option></select></SearchableSelect></label>
-              <label>方向<SearchableSelect><select v-model="f.trade.side"><option value="buy">买入</option><option value="sell">卖出</option></select></SearchableSelect></label>
-              <label>数量（股/份）<input v-model="f.trade.quantity" inputmode="decimal" /></label>
-              <label>成交金额（元）<input v-model="f.trade.gross" inputmode="decimal" /></label>
-              <label>费用（元，留空自动计算）<input v-model="f.trade.fee" inputmode="decimal" placeholder="留空按费率规则计费" /></label>
-              <label>资金账户<SearchableSelect><select v-model="f.trade.from_account_id"><option value="">请选择</option>
-                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>日期<input type="date" v-model="f.trade.trade_on" /></label>
-            </div><button class="primary" @click="createTrade()">确认交易</button>
-            <button class="ghost" @click="previewTradeFee()">预览费用</button>
-            <div class="note-box" v-if="feePreview">
-              ♡ 费用预览（成交 {{ formatMinor(feePreview.gross_minor) }} · 规则 v{{ feePreview.fee_rule_version ?? '未配置' }} · 生效 {{ feePreview.effective_from || '—' }}）：<br />
-              佣金 {{ formatMinor(feePreview.commission_minor) }} · 印花税 {{ formatMinor(feePreview.stamp_duty_minor) }} · 过户费 {{ formatMinor(feePreview.transfer_fee_minor) }} ＝ 预计费用 {{ formatMinor(feePreview.total_fee_minor) }}<br />
-              {{ feePreview.note }}
-            </div>
-          </section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>分红与手工估值</h2><span class="subinfo">红利税留空代表未知，不会默认为免税</span></div></div>
-            <div class="formgrid">
-              <label>分红资产<SearchableSelect><select v-model="f.dividend.asset_id"><option value="">请选择</option>
-                <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>税前分红（元）<input v-model="f.dividend.gross" inputmode="decimal" /></label>
-              <label>红利税（元，可留空）<input v-model="f.dividend.tax" inputmode="decimal" /></label>
-              <label>到账账户<SearchableSelect><select v-model="f.dividend.to_account_id"><option value="">请选择</option>
-                <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-            </div><button class="ghost" @click="createDividend()">记录分红</button>
-            <div class="formgrid" style="margin-top:14px">
-              <label>估值资产<SearchableSelect><select v-model="f.valuation.asset_id"><option value="">请选择</option>
-                <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>市值（元）<input v-model="f.valuation.market_value" inputmode="decimal" /></label>
-              <label>估值日期<input type="date" v-model="f.valuation.valued_on" /></label>
-            </div><button class="ghost" @click="createValuation()">更新估值</button>
+          <div class="actions-bar">
+            <button type="button" class="ghost" @click="openPanel('asset')">＋ 新增资产</button>
+            <button type="button" class="ghost" @click="openPanel('trade')">买入 / 卖出</button>
+            <button type="button" class="ghost" @click="openPanel('feeRule')">账户费率规则</button>
+            <button type="button" class="ghost" @click="openPanel('dividend')">分红与估值</button>
+          </div>
+          <section class="panel"><div class="paneltitle"><div><h2>持仓</h2></div></div>
+            <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
+              <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
+              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%（总收益 ÷ 累计买入成本，非年化）</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.last_valued_on"> · 估值日 {{ p.last_valued_on }}</span><span v-if="isValuationStale(p.last_valued_on)" class="overdue"> · 估值待更新</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
+              <p v-if="!positions.length" class="empty">暂无持仓，点上方「新增资产」开始吧</p></div>
           </section>
           <section class="panel"><div class="paneltitle"><div><h2>分红记录与年度汇总</h2><span class="subinfo">来自真实业务表；税额留空代表未知，不按 0 处理</span></div></div>
             <div class="ranklist" v-if="dividendHistory">
@@ -1387,20 +1431,93 @@ const metricCards = computed(() => {
             <p v-if="!dividendHistory" class="empty">分红记录加载中或后端不可用</p>
             <div class="note-box" v-if="dividendHistory?.summary?.unknown_tax_count">♡ 有 {{ dividendHistory.summary.unknown_tax_count }} 笔分红税额未填写（税前合计 {{ formatMinor(dividendHistory.summary.unknown_gross_minor) }}），净收益口径不完整，请勿据此计算税负。</div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>持仓</h2></div></div>
-            <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
-              <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
-              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%（总收益 ÷ 累计买入成本，非年化）</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.last_valued_on"> · 估值日 {{ p.last_valued_on }}</span><span v-if="isValuationStale(p.last_valued_on)" class="overdue"> · 估值待更新</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
-              <p v-if="!positions.length" class="empty">暂无持仓</p></div>
+          <form v-if="panel === 'asset'" class="panel formpanel" @submit.prevent="createAsset">
+            <div class="paneltitle"><div><h2>新增投资资产</h2></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
+            <div class="formgrid">
+              <label>代码<input v-model="f.asset.code" /></label><label>名称<input v-model="f.asset.name" /></label>
+              <label>类型<SearchableSelect><select v-model="f.asset.kind"><option value="stock">股票</option><option value="etf">ETF</option><option value="wealth">理财产品</option></select></SearchableSelect></label>
+              <label>投资账户<SearchableSelect><select v-model="f.asset.account_id"><option value="">请选择</option>
+                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+            </div><button class="primary" type="submit">创建资产</button>
+          </form>
+          <form v-if="panel === 'feeRule'" class="panel formpanel" @submit.prevent="createFeeRule">
+            <div class="paneltitle"><div><h2>账户费率规则</h2><span class="subinfo">按账户与生效日追加版本；交易自动计费，单笔可覆盖并保留快照</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
+            <div class="formgrid">
+              <label>费率适用账户<SearchableSelect><select v-model="f.feeRule.account_id"><option value="">请选择</option>
+                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+              <label>生效日期<input type="date" v-model="f.feeRule.effective_from" /></label>
+              <label>佣金费率（基点，25 = 0.25%）<input v-model="f.feeRule.commission_bps" inputmode="numeric" /></label>
+              <label>最低佣金（元）<input v-model="f.feeRule.commission_min" inputmode="decimal" /></label>
+              <label>印花税（基点，仅卖出）<input v-model="f.feeRule.stamp_duty_bps" inputmode="numeric" /></label>
+              <label>过户费（基点）<input v-model="f.feeRule.transfer_fee_bps" inputmode="numeric" /></label>
+            </div><button class="ghost" type="submit">新增费率版本</button>
+            <div class="ranklist" style="margin-top:14px">
+              <div class="rankrow" v-for="r in feeRules" :key="r.id">
+                <span>{{ r.account_name }} · v{{ r.version }} · {{ r.effective_from }} 起</span>
+                <b>佣金 {{ (r.commission_bps / 100).toFixed(2) }}%（最低 {{ formatMinor(r.commission_min_minor) }}）· 印花 {{ (r.stamp_duty_bps / 100).toFixed(2) }}% · 过户 {{ (r.transfer_fee_bps / 100).toFixed(2) }}%</b>
+              </div>
+              <p v-if="!feeRules.length" class="empty">尚未配置费率规则，交易费用需单笔填写</p>
+            </div>
+            <div class="note-box">♡ 修改费率请新增一个生效日版本，历史费率快照不可变；不提供硬删除，避免已入账交易失去依据。</div>
+          </form>
+          <form v-if="panel === 'trade'" class="panel formpanel" @submit.prevent="createTrade">
+            <div class="paneltitle"><div><h2>买入 / 卖出</h2><span class="subinfo">移动加权平均成本，买入费用计入成本</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
+            <div class="formgrid">
+              <label>资产<SearchableSelect><select v-model="f.trade.asset_id"><option value="">请选择</option>
+                <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.code }} {{ a.name }}</option></select></SearchableSelect></label>
+              <label>方向<SearchableSelect><select v-model="f.trade.side"><option value="buy">买入</option><option value="sell">卖出</option></select></SearchableSelect></label>
+              <label>数量（股/份）<input v-model="f.trade.quantity" inputmode="decimal" /></label>
+              <label>成交金额（元）<input v-model="f.trade.gross" inputmode="decimal" /></label>
+              <label>费用（元，留空自动计算）<input v-model="f.trade.fee" inputmode="decimal" placeholder="留空按费率规则计费" /></label>
+              <label>资金账户<SearchableSelect><select v-model="f.trade.from_account_id"><option value="">请选择</option>
+                <option v-for="a in accounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+              <label>日期<input type="date" v-model="f.trade.trade_on" /></label>
+            </div>
+            <button class="primary" type="submit">确认交易</button>
+            <button type="button" class="ghost" @click="previewTradeFee()">预览费用</button>
+            <div class="note-box" v-if="feePreview">
+              ♡ 费用预览（成交 {{ formatMinor(feePreview.gross_minor) }} · 规则 v{{ feePreview.fee_rule_version ?? '未配置' }} · 生效 {{ feePreview.effective_from || '—' }}）：<br />
+              佣金 {{ formatMinor(feePreview.commission_minor) }} · 印花税 {{ formatMinor(feePreview.stamp_duty_minor) }} · 过户费 {{ formatMinor(feePreview.transfer_fee_minor) }} ＝ 预计费用 {{ formatMinor(feePreview.total_fee_minor) }}<br />
+              {{ feePreview.note }}
+            </div>
+          </form>
+          <section v-if="panel === 'dividend'" class="panel formpanel">
+            <div class="paneltitle"><div><h2>分红与手工估值</h2><span class="subinfo">红利税留空代表未知，不会默认为免税</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
+            <form @submit.prevent="createDividend">
+              <div class="formgrid">
+                <label>分红资产<SearchableSelect><select v-model="f.dividend.asset_id"><option value="">请选择</option>
+                  <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+                <label>税前分红（元）<input v-model="f.dividend.gross" inputmode="decimal" /></label>
+                <label>红利税（元，可留空）<input v-model="f.dividend.tax" inputmode="decimal" /></label>
+                <label>到账账户<SearchableSelect><select v-model="f.dividend.to_account_id"><option value="">请选择</option>
+                  <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+              </div><button class="ghost" type="submit">记录分红</button>
+            </form>
+            <form @submit.prevent="createValuation">
+              <div class="formgrid" style="margin-top:14px">
+                <label>估值资产<SearchableSelect><select v-model="f.valuation.asset_id"><option value="">请选择</option>
+                  <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
+                <label>市值（元）<input v-model="f.valuation.market_value" inputmode="decimal" /></label>
+                <label>估值日期<input type="date" v-model="f.valuation.valued_on" /></label>
+              </div><button class="ghost" type="submit">更新估值</button>
+            </form>
           </section>
         </template>
 
         <template v-else>
           <section class="greeting"><div><h1>设置</h1><p>账本信息与安全说明</p></div></section>
-          <section class="panel formpanel">
-            <div class="paneltitle"><h2>邀请加入家庭</h2></div>
-            <form @submit.prevent="makeInvite">
-              <div class="formgrid">
+          <div class="actions-bar">
+            <button type="button" class="ghost" @click="openPanel('invite')">邀请加入家庭</button>
+            <button type="button" class="ghost" @click="openPanel('member')">新增成员档案</button>
+          </div>
+          <form v-if="panel === 'invite'" class="panel formpanel" @submit.prevent="makeInvite">
+            <div class="paneltitle"><div><h2>邀请加入家庭</h2></div>
+              <button type="button" class="ghost" @click="closePanel()">返回</button></div>
+            <div class="formgrid">
                 <label>绑定成员档案<SearchableSelect><select v-model="inviteDraft.member_id">
                   <option value="">新建成员档案</option>
                   <option v-for="member in members.filter(m => m.status === 'active')" :key="member.id" :value="member.id">{{ member.name }}</option>
@@ -1410,8 +1527,9 @@ const metricCards = computed(() => {
               </div>
               <button type="submit" class="ghost" :disabled="loading">生成邀请码</button>
               <label v-if="issuedCode">邀请码（48 小时有效，请发给受邀人）<input :value="issuedCode" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
-            </form>
-            <div v-if="me?.role === 'admin'" class="ranklist">
+          </form>
+          <section v-if="me?.role === 'admin'" class="panel"><div class="paneltitle"><h2>有效邀请与加入审批</h2></div>
+            <div class="ranklist">
               <h2>有效邀请</h2>
               <div v-for="invite in invitations" :key="invite.id" class="rankrow">
                 <span>{{ invite.member_name }}<template v-if="invite.target_username"> · {{ invite.target_username }}</template> · {{ new Date(invite.expires_at).toLocaleString('zh-CN') }} 到期</span>
@@ -1438,13 +1556,13 @@ const metricCards = computed(() => {
               </div>
             </div>
           </section>
-          <section class="panel formpanel">
-            <div class="paneltitle"><h2>家庭成员档案</h2></div>
-            <p>用于标记流水归属。成员档案不会创建登录账号。</p>
-            <form @submit.prevent="addMember">
-              <label>成员名称<input v-model="memberName" maxlength="100" required /></label>
-              <button class="ghost" type="submit" :disabled="loading">新增成员</button>
-            </form>
+          <form v-if="panel === 'member'" class="panel formpanel" @submit.prevent="addMember">
+            <div class="paneltitle"><div><h2>新增家庭成员档案</h2><span class="subinfo">用于标记流水归属，不会创建登录账号</span></div>
+              <button type="button" class="ghost" @click="closePanel()">返回</button></div>
+            <label>成员名称<input v-model="memberName" maxlength="100" required /></label>
+            <button class="ghost" type="submit" :disabled="loading">新增成员</button>
+          </form>
+          <section class="panel"><div class="paneltitle"><h2>家庭成员档案</h2></div>
             <ul v-if="members.length"><li v-for="member in members" :key="member.id">{{ member.name }}</li></ul>
             <p v-else class="empty">暂无成员档案</p>
           </section>
@@ -1486,6 +1604,9 @@ form label { margin-bottom: 13px; }
 .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .metrics .statamount { font-size: 20px; }
 .formpanel { margin-bottom: 18px; }
+.actions-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.actions-bar .ghost { padding: 11px 18px; font-size: 15px; }
+.quick-entry { width: auto; align-self: center; white-space: nowrap; }
 .formgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 16px 0; }
 .tabs { display: flex; gap: 7px; }
 .tabs button { border: 1px solid var(--border); background: var(--soft); color: var(--muted); border-radius: 10px; padding: 9px 18px; font-size: 12px; }

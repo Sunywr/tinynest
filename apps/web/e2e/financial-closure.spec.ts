@@ -75,6 +75,9 @@ test('02 登录', async ({ page }) => {
 test('03 新建现金账户（期初 10000）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '家庭账户' }).click()
+  // Accounts view lists items first; the form opens via the action button.
+  await expect(page.getByLabel('名称')).toHaveCount(0)
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新建账户' }).click()
   await page.getByLabel('名称').fill('E2E 工资卡')
   await page.getByLabel('期初余额（元）').fill('10000')
   await page.getByRole('button', { name: '创建账户' }).click()
@@ -85,9 +88,10 @@ test('03 新建现金账户（期初 10000）', async ({ page }) => {
 test('04 记一笔收入 3000', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
   await page.getByRole('button', { name: '收入', exact: true }).click()
   await page.getByLabel('金额（元）').fill('3000')
-  await page.locator('.formpanel').first().getByLabel('分类').selectOption({ index: 1 })
+  await page.locator('form.formpanel').getByLabel('分类').selectOption({ index: 1 })
   await page.getByLabel('收/付款账户').selectOption({ label: 'E2E 工资卡' })
   await page.getByRole('button', { name: '确认入账' }).click()
   await expect(page.getByText('记账成功')).toBeVisible()
@@ -96,10 +100,12 @@ test('04 记一笔收入 3000', async ({ page }) => {
 test('05 记一笔现金支出 500，余额 12500', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
   await page.getByLabel('金额（元）').fill('500')
-  await page.locator('.formpanel').first().getByLabel('分类').selectOption({ index: 1 })
+  await page.locator('form.formpanel').getByLabel('分类').selectOption({ index: 1 })
   await page.getByLabel('收/付款账户').selectOption({ label: 'E2E 工资卡' })
-  await page.getByRole('button', { name: '确认入账' }).click()
+  // Enter inside the form submits it (keyboard-friendly entry).
+  await page.getByLabel('金额（元）').press('Enter')
   await expect(page.getByText('记账成功')).toBeVisible()
   await page.getByRole('button', { name: '家庭账户' }).click()
   await expect(page.locator('.rankrow', { hasText: 'E2E 工资卡' })).toContainText('¥12,500.00')
@@ -108,6 +114,7 @@ test('05 记一笔现金支出 500，余额 12500', async ({ page }) => {
 test('06 新建信用工具（额度 20000）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新增信用工具' }).click()
   await page.getByLabel('名称').fill('E2E 信用卡')
   await page.getByLabel('账单开始日').fill('1')
   await page.getByLabel('账单结束日').fill(String(day))
@@ -121,12 +128,13 @@ test('06 新建信用工具（额度 20000）', async ({ page }) => {
 test('07 信用消费 1000 自动归集成账单', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
-  const txForm = page.locator('.formpanel').first()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
+  const txForm = page.locator('form.formpanel')
   await txForm.getByLabel('支付工具').selectOption({ label: '信用工具' })
   // after picking credit the cash-account select is unmounted: select order is 分类/项目/支付工具/信用工具
   await txForm.locator('select').nth(3).selectOption({ label: 'E2E 信用卡' })
   await page.getByLabel('金额（元）').fill('1000')
-  await page.locator('.formpanel').first().getByLabel('分类').selectOption({ index: 1 })
+  await page.locator('form.formpanel').getByLabel('分类').selectOption({ index: 1 })
   await page.getByRole('button', { name: '确认入账' }).click()
   await expect(page.getByText('记账成功')).toBeVisible()
   await page.getByRole('button', { name: '信用账单' }).click()
@@ -136,9 +144,10 @@ test('07 信用消费 1000 自动归集成账单', async ({ page }) => {
 test('08 账单部分还款 600', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
-  const payForm = page.locator('.formpanel').nth(1)
-  await payForm.getByLabel('账单').selectOption({ index: 1 })
-  await payForm.getByLabel('还款金额').fill('600')
+  // Row action jumps straight into the payment form with the amount prefilled.
+  await page.locator('.rankrow', { hasText: '应还 ¥1,000.00 / 已还 ¥0.00' }).getByRole('button', { name: '还款' }).click()
+  await expect(page.getByLabel('还款金额')).toHaveValue('1000.00')
+  await page.getByLabel('还款金额').fill('600')
   await page.getByLabel('付款账户').selectOption({ label: 'E2E 工资卡' })
   await page.getByRole('button', { name: '确认还款' }).click()
   await expect(page.getByText('还款已入账')).toBeVisible()
@@ -148,6 +157,7 @@ test('08 账单部分还款 600', async ({ page }) => {
 test('09 原消费退款 300 回信用工具', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '退款' }).click()
   await page.getByLabel('原交易').selectOption({ index: 1 })
   await page.getByLabel('退款金额').fill('300')
   await page.getByLabel('退款去向').selectOption({ label: '原信用工具' })
@@ -161,32 +171,32 @@ test('09 原消费退款 300 回信用工具', async ({ page }) => {
 test('10 新建房贷合同 3000 并录入期次', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '分期与负债' }).click()
-  const p0 = page.locator('.formpanel').nth(0)
-  const p1 = page.locator('.formpanel').nth(1)
-  await p0.getByLabel('名称').fill('E2E 房贷')
-  await p0.getByLabel('本金（元）').fill('3000')
-  await p0.getByRole('button', { name: '创建合同' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新建固定负债' }).click()
+  await page.getByLabel('名称').fill('E2E 房贷')
+  await page.getByLabel('本金（元）').fill('3000')
+  await page.getByRole('button', { name: '创建合同' }).click()
   await expect(page.getByText('负债合同已创建')).toBeVisible()
-  await p1.getByLabel('合同').selectOption({ index: 1 })
-  await p1.getByRole('button', { name: '＋追加期次行' }).click()
-  await p1.getByLabel('期次号').fill('1')
-  await p1.getByLabel('到期日').fill(DUE)
-  await p1.getByLabel('本金（元）').fill('1500')
-  await p1.getByLabel('利息（元）').fill('500')
-  await p1.getByRole('button', { name: '保存期次计划' }).click()
+  await page.locator('.rankrow', { hasText: 'E2E 房贷' }).getByRole('button', { name: '期次/付款' }).click()
+  const payPanel = page.locator('section.panel', { hasText: '固定负债：期次与付款' })
+  await payPanel.getByRole('button', { name: '＋追加期次行' }).click()
+  await payPanel.getByLabel('期次号').fill('1')
+  await payPanel.getByLabel('到期日').fill(DUE)
+  await payPanel.getByLabel('本金（元）').fill('1500')
+  await payPanel.getByLabel('利息（元）').fill('500')
+  await payPanel.getByRole('button', { name: '保存期次计划' }).click()
   await expect(page.getByText('期次计划已保存')).toBeVisible()
 })
 
 test('11 房贷期次现金部分付款（显式拆分 1000 本 / 200 息）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '分期与负债' }).click()
-  const p1 = page.locator('.formpanel').nth(1)
-  await p1.getByLabel('合同').selectOption({ index: 1 })
-  await p1.getByLabel('实付金额（元）').fill('1200')
-  await p1.getByLabel('本金拆分（元）').fill('1000')
-  await p1.getByLabel('利息拆分（元）').fill('200')
-  await p1.getByLabel('账户/工具').selectOption({ label: 'E2E 工资卡' })
-  await p1.getByRole('button', { name: '确认期次付款' }).click()
+  await page.locator('.rankrow', { hasText: 'E2E 房贷' }).getByRole('button', { name: '期次/付款' }).click()
+  const payPanel = page.locator('section.panel', { hasText: '固定负债：期次与付款' })
+  await payPanel.getByLabel('实付金额（元）').fill('1200')
+  await payPanel.getByLabel('本金拆分（元）').fill('1000')
+  await payPanel.getByLabel('利息拆分（元）').fill('200')
+  await payPanel.getByLabel('账户/工具').selectOption({ label: 'E2E 工资卡' })
+  await payPanel.getByRole('button', { name: '确认期次付款' }).click()
   await expect(page.getByText('期次付款已确认入账')).toBeVisible()
   await expect(page.locator('.rankrow', { hasText: '第 1 期' })).toContainText('余 ¥800.00')
 })
@@ -194,14 +204,14 @@ test('11 房贷期次现金部分付款（显式拆分 1000 本 / 200 息）', a
 test('12 剩余 800 用信用卡支付（500 本 / 300 息，新增信用负债）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '分期与负债' }).click()
-  const p1 = page.locator('.formpanel').nth(1)
-  await p1.getByLabel('合同').selectOption({ index: 1 })
-  await p1.getByLabel('实付金额（元）').fill('800')
-  await p1.getByLabel('本金拆分（元）').fill('500')
-  await p1.getByLabel('利息拆分（元）').fill('300')
-  await p1.getByLabel('渠道').selectOption({ label: '信用工具（新增信用负债）' })
-  await p1.getByLabel('账户/工具').selectOption({ label: 'E2E 信用卡' })
-  await p1.getByRole('button', { name: '确认期次付款' }).click()
+  await page.locator('.rankrow', { hasText: 'E2E 房贷' }).getByRole('button', { name: '期次/付款' }).click()
+  const payPanel = page.locator('section.panel', { hasText: '固定负债：期次与付款' })
+  await payPanel.getByLabel('实付金额（元）').fill('800')
+  await payPanel.getByLabel('本金拆分（元）').fill('500')
+  await payPanel.getByLabel('利息拆分（元）').fill('300')
+  await payPanel.getByLabel('渠道').selectOption({ label: '信用工具（新增信用负债）' })
+  await payPanel.getByLabel('账户/工具').selectOption({ label: 'E2E 信用卡' })
+  await payPanel.getByRole('button', { name: '确认期次付款' }).click()
   await expect(page.getByText('期次付款已确认入账')).toBeVisible()
   await page.getByRole('button', { name: '信用账单' }).click()
   await expect(page.locator('.rankrow', { hasText: 'E2E 信用卡' }).first()).toContainText('已用 ¥900.00 · 可用 ¥19,100.00')
@@ -210,42 +220,43 @@ test('12 剩余 800 用信用卡支付（500 本 / 300 息，新增信用负债�
 test('13 新建分期合同 3000+90 三期，守恒可见', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '分期与负债' }).click()
-  const p2 = page.locator('.formpanel').nth(2)
-  const p3 = page.locator('.formpanel').nth(3)
-  await p2.getByLabel('名称').fill('E2E 装修分期')
-  await p2.getByLabel('消费分类').selectOption({ index: 1 })
-  await p2.getByLabel('本金（元）').fill('3000')
-  await p2.getByLabel('总手续费（元）').fill('90')
-  await p2.getByLabel('期数').fill('3')
-  await p2.getByLabel('首期日期').fill(DUE)
-  await p2.getByRole('button', { name: '创建合同' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新建分期' }).click()
+  await page.getByLabel('名称').fill('E2E 装修分期')
+  await page.getByLabel('消费分类').selectOption({ index: 1 })
+  await page.getByLabel('本金（元）').fill('3000')
+  await page.getByLabel('总手续费（元）').fill('90')
+  await page.getByLabel('期数').fill('3')
+  await page.getByLabel('首期日期').fill(DUE)
+  await page.getByRole('button', { name: '创建合同' }).click()
   await expect(page.getByText('分期合同与期次已创建')).toBeVisible()
-  await p3.getByLabel('合同').selectOption({ index: 1 })
+  await page.locator('.rankrow', { hasText: 'E2E 装修分期' }).getByRole('button', { name: '期次/付款' }).click()
   await expect(page.getByText(/守恒 ✓本金 \/ ✓费用/)).toBeVisible()
 })
 
+async function openInstallmentPanel(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: '分期与负债' }).click()
+  await page.locator('.rankrow', { hasText: 'E2E 装修分期' }).getByRole('button', { name: '期次/付款' }).click()
+  return page.locator('section.panel', { hasText: '分期：期次付款与调整' })
+}
+
 test('14 分期期次按比例拆分部分付款 515（500 本 / 15 费）', async ({ page }) => {
   await ensureLogin(page)
-  await page.getByRole('button', { name: '分期与负债' }).click()
-  const p3 = page.locator('.formpanel').nth(3)
-  await p3.getByLabel('合同').selectOption({ index: 1 })
+  const p3 = await openInstallmentPanel(page)
   await p3.getByLabel('期次').fill('1')
   await p3.getByLabel('实付金额（元）').fill('515')
   await p3.getByLabel(/^账户\/工具/).selectOption({ label: 'E2E 工资卡' })
-  await page.getByRole('button', { name: '确认期次付款' }).click()
+  await p3.getByRole('button', { name: '确认期次付款' }).click()
   await expect(page.getByText('期次付款已确认入账')).toBeVisible()
   await expect(page.locator('.rankrow', { hasText: '第 1 期' })).toContainText('余 ¥515.00')
 })
 
 test('16 结清第 1 期剩余 515', async ({ page }) => {
   await ensureLogin(page)
-  await page.getByRole('button', { name: '分期与负债' }).click()
-  const p3 = page.locator('.formpanel').nth(3)
-  await p3.getByLabel('合同').selectOption({ index: 1 })
+  const p3 = await openInstallmentPanel(page)
   await p3.getByLabel('期次').fill('1')
   await p3.getByLabel('实付金额（元）').fill('515')
   await p3.getByLabel(/^账户\/工具/).selectOption({ label: 'E2E 工资卡' })
-  await page.getByRole('button', { name: '确认期次付款' }).click()
+  await p3.getByRole('button', { name: '确认期次付款' }).click()
   await expect(page.getByText('期次付款已确认入账')).toBeVisible()
 })
 
@@ -256,9 +267,7 @@ test('17 分期退款 50 回现金并显式调整第 2 期', async ({ page }) =>
     return d.accept('E2E 部分退货，按退款调整')
   })
   await ensureLogin(page)
-  await page.getByRole('button', { name: '分期与负债' }).click()
-  const p3 = page.locator('.formpanel').nth(3)
-  await p3.getByLabel('合同').selectOption({ index: 1 })
+  const p3 = await openInstallmentPanel(page)
   await p3.getByLabel('退款金额（元）').fill('50')
   await p3.getByLabel('退款去向').selectOption({ label: '现金账户' })
   await p3.getByLabel('到账账户/工具').selectOption({ label: 'E2E 工资卡' })
@@ -272,9 +281,7 @@ test('17 分期退款 50 回现金并显式调整第 2 期', async ({ page }) =>
 test('18 分期提前结清（保留已付历史）', async ({ page }) => {
   page.on('dialog', d => d.accept('E2E 提前结清'))
   await ensureLogin(page)
-  await page.getByRole('button', { name: '分期与负债' }).click()
-  const p3 = page.locator('.formpanel').nth(3)
-  await p3.getByLabel('合同').selectOption({ index: 1 })
+  const p3 = await openInstallmentPanel(page)
   await p3.getByRole('button', { name: '提前结清' }).click()
   await expect(page.getByText('已提前结清')).toBeVisible()
   await expect(page.locator('.rankrow', { hasText: '第 3 期' })).toContainText('cancelled')
@@ -283,7 +290,8 @@ test('18 分期提前结清（保留已付历史）', async ({ page }) => {
 test('19 信用账单转分期 500（本金不重复）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '分期与负债' }).click()
-  const p4 = page.locator('.formpanel').nth(4)
+  await page.locator('.actions-bar').getByRole('button', { name: '账单转分期' }).click()
+  const p4 = page.locator('form.formpanel', { hasText: '信用账单转分期' })
   await p4.getByLabel('信用工具').selectOption({ label: 'E2E 信用卡' })
   await p4.getByLabel('原账单').selectOption({ index: 1 })
   await p4.getByLabel('合同名称').fill('E2E 账单转分期')
@@ -349,7 +357,7 @@ test('桌面账本独立滚动，侧栏固定', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 650 })
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
-  await expect(page.getByRole('heading', { name: /记一笔/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '记账流水' })).toBeVisible()
   const sidebar = page.locator('.sidebar')
   const before = await sidebar.boundingBox()
   await page.locator('.main').evaluate(el => { el.scrollTop = el.scrollHeight })
@@ -361,6 +369,7 @@ test('桌面账本独立滚动，侧栏固定', async ({ page }) => {
 test('账户选择可按名称搜索并清空筛选', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
   const field = page.locator('label').filter({ hasText: '收/付款账户' })
   await field.getByRole('button', { name: '搜索' }).click()
   const search = field.getByRole('searchbox')
@@ -414,6 +423,7 @@ test('账单日期修正保留应还和已还金额', async ({ page }) => {
 test('23 投资费率规则与费用预览（真实 API）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '家庭账户' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新建账户' }).click()
   await page.getByLabel('类型').selectOption('securities')
   await page.getByLabel('名称').fill('E2E 券商账户')
   await page.getByLabel('期初余额（元）').fill('10000')
@@ -421,14 +431,16 @@ test('23 投资费率规则与费用预览（真实 API）', async ({ page }) =>
   await expect(page.getByText('账户已创建')).toBeVisible()
 
   await page.getByRole('button', { name: '投资' }).click()
-  const assetPanel = page.locator('section.panel', { hasText: '新增投资资产' })
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新增资产' }).click()
+  const assetPanel = page.locator('form.formpanel', { hasText: '新增投资资产' })
   await assetPanel.getByLabel('代码').fill('E2E600')
   await assetPanel.getByLabel('名称').fill('E2E 股票')
   await assetPanel.getByLabel('投资账户').selectOption({ label: 'E2E 券商账户' })
   await page.getByRole('button', { name: '创建资产' }).click()
   await expect(page.getByText('投资资产已创建')).toBeVisible()
 
-  const feePanel = page.locator('section.panel', { hasText: '账户费率规则' })
+  await page.locator('.actions-bar').getByRole('button', { name: '账户费率规则' }).click()
+  const feePanel = page.locator('form.formpanel', { hasText: '账户费率规则' })
   await feePanel.getByLabel('费率适用账户').selectOption({ label: 'E2E 券商账户' })
   await feePanel.getByLabel('生效日期').fill(fmt(new Date(year, month - 1, 1)))
   await feePanel.getByLabel('佣金费率（基点，25 = 0.25%）').fill('25')
@@ -439,7 +451,8 @@ test('23 投资费率规则与费用预览（真实 API）', async ({ page }) =>
   await expect(page.getByText('费率版本已新增（历史快照不变）')).toBeVisible()
   await expect(feePanel.locator('.rankrow').first()).toContainText('v1')
 
-  const tradePanel = page.locator('section.panel', { hasText: '买入 / 卖出' })
+  await page.locator('.actions-bar').getByRole('button', { name: '买入 / 卖出' }).click()
+  const tradePanel = page.locator('form.formpanel', { hasText: '买入 / 卖出' })
   await tradePanel.getByLabel('资产').selectOption({ label: 'E2E600 E2E 股票' })
   await tradePanel.getByLabel('成交金额（元）').fill('1000')
   await page.getByRole('button', { name: '预览费用' }).click()
@@ -453,7 +466,8 @@ test('23 投资费率规则与费用预览（真实 API）', async ({ page }) =>
 test('24 留空费用按费率自动计费入账（与预览一致）', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '投资' }).click()
-  const tradePanel = page.locator('section.panel', { hasText: '买入 / 卖出' })
+  await page.locator('.actions-bar').getByRole('button', { name: '买入 / 卖出' }).click()
+  const tradePanel = page.locator('form.formpanel', { hasText: '买入 / 卖出' })
   await tradePanel.getByLabel('资产').selectOption({ label: 'E2E600 E2E 股票' })
   await tradePanel.getByLabel('数量（股/份）').fill('100')
   await tradePanel.getByLabel('成交金额（元）').fill('1000')
@@ -516,6 +530,7 @@ test('28 超额退款被拒绝且不改变净支出', async ({ page }) => {
   const before = (await (await page.request.get(`/api/v1/refunds/by-transaction/${tx.id}`)).json()).net_expense_minor
 
   await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '退款' }).click()
   await page.getByLabel('原交易').selectOption(tx.id)
   await page.getByLabel('退款金额').fill('999999')
   await page.getByLabel('到账账户 / 信用工具').selectOption(cash.id)
@@ -546,12 +561,14 @@ test('30 自有账户转账不计入日常收支', async ({ page }) => {
   const before = amount(await stat.innerText())
 
   await page.getByRole('button', { name: '家庭账户' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 新建账户' }).click()
   await page.getByLabel('名称').fill('E2E 备用卡')
   await page.getByLabel('期初余额（元）').fill('0')
   await page.getByRole('button', { name: '创建账户' }).click()
   await expect(page.getByText('账户已创建')).toBeVisible()
 
   await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
   await page.locator('.tabs').getByRole('button', { name: '转账' }).click()
   await page.getByLabel('金额（元）').fill('100')
   await page.getByLabel('转出账户').selectOption({ label: 'E2E 工资卡' })
@@ -567,6 +584,7 @@ test('30 自有账户转账不计入日常收支', async ({ page }) => {
 test('31 分红历史/年度汇总、税额未知与估值日期提示', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '投资' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '分红与估值' }).click()
   const divPanel = page.locator('section.panel', { hasText: '分红与手工估值' })
   await divPanel.getByLabel('分红资产').selectOption({ label: 'E2E 股票' })
   await divPanel.getByLabel('到账账户').selectOption({ label: 'E2E 券商账户' })
@@ -606,4 +624,67 @@ test('31 分红历史/年度汇总、税额未知与估值日期提示', async (
   await expect(holding).toContainText('估值日')
   await expect(holding).toContainText('估值待更新')
   await expect(holding).toContainText('非年化')
+})
+
+// --- 交互改造：列表优先 + 按钮进入表单 + 首页快速入口 + 本机偏好 ---
+
+test('32 业务视图先展示列表，点击按钮才进入表单', async ({ page }) => {
+  await ensureLogin(page)
+  const checks: [string, string, string][] = [
+    ['记账流水', '金额（元）', '＋ 记一笔'],
+    ['家庭账户', '期初余额（元）', '＋ 新建账户'],
+    ['信用账单', '信用额度（元，留空=未配置）', '＋ 新增信用工具'],
+    ['分期与负债', '本金（元）', '＋ 新建固定负债'],
+    ['投资', '佣金费率（基点，25 = 0.25%）', '账户费率规则'],
+  ]
+  for (const [nav, label, btn] of checks) {
+    await page.getByRole('button', { name: nav }).click()
+    await expect(page.getByLabel(label)).toHaveCount(0)
+    await page.locator('.actions-bar').getByRole('button', { name: btn }).click()
+    await expect(page.getByLabel(label)).toBeVisible()
+    await expect(page.getByRole('button', { name: '返回列表' })).toBeVisible()
+  }
+})
+
+test('33 首页「记一笔」直达记账表单', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '＋ 记一笔' }).click()
+  await expect(page.getByRole('heading', { name: '记账流水' })).toBeVisible()
+  await expect(page.getByLabel('金额（元）')).toBeVisible()
+})
+
+test('34 流水行内「退款」直接打开预填表单', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  const row = page.locator('.transaction').filter({ hasText: 'expense' }).filter({ hasText: 'posted' }).first()
+  await row.getByRole('button', { name: '退款' }).click()
+  await expect(page.getByLabel('退款金额')).toBeVisible()
+  await expect(page.getByLabel('原交易')).not.toHaveValue('')
+})
+
+test('35 常用分类与账户会被本机记住', async ({ page }) => {
+  await ensureLogin(page)
+  const cats = (await (await page.request.get('/api/v1/categories')).json()).items as any[]
+  const cat = cats.find(c => c.kind === 'expense' && c.active === 1)
+  const accs = (await (await page.request.get('/api/v1/accounts')).json()).items as any[]
+  const acc = accs.find(a => a.name === 'E2E 工资卡')
+  expect(cat && acc).toBeTruthy()
+
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
+  const form = page.locator('form.formpanel')
+  await form.getByLabel('金额（元）').fill('1.23')
+  await form.getByLabel('分类').selectOption(cat.id)
+  await form.getByLabel('收/付款账户').selectOption(acc.id)
+  await form.getByRole('button', { name: '确认入账' }).click()
+  await expect(page.getByText('记账成功')).toBeVisible()
+
+  // A full reload + fresh login restores the last-used category/account.
+  await page.reload()
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
+  const form2 = page.locator('form.formpanel')
+  await expect(form2.getByLabel('分类')).toHaveValue(cat.id)
+  await expect(form2.getByLabel('收/付款账户')).toHaveValue(acc.id)
 })
