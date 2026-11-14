@@ -49,6 +49,8 @@ const members = ref<{ id: string; name: string; status: string }[]>([])
 const memberName = ref('')
 const selectedMember = ref('')
 const categories = ref<any[]>([])
+const projectSearch = ref('')
+const projectName = ref('')
 const projects = ref<any[]>([])
 const creditInstruments = ref<any[]>([])
 const statements = ref<any[]>([])
@@ -114,7 +116,7 @@ function clearPrivateState() {
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
   members.value = []; memberName.value = ''; selectedMember.value = ''
-  accounts.value = []; categories.value = []; projects.value = []; categoryEdit.value = null
+  accounts.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   debts.value = []; dueItems.value = []; transactions.value = []
@@ -325,6 +327,17 @@ async function run(fn: () => Promise<any>, okMsg: string) {
   }
   catch (e) { fail(e) }
   finally { loading.value = false }
+}
+
+async function addProject() {
+  const name = projectName.value.trim()
+  if (!name) return
+  await run(async () => {
+    const project = await api.createProject(name)
+    f.tx.project_id = project.id
+    projectSearch.value = ''
+    projectName.value = ''
+  }, '项目已新增')
 }
 
 async function addMember() {
@@ -633,7 +646,6 @@ const metricCards = computed(() => {
               <button type="button" class="btn-quiet" @click="scrollToFeatures()">了解功能 ↓</button>
             </div>
             <p v-if="sessionExpired" class="landing-notice" role="status">登录状态已过期，请重新进入。私人数据不会在此页显示。</p>
-            <p v-else class="hero-note">轻量、克制、没有广告；账本只属于你的家庭。</p>
           </div>
           <div class="hero-visual" aria-hidden="true">
             <div class="mochi-glow"></div>
@@ -644,7 +656,6 @@ const metricCards = computed(() => {
         <section id="features" class="features" aria-labelledby="features-title">
           <div class="section-head">
             <h2 id="features-title">已经能帮你做的事</h2>
-            <p>以下能力均由真实后端 API 与 SQLite 分录支撑；标注「规划中」的不冒充已上线。</p>
           </div>
           <div class="feature-grid">
             <article v-for="feat in features" :key="feat.title" class="feature-card">
@@ -663,7 +674,6 @@ const metricCards = computed(() => {
             <div><strong>自主托管</strong><p>前后端分离部署，数据库只保存在你自己的后端服务器。</p></div>
             <div><strong>会话保护</strong><p>HttpOnly 会话 Cookie、CSRF 校验、登录失败限流与家庭数据隔离。</p></div>
           </div>
-          <p class="how-note">公共页面不调用任何私人账务接口，也不展示真实家庭金额、成员或账单。</p>
         </section>
       </main>
 
@@ -686,7 +696,6 @@ const metricCards = computed(() => {
               <p v-if="loginError" class="err" role="alert">{{ loginError }}</p>
               <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '正在进入…' : '登录' }}</button>
             </form>
-            <p class="dialog-hint">连续输错会触发限流；会话使用 HttpOnly Cookie 保存。</p>
           </div>
         </div>
       </Transition>
@@ -741,7 +750,7 @@ const metricCards = computed(() => {
                   <span>{{ c.name }}</span><b>{{ formatMinor(c.expense_minor) }}</b></div>
                   <p v-if="!catRanking.length" class="empty">本周期暂无支出</p></div>
               </section>
-              <section class="panel transactions"><div class="paneltitle"><div><h2>最近流水</h2><span class="subinfo">来自真实业务表</span></div>
+              <section class="panel transactions"><div class="paneltitle"><div><h2>最近流水</h2></div>
                 <button class="switch" @click="go('ledger')">去记账 →</button></div>
                 <div class="translist"><div class="transaction" v-for="t in transactions.slice(0, 8)" :key="t.id">
                   <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
@@ -768,7 +777,7 @@ const metricCards = computed(() => {
                 <p v-if="!netWorth" class="empty">暂无资产数据</p>
                 <div class="note-box" v-if="netWorth">♡ 估值日期：{{ netWorth.investment?.valued_on || '尚未录入' }} · 未估值持仓 {{ netWorth.investment?.missing_valuations || 0 }} 项<br />手工估值，非实时行情；未估值持仓继续按成本计入净资产。</div>
               </section>
-              <section class="panel"><div class="paneltitle"><div><h2>各账户余额</h2><span class="subinfo">由分录重建</span></div></div>
+              <section class="panel"><div class="paneltitle"><div><h2>各账户余额</h2></div></div>
                 <div class="ranklist"><div v-for="a in (summary?.accounts || [])" :key="a.id" class="rankrow">
                   <span>{{ a.name }}</span><b>{{ formatMinor(a.balance_minor) }}</b></div></div>
               </section>
@@ -804,8 +813,9 @@ const metricCards = computed(() => {
               <template v-if="f.tx.type !== 'transfer'">
                 <label>分类<select v-model="f.tx.category_id"><option value="">请选择</option>
                   <option v-for="c in (f.tx.type === 'income' ? incomeCategories : expenseCategories)" :key="c.id" :value="c.id">{{ c.name }}</option></select></label>
+                <label>搜索项目<input v-model.trim="projectSearch" type="search" /></label>
                 <label>项目（可选）<select v-model="f.tx.project_id"><option value="">不关联</option>
-                  <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
+                  <option v-for="p in projects.filter(p => p.id === f.tx.project_id || (p.status === 'active' && p.name.toLocaleLowerCase().includes(projectSearch.toLocaleLowerCase())))" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
               </template>
               <template v-if="f.tx.type === 'expense'">
                 <label>支付工具<select v-model="f.tx.payment_kind"><option value="cash">现金/银行账户</option><option value="credit">信用工具</option></select></label>
@@ -825,6 +835,13 @@ const metricCards = computed(() => {
             </div>
             <button class="primary" @click="createTx()" :disabled="loading">确认入账</button>
           </section>
+          <details class="panel">
+            <summary>新建项目</summary>
+            <form @submit.prevent="addProject">
+              <label>项目名称<input v-model="projectName" required /></label>
+              <button class="ghost" type="submit" :disabled="loading">创建并关联</button>
+            </form>
+          </details>
           <section class="panel formpanel">
             <div class="paneltitle"><h2>分类管理</h2></div>
             <form @submit.prevent="addCategory">
@@ -893,7 +910,7 @@ const metricCards = computed(() => {
               <label>期初余额（元）<input v-model="f.account.opening_balance" inputmode="decimal" placeholder="0.00" /></label>
             </div><button class="primary" @click="createAccount()">创建账户</button>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>账户列表</h2><span class="subinfo">实时余额</span></div></div>
+          <section class="panel"><div class="paneltitle"><div><h2>账户列表</h2></div></div>
             <div class="ranklist"><div v-for="a in accounts" :key="a.id" class="rankrow">
               <span>{{ a.name }} <small>{{ a.kind }}</small></span><b>{{ formatMinor(a.balance_minor) }}</b></div>
               <p v-if="!accounts.length" class="empty">还没有账户</p></div>
@@ -914,7 +931,7 @@ const metricCards = computed(() => {
               <label>信用额度（元，留空=未配置）<input v-model="f.credit.credit_limit" inputmode="decimal" placeholder="如 20000" /></label>
             </div><button class="primary" @click="createCredit()">创建</button>
           </section>
-          <section class="panel formpanel"><div class="paneltitle"><div><h2>账单还款</h2><span class="subinfo">支持部分还款与提前还款</span></div></div>
+          <section class="panel formpanel"><div class="paneltitle"><div><h2>账单还款</h2></div></div>
             <div class="formgrid">
               <label>账单<select v-model="f.payment.statement_id"><option value="">请选择</option>
                 <option v-for="s in statements" :key="s.id" :value="s.id">{{ s.instrument_name }} · {{ s.cycle_start_on }}~{{ s.cycle_end_on }} · 余 {{ formatMinor(s.remaining_minor) }}</option></select></label>
@@ -924,7 +941,7 @@ const metricCards = computed(() => {
               <label>日期<input type="date" v-model="f.payment.paid_on" /></label>
             </div><button class="ghost" @click="payStatement()">确认还款</button>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>信用工具</h2><span class="subinfo">额度未配置显示「未配置」，不计算假百分比</span></div></div>
+          <section class="panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
             <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow">
               <span>{{ c.name }} <small>{{ c.kind }} · {{ c.status }}</small></span>
               <b v-if="creditDash">{{ instrumentUsage(c.id) }}</b>
@@ -1151,7 +1168,7 @@ const metricCards = computed(() => {
             <p v-if="!dividendHistory" class="empty">分红记录加载中或后端不可用</p>
             <div class="note-box" v-if="dividendHistory?.summary?.unknown_tax_count">♡ 有 {{ dividendHistory.summary.unknown_tax_count }} 笔分红税额未填写（税前合计 {{ formatMinor(dividendHistory.summary.unknown_gross_minor) }}），净收益口径不完整，请勿据此计算税负。</div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>持仓</h2><span class="subinfo">可重建投影，历史交易不可变</span></div></div>
+          <section class="panel"><div class="paneltitle"><div><h2>持仓</h2></div></div>
             <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
               <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
               <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%（总收益 ÷ 累计买入成本，非年化）</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.last_valued_on"> · 估值日 {{ p.last_valued_on }}</span><span v-if="isValuationStale(p.last_valued_on)" class="overdue"> · 估值待更新</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
@@ -1241,12 +1258,12 @@ form label { margin-bottom: 13px; }
 .landing-login-link:hover{transform:translateY(-1px);box-shadow:var(--shadow);background:var(--soft);}
 .landing-login-link:active{transform:scale(.98);}
 .hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);align-items:center;gap:32px;padding:48px 0 56px;}
-.hero-copy>.hero-eyebrow,.hero-copy>h1,.hero-copy>.hero-sub,.hero-copy>.hero-actions,.hero-copy>.hero-note,.hero-copy>.landing-notice{animation:rise-in var(--motion-hero) var(--ease-soft) both;}
+.hero-copy>.hero-eyebrow,.hero-copy>h1,.hero-copy>.hero-sub,.hero-copy>.hero-actions,.hero-copy>.landing-notice{animation:rise-in var(--motion-hero) var(--ease-soft) both;}
 .hero-copy>.hero-eyebrow{animation-delay:0ms;}
 .hero-copy>h1{animation-delay:30ms;}
 .hero-copy>.hero-sub{animation-delay:60ms;}
 .hero-copy>.hero-actions{animation-delay:90ms;}
-.hero-copy>.hero-note,.hero-copy>.landing-notice{animation-delay:120ms;}
+.hero-copy>.landing-notice{animation-delay:120ms;}
 .hero-eyebrow{font-size:12px;color:var(--primary-deep);background:var(--primary-pale);display:inline-block;padding:7px 13px;border-radius:999px;margin:0 0 20px;}
 .hero h1{font-size:clamp(30px,3.4vw,44px);line-height:1.3;letter-spacing:-1.3px;margin:0 0 18px;font-weight:850;}
 .hero-sub{font-size:15px;line-height:1.85;color:var(--muted);margin:0 0 28px;max-width:34em;}
@@ -1257,7 +1274,6 @@ form label { margin-bottom: 13px; }
 .btn-primary:disabled{opacity:.6;transform:none;cursor:default;}
 .btn-quiet{border:0;background:transparent;color:var(--primary-deep);font-size:13px;font-weight:650;padding:12px 10px;min-height:44px;}
 .btn-quiet:hover{text-decoration:underline;}
-.hero-note{font-size:12px;color:var(--muted);margin:24px 0 0;}
 .landing-notice{font-size:12px;color:var(--primary-deep);background:var(--soft);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:24px 0 0;animation:fade-in var(--motion-base) var(--ease-soft) both;}
 .hero-visual{position:relative;display:grid;place-items:center;min-height:320px;}
 .mochi-glow{position:absolute;width:min(340px,80%);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,rgba(249,232,223,.95) 0%,rgba(249,232,223,0) 70%);}
@@ -1279,7 +1295,6 @@ form label { margin-bottom: 13px; }
 .how-grid>div{background:var(--soft);border-radius:var(--radius);padding:22px;}
 .how-grid strong{font-size:14px;}
 .how-grid p{font-size:12px;line-height:1.8;color:var(--muted);margin:9px 0 0;}
-.how-note{font-size:12px;color:var(--muted);margin:20px 0 0;line-height:1.8;}
 .landing-footer{border-top:1px solid var(--border);padding:24px 0 8px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);}
 .footer-brand{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text);font-weight:750;}
 .footer-brand img{width:28px;height:28px;object-fit:contain;border-radius:9px;}
@@ -1297,7 +1312,6 @@ form label { margin-bottom: 13px; }
 .login-dialog form{text-align:left;}
 .login-dialog .btn-primary{width:100%;margin-top:8px;}
 .login-dialog .err{animation:fade-in var(--motion-base) var(--ease-soft) both;}
-.dialog-hint{font-size:11px;color:var(--muted);line-height:1.7;margin:18px 0 0;}
 .dialog-enter-active,.dialog-leave-active{transition:opacity var(--motion-base) var(--ease-soft);}
 .dialog-enter-active .login-dialog,.dialog-leave-active .login-dialog{transition:transform var(--motion-base) var(--ease-soft),opacity var(--motion-base) var(--ease-soft);}
 .dialog-enter-from,.dialog-leave-to{opacity:0;}
@@ -1335,4 +1349,23 @@ form label { margin-bottom: 13px; }
   .hero-copy>*,.mochi-float,.toast.show,.login-dialog .err,.landing-notice{animation:none !important;}
   .landing-login-link,.btn-primary,.dialog-enter-active,.dialog-leave-active,.view-enter-active,.view-leave-active{transition:none !important;}
 }
+
+/* Readable text and touch targets in both the ledger and the public page. */
+.website, .landing { font-size: 16px; line-height: 1.55; }
+.website .greeting h1 { font-size: clamp(26px, 3vw, 36px); }
+.website .panel h2 { font-size: 19px; }
+.website .greeting p, .website .rankrow, .website .txname,
+.website .txamount, .website .nav button { font-size: 15px; }
+.website .statlabel, .website .subinfo, .website .txcat { font-size: 13px; }
+form label, .formgrid label { font-size: 14px; }
+input, select { font-size: 16px; min-height: 44px; }
+.website .primary, .website .ghost, .login-dialog .btn-primary {
+  font-size: 15px;
+  min-height: 44px;
+}
+.hero-sub, .feature-card p, .login-dialog #login-desc { font-size: 16px; }
+.feature-card h3 { font-size: 19px; }
+details.panel summary { cursor: pointer; font-size: 17px; font-weight: 750; }
+details.panel form { margin-top: 14px; }
+.website .rankrow > *, .website .txbody { overflow-wrap: anywhere; }
 </style>
