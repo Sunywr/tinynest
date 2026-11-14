@@ -108,3 +108,51 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"id": id})
 	}
 }
+
+func (a *API) handleAccountJournal(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	var code string
+	err := a.DB.QueryRowContext(r.Context(),
+		`SELECT ledger_code FROM accounts WHERE id=? AND household_id=?`,
+		r.PathValue("id"), p.HouseholdID).Scan(&code)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, 404, "not_found", "账户不存在")
+		return
+	}
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT e.id,e.occurred_on,e.biz_type,e.reversal_of,SUM(l.debit_minor-l.credit_minor)
+		FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id
+		WHERE e.household_id=? AND l.account_code=?
+		GROUP BY e.id,e.occurred_on,e.biz_type,e.reversal_of,e.created_at
+		ORDER BY e.occurred_on DESC,e.created_at DESC,e.id DESC LIMIT 100`, p.HouseholdID, code)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID         string  `json:"id"`
+		Date       string  `json:"occurred_on"`
+		Kind       string  `json:"kind"`
+		ReversalOf *string `json:"reversal_of"`
+		Change     int64   `json:"change_minor"`
+	}
+	items := []item{}
+	for rows.Next() {
+		var line item
+		if err := rows.Scan(&line.ID, &line.Date, &line.Kind, &line.ReversalOf, &line.Change); err != nil {
+			internalErr(w, err)
+			return
+		}
+		items = append(items, line)
+	}
+	if err := rows.Err(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "limit": 100})
+}

@@ -46,6 +46,7 @@ const features = [
 
 const summary = ref<any>(null)
 const creditDash = ref<any>(null)
+const accountJournal = ref<Awaited<ReturnType<typeof api.accountJournal>>['items']>([])
 const accountEdit = ref<{ id: string; name: string; subtype: string; owner_member_id: string; note: string } | null>(null)
 const accounts = ref<any[]>([])
 const members = ref<{ id: string; name: string; status: string }[]>([])
@@ -122,7 +123,7 @@ function clearPrivateState() {
   instDetail.value = null; debtDetail.value = null
   users.value = []; userDraft.username = ''; userDraft.password = '';
   members.value = []; memberName.value = ''; selectedMember.value = ''
-  accounts.value = []; accountEdit.value = null; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
+  accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   debts.value = []; dueItems.value = []; transactions.value = []
@@ -431,12 +432,13 @@ function createTx() {
 }
 async function openAccount(event: Event) {
   const id = (event.target as HTMLSelectElement).value
-  accountEdit.value = null
+  accountEdit.value = null; accountJournal.value = []
   if (!id) return
   loading.value = true
   try {
-    const account = await api.account(id)
+    const [account, journal] = await Promise.all([api.account(id), api.accountJournal(id)])
     if (!authed.value) return
+    accountJournal.value = journal.items
     accountEdit.value = {
       id, name: account.name, subtype: account.subtype ?? '',
       owner_member_id: account.owner_member_id ?? '', note: account.note ?? '',
@@ -1020,7 +1022,7 @@ const metricCards = computed(() => {
               <p v-if="!accounts.length" class="empty">还没有账户</p></div>
           </section>
           <details class="panel">
-            <summary>编辑账户资料</summary>
+            <summary>账户资料与流水</summary>
             <form @submit.prevent="saveAccount">
               <label>选择账户<select :disabled="loading" @change="openAccount">
                 <option value="">请选择</option>
@@ -1039,6 +1041,15 @@ const metricCards = computed(() => {
                 <button class="ghost" type="submit" :disabled="loading">保存账户资料</button>
               </template>
             </form>
+            <div v-if="accountEdit" class="ranklist">
+              <h2>近期资金流水</h2>
+              <div v-for="item in accountJournal" :key="item.id" class="rankrow">
+                <span>{{ item.occurred_on }} · {{ item.reversal_of ? '冲正' : item.change_minor > 0 ? '资金增加' : item.change_minor < 0 ? '资金减少' : '无净变动' }}</span>
+                <b>{{ item.change_minor > 0 ? '+' : '' }}{{ formatMinor(item.change_minor) }}</b>
+              </div>
+              <p v-if="!accountJournal.length" class="empty">暂无资金流水</p>
+              <p v-else-if="accountJournal.length === 100" class="subinfo">显示最近 100 笔</p>
+            </div>
           </details>
         </template>
 

@@ -40,6 +40,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "POST /api/v1/accounts", a.handleCreateAccount)
 	a.route(mux, "GET /api/v1/accounts/{id}", a.handleGetAccount)
 	a.route(mux, "PATCH /api/v1/accounts/{id}", a.handleUpdateAccount)
+	a.route(mux, "GET /api/v1/accounts/{id}/journal", a.handleAccountJournal)
 	a.route(mux, "GET /api/v1/accounts/{id}/balance", a.handleAccountBalance)
 
 	a.registerTransactions(mux)

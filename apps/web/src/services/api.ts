@@ -72,6 +72,7 @@ export const api = {
   account: (id: string) => get(`/accounts/${encodeURIComponent(id)}`),
   updateAccount: (id: string, body: { name: string; subtype: string; owner_member_id: string; note: string }) =>
     request(`/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  accountJournal: (id: string) => get<{ items: { id: string; occurred_on: string; change_minor: number; reversal_of: string | null }[] }>(`/accounts/${encodeURIComponent(id)}/journal`),
   accountBalance: (id: string) => get(`/accounts/${id}/balance`),
 
   transactions: (params = '') => get(`/transactions${params}`),

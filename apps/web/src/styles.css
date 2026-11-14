@@ -73,6 +73,7 @@ body.dialog-open{overflow:hidden;}
 
 @media (min-width: 841px) {
   .stage:not(.mobile-stage) .website {
+    max-width: 1600px;
     height: calc(100dvh - 48px);
     min-height: 0;
     grid-template-rows: minmax(0, 1fr);
@@ -85,5 +86,7 @@ body.dialog-open{overflow:hidden;}
   }
   .stage:not(.mobile-stage) .website > .main {
     scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #b79580 transparent;
   }
 }

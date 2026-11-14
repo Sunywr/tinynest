@@ -74,6 +74,8 @@
 | GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注），余额由分录计算 |
 | GET | `/ledger/accounts` | PLANNED | 科目表（调试/对账） |
 
+| GET | `/accounts/{id}/journal` | IMPLEMENTED | 本家庭账户最近 100 笔分录净变动，含期初余额和冲正 |
+
 ### `/transactions` · `/refunds`（S2 / S4）
 
 | 方法 | 路径 | 状态 | 说明 |
