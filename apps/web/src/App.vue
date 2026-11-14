@@ -44,6 +44,7 @@ const positions = ref<any[]>([])
 const feeRules = ref<any[]>([])
 const feePreview = ref<any>(null)
 const netWorth = ref<any>(null)
+const dividendHistory = ref<any>(null)
 
 const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense'))
 const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income'))
@@ -136,6 +137,7 @@ async function loadAll() {
     [api.assets(), v => assets.value = v.items || []],
     [api.positions(), v => positions.value = v.items || []],
     [api.feeRules(), v => feeRules.value = v.items || []],
+    [api.dividends(), v => dividendHistory.value = v],
     [api.netWorth(range.from, range.to), v => netWorth.value = v],
     [api.summary(range.from, range.to), v => summary.value = v],
     [api.dashboardCredit(range.from, range.to), v => creditDash.value = v],
@@ -392,6 +394,14 @@ function createValuation() {
   const v = minor(f.valuation.market_value)
   if (!f.valuation.asset_id || v === null || v < 0) return toast('请填写资产与估值金额')
   return run(() => api.createValuation({ asset_id: f.valuation.asset_id, valued_on: f.valuation.valued_on, market_value_minor: v }), '估值已更新')
+}
+// Manual valuations are never real-time. Older than 30 days -> ask for an update.
+function isValuationStale(on?: string | null): boolean {
+  if (!on) return false
+  const now = Date.parse(today() + 'T00:00:00Z')
+  const valued = Date.parse(on + 'T00:00:00Z')
+  if (!Number.isFinite(now) || !Number.isFinite(valued)) return false
+  return Math.floor((now - valued) / 86_400_000) > 30
 }
 function refund(txId: string) {
   f.refund.transaction_id = txId
@@ -862,10 +872,22 @@ const metricCards = computed(() => {
               <label>估值日期<input type="date" v-model="f.valuation.valued_on" /></label>
             </div><button class="ghost" @click="createValuation()">更新估值</button>
           </section>
+          <section class="panel"><div class="paneltitle"><div><h2>分红记录与年度汇总</h2><span class="subinfo">来自真实业务表；税额留空代表未知，不按 0 处理</span></div></div>
+            <div class="ranklist" v-if="dividendHistory">
+              <div class="rankrow"><span>累计税前 / 已知税 / 净到账</span><b>{{ formatMinor(dividendHistory.summary?.total_gross_minor) }} / {{ formatMinor(dividendHistory.summary?.total_tax_minor) }} / {{ formatMinor(dividendHistory.summary?.total_net_minor) }}</b></div>
+              <div class="rankrow" v-for="y in (dividendHistory.summary?.by_year || [])" :key="y.year">
+                <span>{{ y.year }} 年 · {{ y.count }} 笔</span><b>税前 {{ formatMinor(y.gross_minor) }} · 净 {{ formatMinor(y.net_minor) }}<span v-if="y.unknown_tax_count"> · {{ y.unknown_tax_count }} 笔税额待核验</span></b></div>
+              <div class="rankrow" v-for="d in (dividendHistory.items || [])" :key="d.id">
+                <span>{{ d.received_on }} · {{ d.code }} {{ d.name }}</span><b>{{ formatMinor(d.gross_minor) }} − {{ d.tax_minor == null ? '税额未填写' : formatMinor(d.tax_minor) }} ＝ {{ formatMinor(d.net_minor) }}<span v-if="d.tax_unknown" class="overdue"> · 税额未知</span></b></div>
+              <p v-if="!dividendHistory.items?.length" class="empty">暂无分红记录</p>
+            </div>
+            <p v-if="!dividendHistory" class="empty">分红记录加载中或后端不可用</p>
+            <div class="note-box" v-if="dividendHistory?.summary?.unknown_tax_count">♡ 有 {{ dividendHistory.summary.unknown_tax_count }} 笔分红税额未填写（税前合计 {{ formatMinor(dividendHistory.summary.unknown_gross_minor) }}），净收益口径不完整，请勿据此计算税负。</div>
+          </section>
           <section class="panel"><div class="paneltitle"><div><h2>持仓</h2><span class="subinfo">可重建投影，历史交易不可变</span></div></div>
             <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
               <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
-              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
+              <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%（总收益 ÷ 累计买入成本，非年化）</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.last_valued_on"> · 估值日 {{ p.last_valued_on }}</span><span v-if="isValuationStale(p.last_valued_on)" class="overdue"> · 估值待更新</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
               <p v-if="!positions.length" class="empty">暂无持仓</p></div>
           </section>
         </template>

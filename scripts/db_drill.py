@@ -5,8 +5,11 @@ On a throwaway directory this script:
   1. builds the Go API and migrates an EMPTY SQLite (all embedded migrations),
   2. exercises setup + login + one account write through the real HTTP API,
   3. restarts the server against the same file and verifies data survives,
-  4. takes an online backup, restores it into a NEW file and verifies
-     quick_check + foreign_key_check on the restored copy.
+  4. restarts a THIRD time to prove repeat migrations are a no-op,
+  5. verifies the journal is balanced (sum(debit) == sum(credit)),
+  6. takes an online backup and restores it into a NEW file,
+  7. compares full business snapshots of live and restored databases,
+  8. verifies quick_check + foreign_key_check on both copies.
 
 Usage: python3 scripts/db_drill.py --api-dir apps/api [--keep]
 Requires: go on PATH. Listens on 127.0.0.1:18788 (never a production port).
@@ -88,6 +91,27 @@ def check(db_path: Path) -> None:
     print(f"  quick_check=ok foreign_key_check=0 migrations={versions}")
 
 
+def business_snapshot(db_path: Path) -> dict:
+    """Business totals rebuilt from the journal, used to prove a restore is identical."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        return {
+            "migrations": [r[0] for r in conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version")],
+            "accounts": conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0],
+            "journal_entries": conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],
+            "journal_lines": conn.execute("SELECT COUNT(*) FROM journal_lines").fetchone()[0],
+            "debit_minor": conn.execute(
+                "SELECT COALESCE(SUM(debit_minor),0) FROM journal_lines").fetchone()[0],
+            "credit_minor": conn.execute(
+                "SELECT COALESCE(SUM(credit_minor),0) FROM journal_lines").fetchone()[0],
+            "opening_minor": conn.execute(
+                "SELECT COALESCE(SUM(amount_minor),0) FROM account_opening_balances").fetchone()[0],
+        }
+    finally:
+        conn.close()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--api-dir", required=True)
@@ -97,15 +121,15 @@ def main() -> None:
     work = Path(tempfile.mkdtemp(prefix="tinynest-drill-"))
     print(f"drill workdir: {work}")
 
-    print("[1/6] go build ./cmd/server")
+    print("[1/8] go build ./cmd/server")
     subprocess.run(["go", "build", "-o", str(work / "tinynest-server"), "./cmd/server"],
                    cwd=api, check=True)
 
-    print("[2/6] start on EMPTY database -> embedded migrations apply")
+    print("[2/8] start on EMPTY database -> embedded migrations apply")
     (work / "data").mkdir()
     proc, log = start_server(work, "server1.log")
 
-    print("[3/6] setup + login + create account via real HTTP")
+    print("[3/8] setup + login + create account via real HTTP")
     code, _ = api_call("POST", "/api/v1/setup",
                    {"household_name": "演练小家", "username": "admin", "password": "correct-horse-battery"},
                    setup=SETUP_TOKEN)
@@ -127,15 +151,24 @@ def main() -> None:
     assert code == 201, f"account create failed: {acct}"
     account_id = acct["id"]
 
-    print("[4/6] restart server against the SAME file (crash-recovery shape)")
+    print("[4/8] restart server against the SAME file (crash-recovery shape)")
     proc.terminate(); proc.wait(timeout=15); log.close()
     proc, log = start_server(work, "server2.log")
     code, bal = api_call("GET", f"/api/v1/accounts/{account_id}/balance", cookie=cookie)
     assert code == 200 and bal["balance_minor"] == 50000, f"data lost across restart: {bal}"
     print(f"  balance survived restart: {bal['balance_minor']}")
 
-    print("[5/6] online backup -> restore into a NEW file")
     db = work / "data" / "drill.sqlite3"
+    print("[5/8] start a THIRD time on the existing DB (repeat migrations are a no-op)")
+    snap_before = business_snapshot(db)
+    proc.terminate(); proc.wait(timeout=15); log.close()
+    proc, log = start_server(work, "server3.log")
+    snap_after = business_snapshot(db)
+    assert snap_before == snap_after, f"repeat migration changed the database: {snap_before} -> {snap_after}"
+    assert snap_after["debit_minor"] == snap_after["credit_minor"], "journal lines are not balanced"
+    print(f"  repeat-migration snapshot unchanged: {snap_after}")
+
+    print("[6/8] online backup -> restore into a NEW file")
     backup = work / "backups" / "restored-source.sqlite3"
     backup.parent.mkdir()
     src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -146,11 +179,18 @@ def main() -> None:
     shutil.copy2(backup, restored)
     check(restored)
 
-    print("[6/6] final integrity check on the live database")
+    print("[7/8] compare business summaries of live and restored databases")
+    live = business_snapshot(db)
+    copy = business_snapshot(restored)
+    assert live == copy, f"restored DB differs from live: {live} vs {copy}"
+    assert copy["debit_minor"] == copy["credit_minor"], "restored journal lines are not balanced"
+    print(f"  identical business snapshot: {copy}")
+
+    print("[8/8] final integrity check on the live database")
     check(db)
 
     proc.terminate(); proc.wait(timeout=15); log.close()
-    print("DRILL PASS: empty-migrate / restart / backup / restore / quick_check / foreign_key_check")
+    print("DRILL PASS: empty-migrate / restart / repeat-migrate / balanced-journal / backup / restore / snapshot-match / quick_check / foreign_key_check")
     if not a.keep:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -33,6 +33,16 @@ async function ensureLogin(page: import('@playwright/test').Page) {
 
 test('01 首次初始化（一次性令牌）', async ({ page }) => {
   await page.goto('/')
+  // An anonymous request with a wrong bootstrap token must not be able to claim
+  // the household. This is a real HTTP call through the Vite proxy to the Go API.
+  const denied = await page.request.post('/api/v1/setup', {
+    data: { household_name: '抢注家庭', username: 'attacker', password: 'correct-horse-battery' },
+    headers: { 'X-Setup-Token': 'wrong-token' },
+  })
+  // Contract: a wrong token is 401 "unauthorized"; a missing configured token
+  // would be 403 "setup_disabled" (setup.go:62-70). Either way no household is created.
+  expect(denied.status()).toBe(401)
+  expect((await denied.json()).error.code).toBe('unauthorized')
   await page.getByRole('button', { name: '首次初始化' }).click()
   await page.getByLabel('家庭名称').fill('E2E 小家')
   await page.getByLabel('一次性初始化令牌').fill(SETUP_TOKEN)
@@ -426,4 +436,134 @@ test('25 首页资产构成与净资产口径一致', async ({ page }) => {
   const amount = (s: string) => (s.match(/-?¥[\d,]+\.\d{2}/) || [''])[0]
   expect(amount(row)).toBe(amount(card))
   expect(amount(row)).not.toBe('')
+})
+
+// --- V0.1.3 preflight: manual-acceptance gaps, still real Edge + Go API + SQLite ---
+
+function yuan(minor: number): string {
+  const sign = minor < 0 ? '-' : ''
+  const v = Math.abs(Math.trunc(minor))
+  return `${sign}¥${Math.floor(v / 100).toLocaleString('zh-CN')}.${String(v % 100).padStart(2, '0')}`
+}
+
+test('26 初始化不可重复（409）', async ({ page }) => {
+  await ensureLogin(page)
+  const res = await page.request.post('/api/v1/setup', {
+    data: { household_name: '再次抢注', username: 'admin2', password: 'correct-horse-battery' },
+    headers: { 'X-Setup-Token': SETUP_TOKEN },
+  })
+  expect(res.status()).toBe(409)
+})
+
+test('27 API 不可用时显示错误而非伪造金额', async ({ page }) => {
+  await ensureLogin(page)
+  await expect(page.locator('.stats.metrics .stat').first()).toBeVisible()
+  await page.route('**/api/v1/**', route => route.abort())
+  await page.reload()
+  await expect(page.getByLabel('用户名')).toBeVisible()
+  await expect(page.locator('.stats.metrics')).toHaveCount(0)
+  await page.unroute('**/api/v1/**')
+})
+
+test('28 超额退款被拒绝且不改变净支出', async ({ page }) => {
+  await ensureLogin(page)
+  const txs = (await (await page.request.get('/api/v1/transactions')).json()).items as any[]
+  const tx = txs.find(t => t.type === 'expense' && t.status === 'posted')
+  expect(tx, 'need a posted expense').toBeTruthy()
+  const accounts = (await (await page.request.get('/api/v1/accounts')).json()).items as any[]
+  const cash = accounts.find(a => a.kind === 'cash')
+  expect(cash).toBeTruthy()
+  const before = (await (await page.request.get(`/api/v1/refunds/by-transaction/${tx.id}`)).json()).net_expense_minor
+
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.getByLabel('原交易').selectOption(tx.id)
+  await page.getByLabel('退款金额').fill('999999')
+  await page.getByLabel('到账账户 / 信用工具').selectOption(cash.id)
+  await page.getByRole('button', { name: '提交退款' }).click()
+  await expect(page.locator('.toast')).toContainText('退款金额不合法')
+  const after = (await (await page.request.get(`/api/v1/refunds/by-transaction/${tx.id}`)).json()).net_expense_minor
+  expect(after).toBe(before)
+})
+
+test('29 自定义 5 号至次月 4 号区间与真实 API 一致', async ({ page }) => {
+  await ensureLogin(page)
+  const from = fmt(new Date(year, month - 1, 5))
+  const to = fmt(new Date(year, month, 4))
+  await page.getByLabel('起始').fill(from)
+  await page.getByLabel('截止').fill(to)
+  await page.getByRole('button', { name: '应用周期' }).click()
+  const s = await (await page.request.get(`/api/v1/dashboard/summary?from=${from}&to=${to}`)).json()
+  await expect(page.locator('.stat', { hasText: '本期收入' })).toContainText(yuan(s.income_minor))
+  await expect(page.locator('.stat', { hasText: '本期支出' })).toContainText(yuan(s.expense_minor))
+  await expect(page.locator('.stat', { hasText: '实际现金净流量' })).toContainText(yuan(s.cashflow_minor))
+  await expect(page.locator('.day')).toContainText(from)
+})
+
+test('30 自有账户转账不计入日常收支', async ({ page }) => {
+  await ensureLogin(page)
+  const stat = page.locator('.stat', { hasText: '本期支出' })
+  const amount = (s: string) => (s.match(/-?¥[\d,]+\.\d{2}/) || [''])[0]
+  const before = amount(await stat.innerText())
+
+  await page.getByRole('button', { name: '家庭账户' }).click()
+  await page.getByLabel('名称').fill('E2E 备用卡')
+  await page.getByLabel('期初余额（元）').fill('0')
+  await page.getByRole('button', { name: '创建账户' }).click()
+  await expect(page.getByText('账户已创建')).toBeVisible()
+
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.tabs').getByRole('button', { name: '转账' }).click()
+  await page.getByLabel('金额（元）').fill('100')
+  await page.getByLabel('转出账户').selectOption({ label: 'E2E 工资卡' })
+  await page.getByLabel('转入账户').selectOption({ label: 'E2E 备用卡' })
+  await page.getByRole('button', { name: '确认入账' }).click()
+  // App.vue createTx() toasts "转账已入账" for the transfer branch.
+  await expect(page.getByText('转账已入账')).toBeVisible()
+
+  await page.getByRole('button', { name: '首页概览' }).click()
+  await expect.poll(async () => amount(await stat.innerText())).toBe(before)
+})
+
+test('31 分红历史/年度汇总、税额未知与估值日期提示', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '投资' }).click()
+  const divPanel = page.locator('section.panel', { hasText: '分红与手工估值' })
+  await divPanel.getByLabel('分红资产').selectOption({ label: 'E2E 股票' })
+  await divPanel.getByLabel('到账账户').selectOption({ label: 'E2E 券商账户' })
+  await divPanel.getByLabel('税前分红（元）').fill('100')
+  await divPanel.getByLabel('红利税（元，可留空）').fill('10')
+  await page.getByRole('button', { name: '记录分红' }).click()
+  await expect(page.getByText('分红已入账')).toBeVisible()
+
+  // A second dividend with an unknown tax must NOT be treated as zero tax.
+  await divPanel.getByLabel('税前分红（元）').fill('50')
+  await divPanel.getByLabel('红利税（元，可留空）').fill('')
+  await page.getByRole('button', { name: '记录分红' }).click()
+  await expect(page.getByText('分红已入账')).toBeVisible()
+
+  const hist = page.locator('section.panel', { hasText: '分红记录与年度汇总' })
+  await expect(hist.locator('.rankrow').first()).toContainText('¥150.00')
+  await expect(hist.locator('.rankrow').first()).toContainText('¥10.00')
+  await expect(hist.locator('.rankrow').first()).toContainText('¥140.00')
+  await expect(hist).toContainText('税额未知')
+  await expect(hist.locator('.note-box')).toContainText('1 笔分红税额未填写')
+  await expect(hist).toContainText('年 · 2 笔')
+
+  // A stale manual valuation must be labelled, never presented as real-time.
+  const staleDay = fmt(new Date(year, month - 1, day - 60))
+  await divPanel.getByLabel('估值资产').selectOption({ label: 'E2E 股票' })
+  await divPanel.getByLabel('市值（元）').fill('1400')
+  await divPanel.getByLabel('估值日期').fill(staleDay)
+  await page.getByRole('button', { name: '更新估值' }).click()
+  await expect(page.getByText('估值已更新')).toBeVisible()
+  // The dividend-history rows also contain the asset code, so scope to the
+  // holdings panel ("可重建投影") instead of a global .rankrow filter.
+  const positions = (await (await page.request.get('/api/v1/investments/positions')).json()).items as any[]
+  const p = positions.find(x => x.code === 'E2E600')
+  expect(p.last_valued_on).toBe(staleDay)
+  expect(p.market_value_minor).toBe(140000)
+  const holding = page.locator('section.panel', { hasText: '可重建投影' }).locator('.rankrow', { hasText: 'E2E600' })
+  await expect(holding).toContainText('估值日')
+  await expect(holding).toContainText('估值待更新')
+  await expect(holding).toContainText('非年化')
 })

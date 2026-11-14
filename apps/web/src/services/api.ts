@@ -101,6 +101,7 @@ export const api = {
   createTrade: (body: any) => post('/investments/trades', body),
   positions: () => get('/investments/positions'),
   createDividend: (body: any) => post('/investments/dividends', body),
+  dividends: (params = '') => get(`/investments/dividends${params}`),
   createValuation: (body: any) => post('/investments/valuations', body),
   feeRules: (accountId = '') => get(`/investments/fee-rules${accountId ? `?account_id=${accountId}` : ''}`),
   createFeeRule: (body: any) => post('/investments/fee-rules', body),

@@ -38,6 +38,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerDashboard(mux)
 	a.registerV011(mux)
 	a.registerV012(mux)
+	a.registerV013(mux)
 }
 
 // --- bootstrap & identity ---------------------------------------------------

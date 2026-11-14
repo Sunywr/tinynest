@@ -132,6 +132,7 @@
 | GET/POST | `/investments/trades` | IMPLEMENTED | 买入/卖出（移动加权平均成本） |
 | GET | `/investments/positions` | IMPLEMENTED | 数量/总成本/移动均价/已实现·未实现收益/净分红/参考收益率；口径第 9 项已确认为「总收益 ÷ 累计买入成本」，**不得标为年化** |
 | POST | `/investments/dividends` | IMPLEMENTED | `tax_minor: null` = 未填写（不默认 0） |
+| GET | `/investments/dividends` | IMPLEMENTED（V0.1.3 预检） | 分红历史与年度汇总；支持 `?asset_id=` / `?from=` / `?to=`；返回逐笔 `tax_unknown`、`entry_id` 与 `by_year`；SQL 层 `household_id` 隔离，未知税额不按 0 处理 |
 | POST | `/investments/valuations` | IMPLEMENTED | 手工录入估值，估值日期显式展示 |
 | POST | `/investments/fee-rules` | IMPLEMENTED | 按投资账户追加版本。交易按成交日选择已生效版本并保存快照 |
 | GET | `/investments/fee-rules` | IMPLEMENTED（V0.1.2） | 本家庭费率规则列表，支持 `?account_id=`；返回版本、生效日、各项 bps 与最低佣金；SQL 层 `household_id` 隔离 |
