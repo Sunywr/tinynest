@@ -1,7 +1,7 @@
 # TinyNest / 小家 · 任意 Coding Agent 规范
 
 > **状态说明（2026-11-13）**：本文件原为 **Phase 0** 规范。自 `feature/tinynest-phase0-v0.1` 起，项目已进入 **V0.1 家庭账本主体** 阶段：复式记账内核、真实 SQLite 持久化、登录/会话/CSRF/审计、真实 API 前端界面均已实现。
-> 凡标注「Phase 0（历史）」的条目只描述历史阶段，**不再约束当前代码**。当前开发请以「V0.1 当前守则」和 V0.1 设计/审查文档为准。原始历史计划（`plan.md`、`.plan/*`）保留原文，不擅自改写。
+> 凡标注「Phase 0（历史）」的条目只描述历史阶段，**不再约束当前代码**。当前开发请以「V0.1 当前守则」和 V0.1 设计/审查文档为准。Phase 0 的交付见 `docs/execution-report.md`，原计划可从 Git 历史查阅。
 
 ## 当前阶段从 main 开始
 
@@ -36,7 +36,7 @@
 ## Phase 0（历史，仅存档，不再约束当前代码）
 
 - 原守则「仅实现 Phase 0，禁止账号/授权、流水 CRUD、报表真实计算」「Go 后端仅提供健康检查」「Demo 页面金额一律虚构」「完成 Phase 0 后停止等待真实需求」等，均已被 V0.1 计划取代。
-- `plan.md` 与 `.plan/*` 为历史阶段计划，保留原文；`docs/execution-report.md` 为 Phase 0 验收归档。
+- `docs/execution-report.md` 为 Phase 0 验收归档。
 - `previews/*` 为 Phase 0 静态原型（虚构金额），不代表当前 `apps/web` 的真实 API 界面。
 
 ## 一句话任务（当前）

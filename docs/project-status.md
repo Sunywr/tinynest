@@ -8,6 +8,14 @@
 | V0.1 | 复式记账、SQLite 迁移、登录会话、主要账务 API 与 Vue 界面已落地。逐路由状态见 [API 契约](api-v0.1.md) |
 | PR #1 | 合入 V0.1 主体及初始化授权、家庭隔离、业务日期、Cookie 配置和限流修复，见 [修复报告](reviews/v0.1-pr-remediation-report.md) |
 | 本机复验 | Go 测试、vet、build，npm ci 与前端生产构建（含类型检查），品牌哈希均通过 |
-| 发布 | 尚未达到发布条件。2026-11-14，十项推荐账务口径均已由用户确认。待完成对应实现、边界回归和其他生产门禁。开发验证使用测试数据 |
+| 发布 | `d1e0a32` 已部署生产，双机 HTTPS 同源访问、MySQL 就绪、初始化关闭和公开首页实测通过。上线前 MySQL 备份任务执行成功 |
+| 公开首页 | [登录、动效与 PWA 说明](public-landing.md)。本地 49 条浏览器测试通过，发布分支 [CI 四项通过](https://github.com/Sunywr/tinynest/actions/runs/43583991039) |
+| 账务口径 | [十项已确认](reviews/v0.1-accounting-decisions.md)。实施缺口按当前代码逐项核对 |
 
-实施范围见 [V0.1 计划](plan-v0.1.md)，未完成模块见 [实施报告](../IMPLEMENTATION_REPORT.md)，发布条件见 [发布门禁](reviews/v0.1-release-gates.md)。从 [Agent 规范](../AGENTS.md) 和 [开发说明](DEVELOPMENT.md) 接手。
+## 待实施与待验收
+
+- [核心账本计划](plan-v0.1.md)保留，家庭成员档案、分类编辑和部分资料管理仍需补齐。
+- [短期发布缺口](plans/next-implementation-plan.md)保留。iPhone Safari 实机 PWA、生产 MySQL 隔离恢复、异地备份与并发性能仍待验收。
+- 生产浏览器抽查覆盖访客路径。账务回归使用隔离测试库。
+
+开发入口见 [开发说明](DEVELOPMENT.md)。

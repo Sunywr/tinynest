@@ -77,7 +77,11 @@ GET /dashboard/summary → income=0 expense=10000 cashflow=-10000 net_worth=9900
 - 新增：`apps/api/internal/{money,ledger,invest,credit,db,auth,api}/`、`apps/api/internal/db/migrations/001..007.sql`、`apps/api/go.sum`、`apps/api/internal/api/api_test.go`、`docs/{plan-v0.1,accounting-rules-v0.1,er-v0.1,api-v0.1}.md`、`IMPLEMENTATION_REPORT.md`、`apps/web/package-lock.json`。
 - 保留未动：`assets/brand/*`（原始图标字节未改）、`previews/*`、`deploy/*` 模板、`scripts/*`、`plan.md`、`.plan/*`。
 
-## 7. 下一步建议
+## Phase 0 计划归档
+
+Phase 0 交付静态奶油团子原型、Vue 与 Go 工程骨架、PWA 安装资源、健康检查和双机部署模板。原始计划保留在 Git 历史中。后续账本已经采用真实数据库和 API，当前进度及仍需实机验证的事项见 [项目进度](project-status.md)。
+
+## 7. 原始报告的下一步建议
 
 1. 在具备标准 Go 环境的机器复现 `go test ./... && npm run build`。
 2. 用户提供域名、A/B 服务器私网信息与证书后，再落地 HTTPS 与 iPhone 实机验证。

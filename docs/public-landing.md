@@ -1,18 +1,4 @@
-# TinyNest · Public Landing & Experience Polish 实施决策与视觉规格
-
-> 基线 `main` = `91ef72e`；分支 `feature/tinynest-public-landing-motion`。版本号沿用仓库现状，不预设新版本号。
-> 本文记录**已执行的实施决策**，不是待办计划；真实证据见 `docs/reviews/latest-code-audit.md` 与 `public-landing-security.md` / `public-landing-e2e.md`。
-
-## 1. M0～M5 执行顺序与结果
-
-| 里程碑 | 决策 / 结果 |
-|---|---|
-| M0 最新代码核验 | `git fetch --all --prune` 后确认 `origin/main`=`91ef72e`（含 PR #2 与上轮 V0.1.2 成果）；基线 Go 80 测试、npm ci/typecheck/build、E2E 31/31、db_drill 八步全绿；**CI #12/#13 Failure（hygiene 尾随空格）** → `latest-code-audit.md` |
-| M1 初始化安全收口 | 清理 2 份文档共 6 行尾随空格（CI 根因）；新增 `TINYNEST_SETUP_DISABLED` 受控开关（默认 false 不破坏首次部署）；前端彻底删除 `api.setup()` 与 setup 页签；运维文档改为受控 API 调用 |
-| M2 未登录 Landing | 单页无路由库前提下新增公开状态机：Landing 默认显示 → CTA 打开登录模态框 → 登录成功进驾驶舱；`/login` 深链支持，其他私有深链规范化到 `/` |
-| M3 动效 | 全局 CSS 动效 tokens + Vue `<Transition>`；Hero 入场、团子容器呼吸、弹窗缩放淡入、视图切换、按钮反馈、反馈淡入；`prefers-reduced-motion` 全面禁用 |
-| M4 E2E/PWA/CI | 既有 31 条改造登录路径，新增 `public-landing.spec.ts` 18 条；三视口截图；SW 缓存版本升级；LCP/CLS 本机样本测量 |
-| M5 交付 | 5 份规定文档 + 本地提交；DEV_READY 与 PRODUCTION_READY 分列 |
+# 公开首页、登录和动效
 
 ## 2. 页面状态机（不引入路由库）
 
@@ -46,7 +32,7 @@
 |---|---|---|
 | `--motion-fast` | `160ms` | 按钮 hover / press |
 | `--motion-base` | `240ms` | 弹窗、视图切换、反馈淡入 |
-| `--motion-hero` | `420ms` | Hero 标题/内容入场（Y 12px，只执行一次，延迟 0–240ms 阶梯） |
+| `--motion-hero` | `320ms` | Hero 标题/内容入场（Y 12px，只执行一次，延迟 0–240ms 阶梯） |
 | `--motion-breathe` | `5.2s` | 团子容器缓慢呼吸，位移 ≤ 5px，循环 |
 | `--ease-soft` | `cubic-bezier(.22,.61,.36,1)` | 全站统一缓动 |
 
@@ -63,9 +49,8 @@
 - `offline.html` 中性提示：离线不显示账务数据、不提供初始化入口。
 - 公开页只调 `/api/v1/auth/me`（会话判定），**不调用任何私人账务接口**；`loadAll()` 仅在登录成功后执行。
 
-## 6. 明确不做（避免重复开发 / 越界）
+## 验证记录
 
-- 不重建项目、不引入路由库或动画库、不改动 Vue 3 + Go + SQLite 架构。
-- 不重复实现复式记账、信用账单、负债分期、投资、统计等已完成业务；不新增迁移、不改账务口径、不改分录规则。
-- 不把「初始化」做成隐式公开能力；不把 token 写入前端 bundle / URL / 日志 / PWA 缓存。
-- 不推送、不合并 main、不部署、不修改生产数据库或真实财务数据。
+公开首页随 PR #3 合入。发布加固版本 `d1e0a32` 已部署到生产，浏览器实测产品介绍、主动打开登录、Escape 关闭及减少动态效果。公网初始化接口返回 `403 setup_disabled`。
+
+自动化结果见 [公开首页 E2E](reviews/public-landing-e2e.md) 与 [初始化安全审查](reviews/public-landing-security.md)。iPhone Safari 主屏幕安装、离线和版本升级仍需实机验证。

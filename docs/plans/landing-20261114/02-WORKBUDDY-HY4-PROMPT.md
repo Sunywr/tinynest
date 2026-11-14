@@ -88,7 +88,7 @@
 
 请更新/创建：
 - `docs/reviews/latest-code-audit.md`
-- `docs/plans/public-landing-motion-plan.md`
+- `docs/public-landing.md`
 - `docs/reviews/public-landing-security.md`
 - `docs/reviews/public-landing-e2e.md`
 - `docs/reviews/public-landing-release.md`

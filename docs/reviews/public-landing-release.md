@@ -82,7 +82,7 @@
 
 ## 7. PR 建议与生产部署条件
 
-1. 审阅 5 份交付文档（`latest-code-audit.md`、`public-landing-motion-plan.md`、`public-landing-security.md`、`public-landing-e2e.md`、本文件）。
+1. 审阅 5 份交付文档（`latest-code-audit.md`、[公开首页说明](../public-landing.md)、`public-landing-security.md`、`public-landing-e2e.md`、本文件）。
 2. 确认本轮**无账务口径/迁移改动**，且新增 `TINYNEST_SETUP_DISABLED` 默认 `false` 不破坏首次部署。
 3. 授权 push → 触发本分支 4 个 CI job，确认 `Repository hygiene` 归零、Linux Chromium E2E 绿 → PR 评审 → 合并开发基线。
 4. 生产部署前单独批准：设置并实测 `TINYNEST_SETUP_DISABLED=true`、移除/轮换令牌、HTTPS 与可信反代、iPhone 实机 PWA、备份恢复运维、`go test -race` 与生产性能样本。

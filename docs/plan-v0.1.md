@@ -949,7 +949,7 @@ Agent 必须将未确认项标记为 `待确认`，不得用虚构默认值写�
 你正在实施 TinyNest（小家）V0.1 家庭财务核心账本。
 
 第一步：
-1. 阅读仓库根目录 AGENTS.md、README.md、plan.md，以及 docs 下的架构、部署、安全和设计文档。
+1. 阅读仓库根目录 AGENTS.md、README.md、docs/execution-report.md，以及 docs 下的架构、部署、安全和设计文档。
 2. 检查当前 Git 状态、目录结构、已有 Phase 0 代码，不得覆盖或删除用户已有实现。
 3. 完整阅读本文件，先输出需求理解、模块依赖、ER 图、复式记账科目表、核心业务分录表和 API 契约草案。
 4. 把第 18 节待确认项整理成清单；不要擅自改变财务口径。
@@ -1007,7 +1007,7 @@ S7 安全、备份、部署和发布验收。
 tinynest/
 ├── AGENTS.md
 ├── README.md
-├── plan.md                       # Phase 0 初始化计划，保留
+├── docs/execution-report.md      # Phase 0 验收归档
 ├── docs/
 │   ├── DEVELOPMENT.md
 │   ├── architecture.md

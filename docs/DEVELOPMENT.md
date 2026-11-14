@@ -2,7 +2,7 @@
 
 **已确认视觉主题：A · 奶油团子**（见 `docs/design-system.md`）。当前仓库处于 **V0.1 家庭账本开发基线**：`apps/web` 已连接真实后端 API，可完成登录、记账、退款、信用账单、分期与投资记录。
 
-> **状态声明**：V0.1 主体已实现并有自动化测试覆盖，但**发布门禁尚未全部通过**（iPhone 实机 PWA、双服务器 HTTPS 私网链路、前端 E2E、10 项账务口径确认）。**暂不建议录入真实家庭财务数据，暂不部署生产**。原始 Phase 0 计划见 `plan.md`（历史存档）。
+生产环境已部署，开发与回归使用隔离测试数据。当前验证记录和未完成项见 [项目进度](project-status.md)，Phase 0 见 [执行报告](execution-report.md)。
 
 ## 静态原型（历史存档，虚构数据）
 
@@ -68,7 +68,7 @@ Set-Clipboard -Value (Get-Content -Raw .\apps\api\data\.env.setup-token).Trim()
 ```text
 tinynest/
 ├── AGENTS.md                    # 当前 V0.1 守则（含 Phase 0 历史说明）
-├── plan.md / .plan/              # 历史阶段计划（保留原文）
+├── docs/execution-report.md      # Phase 0 验收归档
 ├── assets/brand/                 # 用户原始团子图标（不改绘）
 ├── previews/                     # Phase 0 静态原型存档（虚构金额）
 ├── apps/web/                     # Vue 3 + TS + Vite；真实 API 界面 / PWA / SW
