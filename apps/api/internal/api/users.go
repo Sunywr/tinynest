@@ -3,9 +3,6 @@ package api
 import (
 	"database/sql"
 	"net/http"
-	"strings"
-
-	"tinynest/api/internal/auth"
 )
 
 func (a *API) adminRoute(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
@@ -42,50 +39,6 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
-}
-
-func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
-	p, _ := principal(r)
-	var in struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := decode(r, &in); err != nil {
-		writeErr(w, 400, "invalid_request", "请求格式不正确")
-		return
-	}
-	in.Username = strings.TrimSpace(in.Username)
-	if in.Username == "" || len(in.Username) > 100 || len(in.Password) < 12 || len(in.Password) > 256 {
-		writeErr(w, 400, "invalid_request", "用户名必填，密码须为 12 至 256 字节")
-		return
-	}
-	var count int
-	if err := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users WHERE username=?`, in.Username).Scan(&count); err != nil {
-		internalErr(w, err)
-		return
-	}
-	if count != 0 {
-		writeErr(w, 409, "username_unavailable", "用户名不可用")
-		return
-	}
-	hash, err := auth.HashPassword(in.Password)
-	if err != nil {
-		internalErr(w, err)
-		return
-	}
-	id := newID("usr")
-	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(r.Context(), `INSERT INTO users(id,household_id,username,password_hash,role)
-			VALUES(?,?,?,?,'member')`, id, p.HouseholdID, in.Username, hash); err != nil {
-			return err
-		}
-		return audit(r.Context(), tx, p, "create_user", "user", id, "{}")
-	})
-	if err != nil {
-		internalErr(w, err)
-		return
-	}
-	writeJSON(w, 201, map[string]string{"id": id, "username": in.Username, "role": "member"})
 }
 
 func (a *API) handleDisableUser(w http.ResponseWriter, r *http.Request) {

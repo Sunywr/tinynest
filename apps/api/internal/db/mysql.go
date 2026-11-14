@@ -45,7 +45,7 @@ func (d *DB) IsMySQL() bool { return d.mysql }
 
 func (d *DB) ExpectedVersions() ([]int, error) {
 	if d.mysql {
-		return []int{1}, nil
+		return []int{1, 2}, nil
 	}
 	return EmbeddedVersions()
 }
@@ -72,29 +72,33 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return nil, err
 	}
-	switch version {
-	case 1:
-		return nil, nil
-	case 0:
-	default:
+	if version > 2 {
 		return nil, fmt.Errorf("db: unsupported MySQL schema version %d", version)
 	}
-	body, err := mysqlFS.ReadFile("mysql/001_initial.sql")
-	if err != nil {
-		return nil, err
-	}
-	for _, statement := range strings.Split(string(body), ";") {
-		if strings.TrimSpace(statement) == "" {
+	applied := []int{}
+	for i, filename := range []string{"001_initial.sql", "002_registration.sql"} {
+		next := i + 1
+		if next <= version {
 			continue
 		}
-		if _, err := conn.ExecContext(ctx, statement); err != nil {
-			return nil, fmt.Errorf("%w: MySQL baseline: %v", ErrMigration, err)
+		body, err := mysqlFS.ReadFile("mysql/" + filename)
+		if err != nil {
+			return nil, err
 		}
+		for _, statement := range strings.Split(string(body), ";") {
+			if strings.TrimSpace(statement) == "" {
+				continue
+			}
+			if _, err := conn.ExecContext(ctx, statement); err != nil {
+				return nil, fmt.Errorf("%w: MySQL %s: %v", ErrMigration, filename, err)
+			}
+		}
+		if _, err := conn.ExecContext(ctx, "INSERT INTO schema_migrations(version, description) VALUES(?,?)", next, filename); err != nil {
+			return nil, err
+		}
+		applied = append(applied, next)
 	}
-	if _, err := conn.ExecContext(ctx, "INSERT INTO schema_migrations(version, description) VALUES(1,'001_initial.sql')"); err != nil {
-		return nil, err
-	}
-	return []int{1}, nil
+	return applied, nil
 }
 
 func (d *DB) SeedForHousehold(ctx context.Context, q Queryer, householdID string) error {

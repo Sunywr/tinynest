@@ -21,7 +21,12 @@ const notice = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
 const users = ref<{ id: string; username: string; role: string; status: string }[]>([])
-const userDraft = reactive({ username: '', password: '' })
+const joinMode = ref(false)
+const inviteCode = ref('')
+const joinNotice = ref('')
+const inviteDraft = reactive({ member_id: '', username: '' })
+const issuedCode = ref('')
+const applications = ref<{ id: string; username: string; member_name: string }[]>([])
 const me = ref<any>(null)
 
 // Public landing state. The login dialog is closed until the visitor asks for it.
@@ -121,7 +126,8 @@ function clearPrivateState() {
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
-  users.value = []; userDraft.username = ''; userDraft.password = '';
+  applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.username = '';
+  users.value = [];
   members.value = []; memberName.value = ''; selectedMember.value = ''
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectSearch.value = ''; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
@@ -295,7 +301,7 @@ async function reloadSummary() {
     catRanking.value = (await api.categoryRanking(range.from, range.to)).items || []
   } catch (e) { fail(e) }
 }
-function go(v: View) { view.value = v; errorMsg.value = ''; if (v === 'settings') void refreshUsers() }
+function go(v: View) { view.value = v; errorMsg.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
 
 function selectCategory(event: Event) {
   const id = (event.target as HTMLSelectElement).value
@@ -375,22 +381,56 @@ async function addProject() {
   }, '项目已新增')
 }
 
+async function applyForHousehold(register: boolean) {
+  if (loading.value) return
+  loading.value = true
+  joinNotice.value = ''
+  loginError.value = ''
+  const credentials = { username: authForm.username, password: authForm.password }
+  try {
+    if (register) await api.register(credentials)
+    if (inviteCode.value.trim()) {
+      await api.applyInvite({ ...credentials, code: inviteCode.value.trim() })
+      joinNotice.value = '申请已提交，管理员批准后即可登录。'
+    } else {
+      joinNotice.value = '注册请求已受理。拿到邀请码后可申请加入家庭。'
+    }
+    authForm.password = ''
+  } catch (e) {
+    loginError.value = e instanceof Error ? e.message : '操作失败，请重试'
+  } finally { loading.value = false }
+}
+
+async function makeInvite() {
+  issuedCode.value = ''
+  await run(async () => {
+    const result = await api.issueInvite({ ...inviteDraft })
+    issuedCode.value = result.code
+  }, '邀请码已生成')
+}
+
+async function refreshApplications() {
+  if (me.value?.role !== 'admin') return
+  try {
+    const result = await api.joinApplications()
+    if (me.value?.role === 'admin') applications.value = result.items
+  } catch (e) { fail(e) }
+}
+
+async function decideApplication(id: string, approve: boolean) {
+  await run(async () => {
+    await api.decideApplication(id, approve)
+    await refreshApplications()
+    await refreshUsers()
+  }, approve ? '已同意加入' : '已拒绝申请')
+}
+
 async function refreshUsers() {
   if (me.value?.role !== 'admin') return
   try {
     const result = await api.users()
     if (me.value?.role === 'admin') users.value = result.items
   } catch (e) { fail(e) }
-}
-
-async function addUser() {
-  const { username, password } = userDraft
-  await run(async () => {
-    await api.createUser(username, password)
-    userDraft.username = ''
-    userDraft.password = ''
-    await refreshUsers()
-  }, '成员账号已创建')
 }
 
 async function disableUser(id: string, username: string) {
@@ -774,11 +814,15 @@ const metricCards = computed(() => {
             <img src="/icons/tinynest-original.png" alt="" class="dialog-logo" />
             <h2 id="login-title">欢迎回家</h2>
             <p id="login-desc">登录后进入你的家庭财务驾驶舱。</p>
-            <form @submit.prevent="submitLogin()">
+            <form @submit.prevent="joinMode ? applyForHousehold(true) : submitLogin()">
               <label>用户名<input ref="usernameRef" v-model="authForm.username" autocomplete="username" required /></label>
               <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
+              <label v-if="joinMode">邀请码<input v-model="inviteCode" autocomplete="off" /></label>
+              <p v-if="joinNotice && joinMode" role="status">{{ joinNotice }}</p>
               <p v-if="loginError" class="err" role="alert">{{ loginError }}</p>
-              <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '正在进入…' : '登录' }}</button>
+              <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '处理中…' : joinMode ? '注册' : '登录' }}</button>
+              <button v-if="joinMode && inviteCode.trim()" class="btn-quiet" type="button" :disabled="loading" @click="applyForHousehold(false)">已有注册，提交申请</button>
+              <button class="btn-quiet" type="button" :disabled="loading" @click="joinMode = !joinMode; loginError = ''; joinNotice = ''; authForm.password = ''; inviteCode = ''">{{ joinMode ? '返回登录' : '注册新账号' }}</button>
             </form>
           </div>
         </div>
@@ -788,7 +832,7 @@ const metricCards = computed(() => {
     <div v-else-if="authed" class="website">
       <aside class="sidebar">
         <div class="brand"><img alt="TinyNest 原始糯米团子图标" class="logo" src="/icons/tinynest-original.png" />
-          <div><div class="name">TinyNest</div><div class="desc">小家 · 真实账本</div></div></div>
+          <div><div class="name">TinyNest</div><div class="desc">有你在，就很暖 ♡</div></div></div>
         <div><div class="navlabel">我的小家</div>
           <nav class="nav">
             <button v-for="n in nav" :key="n.key" :class="{ active: view === n.key }" @click="go(n.key)">
@@ -797,7 +841,7 @@ const metricCards = computed(() => {
           </nav>
         </div>
         <div class="sidebottom"><img alt="小家团子" class="blob logo" src="/icons/tinynest-original.png" />
-          <p>每一笔都由分录重建</p><small>金额使用整数分<br />已入账记录不可物理删除</small></div>
+          <p>今天也辛苦啦 ♡</p><small>慢慢来，团子陪着你<br />给自己一个小抱抱</small></div>
       </aside>
 
       <Transition name="view" mode="out-in">
@@ -1314,15 +1358,33 @@ const metricCards = computed(() => {
 
         <template v-else>
           <section class="greeting"><div><h1>设置</h1><p>账本信息与安全说明</p></div></section>
+          <section class="panel formpanel">
+            <div class="paneltitle"><h2>邀请加入家庭</h2></div>
+            <form @submit.prevent="makeInvite">
+              <div class="formgrid">
+                <label>绑定成员档案<select v-model="inviteDraft.member_id" required>
+                  <option value="">请选择</option>
+                  <option v-for="member in members.filter(m => m.status === 'active')" :key="member.id" :value="member.id">{{ member.name }}</option>
+                </select></label>
+                <label>指定新账号登录名（可选）<input v-model.trim="inviteDraft.username" /></label>
+              </div>
+              <button type="submit" class="ghost" :disabled="loading">生成邀请码</button>
+              <label v-if="issuedCode">邀请码（48 小时有效）<input :value="issuedCode" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
+            </form>
+            <div v-if="me?.role === 'admin'" class="ranklist">
+              <h2>加入审批</h2>
+              <div v-for="item in applications" :key="item.id" class="rankrow">
+                <span>{{ item.username }} → {{ item.member_name }}</span>
+                <div class="rowacts">
+                  <button class="ghost" :disabled="loading" @click="decideApplication(item.id, true)">同意</button>
+                  <button class="ghost" :disabled="loading" @click="decideApplication(item.id, false)">拒绝</button>
+                </div>
+              </div>
+              <p v-if="!applications.length" class="empty">暂无待审批申请</p>
+            </div>
+          </section>
           <section v-if="me?.role === 'admin'" class="panel formpanel">
             <div class="paneltitle"><h2>登录账号</h2></div>
-            <form @submit.prevent="addUser">
-              <div class="formgrid">
-                <label>成员登录名<input v-model.trim="userDraft.username" maxlength="100" autocomplete="off" required /></label>
-                <label>成员密码（至少 12 位）<input v-model="userDraft.password" type="password" autocomplete="new-password" minlength="12" required /></label>
-              </div>
-              <button class="ghost" type="submit" :disabled="loading">创建成员账号</button>
-            </form>
             <div class="ranklist">
               <div v-for="user in users" :key="user.id" class="rankrow">
                 <span>{{ user.username }} · {{ user.role === 'admin' ? '管理员' : user.status === 'disabled' ? '已停用' : '成员' }}</span>
@@ -1342,8 +1404,8 @@ const metricCards = computed(() => {
           </section>
           <section class="panel"><div class="note-box">
             当前登录：{{ me?.username }}<br />家庭 ID：{{ me?.household_id }}<br /><br />
-            管理员可创建或停用成员账号。成员可使用家庭账本。<br /><br />
-            尚未开发：邀请链接、细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
+            管理员可审批加入申请和停用成员账号。成员可使用家庭账本。<br /><br />
+            尚未开发：细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
           </div></section>
         </template>
         </div>

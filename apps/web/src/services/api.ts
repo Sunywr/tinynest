@@ -51,8 +51,12 @@ export const api = {
   me: () => get('/auth/me'),
   logout: () => del('/auth/session'),
 
+  register: (body: { username: string; password: string }) => post('/auth/register', body),
+  applyInvite: (body: { username: string; password: string; code: string }) => post('/auth/join', body),
+  issueInvite: (body: { member_id: string; username: string }) => post<{ code: string }>('/household/invitations', body),
+  joinApplications: () => get<{ items: { id: string; username: string; member_name: string }[] }>('/admin/join-applications'),
+  decideApplication: (id: string, approve: boolean) => post(`/admin/join-applications/${encodeURIComponent(id)}`, { approve }),
   users: () => get<{ items: { id: string; username: string; role: string; status: string }[] }>('/admin/users'),
-  createUser: (username: string, password: string) => post('/admin/users', { username, password }),
   disableUser: (id: string) => post(`/admin/users/${encodeURIComponent(id)}/disable`),
   members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
   createMember: (name: string) => post('/household/members', { name }),
