@@ -34,7 +34,8 @@
 - `cd apps/api && go build -o tinynest-api ./cmd/server`，放置 `/opt/tinynest/api/tinynest-api`。
 - `python3 scripts/init_sqlite.py --db /var/lib/tinynest/tinynest.sqlite3`（在 B 执行，确保所有权归服务用户）。
 - 审核并安装 `deploy/backend/tinynest-api.service.example` 与 `deploy/backend/nginx.conf.example`；替换私网监听地址、证书、白名单 IP；做防火墙 ACL。
-- **首次初始化（FIX-01）**：在 B 机生成强随机令牌（如 `openssl rand -hex 32`），仅通过 systemd 的 `Environment=` 或受保护的 env 文件注入 `TINYNEST_SETUP_TOKEN`；**不要写进仓库、日志或前端**。未配置令牌时 `POST /api/v1/setup` 返回 `403 setup_disabled`（fail closed）。管理员在初始化页面填入该令牌提交一次，成功后令牌即失效（再次调用返回 `409`）。切勿以「Go 侧看到 `127.0.0.1`」作为安全依据——反代会让公网请求看起来像本机。
+- **首次初始化（受控运维流程，公网无 UI 入口）**：在 B 机生成强随机令牌（如 `openssl rand -hex 32`），仅通过 systemd 的 `Environment=` 或受保护的 env 文件注入 `TINYNEST_SETUP_TOKEN`；**不要写进仓库、日志、URL 或前端**。未配置令牌时 `POST /api/v1/setup` 返回 `403 setup_disabled`（fail closed）。在受控环境（B 机 loopback 或私网）用一次 HTTP 调用完成初始化，例如：`curl -fsS -X POST http://127.0.0.1:8787/api/v1/setup -H 'Content-Type: application/json' -H "X-Setup-Token: <TOKEN>" -d '{"household_name":"我的小家","username":"admin","password":"<强口令>"}'`；成功后再次调用返回 `409`。**公开前端不提供初始化/创建管理员页面**，普通访客只能登录。
+- **初始化完成后立即收口**：从服务环境移除 `TINYNEST_SETUP_TOKEN`，并设置 `TINYNEST_SETUP_DISABLED=true` 后重启 API；此后 `POST /api/v1/setup` 对所有请求（含有效令牌）一律返回 `403 setup_disabled`。该开关是附加保护，不替代数据库单次创建约束。切勿以「Go 侧看到 `127.0.0.1`」作为安全依据——反代会让公网请求看起来像本机。
 - 验证 B 的 loopback `curl -fsS http://127.0.0.1:8787/api/v1/healthz`，然后在 A 验证 `curl -fsS https://YOUR_PUBLIC_DOMAIN/api/v1/healthz`。
 - 使用 `scripts/backup-sqlite.py` 形成一致性备份并验证备份文件；不要在公网开放 `8787`、`8443`（8443 仅私网）。
 
@@ -52,4 +53,4 @@
 
 首次启动应用会创建 MySQL 专用基线结构。切换已有环境前暂停写入并备份。旧 SQLite 含业务数据时需要先迁移并逐表核验，不可直接更换驱动。就绪接口在 MySQL 模式返回 `mysql_ping_and_migrations`。把备份定时任务同步切换为 MySQL 一致性导出，并用独立库验证恢复。
 
-首次创建家庭和管理员仍在 HTTPS 页面使用后端的一次性初始化令牌。
+首次创建家庭和管理员同样通过后端的一次性初始化令牌由运维在受控环境调用 `POST /api/v1/setup` 完成（公开前端无初始化入口），完成后设置 `TINYNEST_SETUP_DISABLED=true` 收口。

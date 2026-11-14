@@ -56,6 +56,15 @@ func constantTimeTokenEqual(got, want string) bool {
 }
 
 func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
+	// Operator-controlled shutdown for already-initialized deployments. This is
+	// checked before any token comparison or database read, so the public surface
+	// is closed even if a valid token ever leaks. A fresh deployment leaves the
+	// switch off and bootstraps through a single authenticated operator call.
+	if a.opts.SetupDisabled {
+		writeErr(w, http.StatusForbidden, "setup_disabled",
+			"初始化入口已由运维显式关闭；本实例已完成首次部署")
+		return
+	}
 	// Fail closed: an empty database started without an operator-configured token
 	// must never expose an open admin-creation endpoint. RemoteAddr is deliberately
 	// NOT trusted here: Nginx makes every public request appear to come from loopback.

@@ -48,6 +48,13 @@ type Options struct {
 	// SetupToken is the one-time bootstrap token required by POST /api/v1/setup.
 	// Empty means initialization is refused outright (fail closed).
 	SetupToken string
+	// SetupDisabled is an explicit operator switch for deployments that have
+	// already been initialized. When true, POST /api/v1/setup refuses EVERY
+	// request (even with a valid token) before touching the database. It is an
+	// additional protection, never a replacement for the single-household
+	// constraint or token verification. Defaults to false so a fresh offline
+	// deployment can still bootstrap through a controlled operator call.
+	SetupDisabled bool
 	// CookieSecure forces the Secure attribute on tn_session.
 	CookieSecure bool
 	// TrustedProxies lists IPs/CIDRs whose X-Forwarded-* headers may be honored.

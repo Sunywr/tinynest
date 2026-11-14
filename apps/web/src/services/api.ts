@@ -26,6 +26,11 @@ export async function request<T = any>(path: string, init: RequestInit = {}): Pr
   let data: any = {}
   try { data = await res.json() } catch { /* empty body */ }
   if (!res.ok) {
+    // A 401 on a protected endpoint means the session expired mid-flight.
+    // Authentication endpoints are excluded so a failed login never triggers it.
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      window.dispatchEvent(new CustomEvent('tinynest:session-expired'))
+    }
     throw new ApiError(data?.error?.code || 'http_error', data?.error?.message || `请求失败 (${res.status})`)
   }
   return data as T
@@ -36,8 +41,8 @@ const post = <T = any>(p: string, body?: any, headers?: Record<string, string>) 
 const del = <T = any>(p: string) => request<T>(p, { method: 'DELETE' })
 
 export const api = {
-  setup: (household_name: string, username: string, password: string, setup_token: string) =>
-    post('/setup', { household_name, username, password }, setup_token ? { 'X-Setup-Token': setup_token } : {}),
+  // There is intentionally NO setup() client: bootstrap is a controlled
+  // operator-side call, never reachable from the public browser bundle.
   login: async (username: string, password: string) => {
     const r = await post<{ csrf_token: string }>('/auth/session', { username, password })
     setCSRFToken(r.csrf_token)

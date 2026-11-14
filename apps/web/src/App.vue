@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError } from './services/api'
 
 type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
@@ -22,8 +22,25 @@ const errorMsg = ref('')
 const loading = ref(false)
 const me = ref<any>(null)
 
-const authForm = reactive({ mode: 'login' as 'login' | 'setup', username: '', password: '', household_name: '我的小家', setup_token: '' })
+// Public landing state. The login dialog is closed until the visitor asks for it.
+const showLogin = ref(false)
+const loginError = ref('')
+const sessionExpired = ref(false)
+const ctaRef = ref<HTMLButtonElement | null>(null)
+const usernameRef = ref<HTMLInputElement | null>(null)
+const dialogRef = ref<HTMLDivElement | null>(null)
+const authForm = reactive({ username: '', password: '' })
 const range = reactive({ from: currentMonth()[0], to: currentMonth()[1] })
+
+// Only capabilities backed by real APIs are labelled "已支持".
+const features = [
+  { glyph: '✎', title: '日常记账', desc: '收入、支出、账户互转、分类与项目拆分，退款关联原交易。', status: '已支持' },
+  { glyph: '◷', title: '信用账单与分期', desc: '账单周期、部分还款、额度、期次与手续费拆分，都由分录核对。', status: '已支持' },
+  { glyph: '◉', title: '家庭资产', desc: '现金、证券资金、持仓成本与负债结构，净资产可由分录重建。', status: '已支持' },
+  { glyph: '↗', title: '投资与分红', desc: '移动加权成本、账户费率规则、已实现与未实现收益、手工估值。', status: '已支持' },
+  { glyph: '▤', title: '项目归集', desc: '按项目与分类汇总净支出，支持自定义日期区间下钻明细。', status: '已支持' },
+  { glyph: '✧', title: '更多协作能力', desc: '多成员独立登录、账单导入、预算与实时行情仍在规划。', status: '规划中' },
+]
 
 const summary = ref<any>(null)
 const creditDash = ref<any>(null)
@@ -84,7 +101,26 @@ function fail(e: unknown) {
 }
 function minor(s: string): number | null { return parseMinor(s) }
 
+// Wipe every in-memory financial value on logout / session expiry so a browser
+// back navigation can never re-render stale private data.
+function clearPrivateState() {
+  me.value = null
+  summary.value = null; creditDash.value = null; netWorth.value = null
+  dividendHistory.value = null; feePreview.value = null
+  instDetail.value = null; debtDetail.value = null
+  accounts.value = []; categories.value = []; projects.value = []
+  creditInstruments.value = []; statements.value = []; installments.value = []
+  debts.value = []; dueItems.value = []; transactions.value = []
+  catRanking.value = []; assets.value = []; positions.value = []; feeRules.value = []
+  setCSRFToken('')
+}
+function normalizePublicUrl() {
+  const p = window.location.pathname
+  // Deep links to private routes are collapsed to the public landing page.
+  if (p !== '/' && p !== '/login') window.history.replaceState(null, '', '/')
+}
 async function boot() {
+  normalizePublicUrl()
   try {
     const m = await api.me()
     me.value = m
@@ -93,34 +129,117 @@ async function boot() {
     apiStatus.value = '已连接'
     await loadAll()
   } catch {
+    authed.value = false
+    clearPrivateState()
     apiStatus.value = '需要登录'
+    showLogin.value = window.location.pathname === '/login'
+    document.body.classList.toggle('dialog-open', showLogin.value)
   } finally {
     booted.value = true
   }
 }
-onMounted(boot)
-
-async function submitAuth() {
-  loading.value = true; errorMsg.value = ''
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+function scrollToFeatures() {
+  document.getElementById('features')?.scrollIntoView({
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start',
+  })
+}
+async function openLogin() {
+  if (showLogin.value) return
+  sessionExpired.value = false
+  loginError.value = ''
+  showLogin.value = true
+  document.body.classList.add('dialog-open')
+  if (window.location.pathname !== '/login') window.history.pushState(null, '', '/login')
+  await nextTick()
+  usernameRef.value?.focus()
+}
+async function closeLogin() {
+  if (!showLogin.value) return
+  showLogin.value = false
+  loginError.value = ''
+  document.body.classList.remove('dialog-open')
+  if (window.location.pathname !== '/') window.history.replaceState(null, '', '/')
+  await nextTick()
+  ctaRef.value?.focus()
+}
+function onPopState() {
+  if (authed.value) return
+  const wantsLogin = window.location.pathname === '/login'
+  showLogin.value = wantsLogin
+  document.body.classList.toggle('dialog-open', wantsLogin)
+  if (!wantsLogin && window.location.pathname !== '/') window.history.replaceState(null, '', '/')
+}
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (!showLogin.value) return
+  if (e.key === 'Escape') { e.preventDefault(); void closeLogin(); return }
+  if (e.key !== 'Tab') return
+  const dialog = dialogRef.value
+  if (!dialog) return
+  const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(
+    'button, input, a[href], [tabindex]:not([tabindex="-1"])',
+  )).filter(el => !el.hasAttribute('disabled'))
+  if (!focusables.length) return
+  const first = focusables[0], last = focusables[focusables.length - 1]
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+}
+async function submitLogin() {
+  if (loading.value) return
+  loading.value = true
+  loginError.value = ''
   try {
-    if (authForm.mode === 'setup') {
-      await api.setup(authForm.household_name, authForm.username, authForm.password, authForm.setup_token)
-      authForm.setup_token = ''
-      toast('家庭账本已初始化，请登录')
-      authForm.mode = 'login'
-    } else {
-      await api.login(authForm.username, authForm.password)
-      me.value = await api.me()
-      authed.value = true
-      apiStatus.value = '已连接'
-      await loadAll()
-    }
-  } catch (e) { fail(e) } finally { loading.value = false }
+    await api.login(authForm.username, authForm.password)
+    me.value = await api.me()
+    authForm.password = ''
+    authed.value = true
+    apiStatus.value = '已连接'
+    showLogin.value = false
+    sessionExpired.value = false
+    document.body.classList.remove('dialog-open')
+    window.history.replaceState(null, '', '/')
+    await loadAll()
+  } catch (e) {
+    loginError.value = e instanceof ApiError ? e.message : (e instanceof Error ? e.message : '登录失败，请稍后重试')
+  } finally {
+    loading.value = false
+  }
+}
+function onSessionExpired() {
+  authed.value = false
+  showLogin.value = false
+  sessionExpired.value = true
+  clearPrivateState()
+  apiStatus.value = '登录已过期'
+  view.value = 'home'
+  document.body.classList.remove('dialog-open')
+  window.history.replaceState(null, '', '/')
 }
 async function logout() {
   try { await api.logout() } catch { /* ignore */ }
-  authed.value = false; me.value = null; apiStatus.value = '已登出'
+  authed.value = false
+  showLogin.value = false
+  sessionExpired.value = false
+  clearPrivateState()
+  apiStatus.value = '需要登录'
+  view.value = 'home'
+  document.body.classList.remove('dialog-open')
+  window.history.replaceState(null, '', '/')
 }
+onMounted(() => {
+  void boot()
+  window.addEventListener('popstate', onPopState)
+  window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('tinynest:session-expired', onSessionExpired)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('popstate', onPopState)
+  window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('tinynest:session-expired', onSessionExpired)
+  document.body.classList.remove('dialog-open')
+})
 
 async function loadAll() {
   loading.value = true
@@ -443,25 +562,88 @@ const metricCards = computed(() => {
 </script>
 
 <template>
-  <div class="stage">
-    <!-- 未登录：真实初始化 / 登录，无任何模拟数据 -->
-    <div v-if="booted && !authed" class="authcard">
-      <img class="authlogo" src="/icons/tinynest-original.png" alt="小家团子" />
-      <h1>TinyNest · 小家</h1>
-      <p class="authsub">自托管家庭账本 · 数据只保存在你自己的服务器</p>
-      <div class="authtabs">
-        <button :class="{ active: authForm.mode === 'login' }" @click="authForm.mode = 'login'">登录</button>
-        <button :class="{ active: authForm.mode === 'setup' }" @click="authForm.mode = 'setup'">首次初始化</button>
-      </div>
-      <form @submit.prevent="submitAuth">
-        <label v-if="authForm.mode === 'setup'">家庭名称<input v-model="authForm.household_name" required /></label>
-        <label v-if="authForm.mode === 'setup'">一次性初始化令牌<input v-model="authForm.setup_token" type="password" autocomplete="off" required placeholder="由部署者在后端设置，仅使用一次" /></label>
-        <label>用户名<input v-model="authForm.username" autocomplete="username" required /></label>
-        <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
-        <p v-if="errorMsg" class="err">{{ errorMsg }}</p>
-        <button class="primary" type="submit" :disabled="loading">{{ loading ? '处理中…' : (authForm.mode === 'setup' ? '创建家庭账本' : '登录') }}</button>
-      </form>
-      <p class="authhint">{{ authForm.mode === 'setup' ? '仅可初始化一次；必须填写后端 TINYNEST_SETUP_TOKEN，令牌不会存入浏览器。密码使用 Argon2id 哈希存储。' : '会话为 HttpOnly Cookie，写操作需 CSRF 校验。' }}</p>
+  <div class="stage" :class="{ 'landing-stage': !authed }">
+    <!-- 未登录：公开产品介绍页。登录表单只在访客主动点击后以模态框出现。 -->
+    <div v-if="booted && !authed" class="landing">
+      <header class="landing-header">
+        <div class="landing-brand">
+          <img src="/icons/tinynest-original.png" alt="TinyNest 原始糯米团子图标" class="landing-brand-icon" />
+          <div><strong>TinyNest</strong><span>小家 · 家庭账本</span></div>
+        </div>
+        <nav class="landing-nav" aria-label="公开导航">
+          <a href="#features" @click.prevent="scrollToFeatures()">功能</a>
+          <button type="button" class="landing-login-link" @click="openLogin()">登录</button>
+        </nav>
+      </header>
+
+      <main class="landing-main">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <p class="hero-eyebrow">为自托管而设计 · 数据保存在你自己的服务器</p>
+            <h1 id="hero-title">家的每一笔，都值得被温柔记录。</h1>
+            <p class="hero-sub">从日常收支到账户与资产，让家庭的财务生活变得简单、清晰、有条理。</p>
+            <div class="hero-actions">
+              <button ref="ctaRef" type="button" class="btn-primary hero-cta" @click="openLogin()">进入我的小家</button>
+              <button type="button" class="btn-quiet" @click="scrollToFeatures()">了解功能 ↓</button>
+            </div>
+            <p v-if="sessionExpired" class="landing-notice" role="status">登录状态已过期，请重新进入。私人数据不会在此页显示。</p>
+            <p v-else class="hero-note">轻量、克制、没有广告；账本只属于你的家庭。</p>
+          </div>
+          <div class="hero-visual" aria-hidden="true">
+            <div class="mochi-glow"></div>
+            <div class="mochi-float"><img src="/icons/tinynest-original.png" alt="" /></div>
+          </div>
+        </section>
+
+        <section id="features" class="features" aria-labelledby="features-title">
+          <div class="section-head">
+            <h2 id="features-title">已经能帮你做的事</h2>
+            <p>以下能力均由真实后端 API 与 SQLite 分录支撑；标注「规划中」的不冒充已上线。</p>
+          </div>
+          <div class="feature-grid">
+            <article v-for="feat in features" :key="feat.title" class="feature-card">
+              <span class="feature-glyph" aria-hidden="true">{{ feat.glyph }}</span>
+              <h3>{{ feat.title }}</h3>
+              <p>{{ feat.desc }}</p>
+              <span class="feature-status" :class="{ planned: feat.status === '规划中' }">{{ feat.status }}</span>
+            </article>
+          </div>
+        </section>
+
+        <section class="how" aria-labelledby="how-title">
+          <h2 id="how-title">简单、透明、自己掌握</h2>
+          <div class="how-grid">
+            <div><strong>复式分录</strong><p>每一笔都由借贷平衡的分录重建余额，金额使用整数分。</p></div>
+            <div><strong>自主托管</strong><p>前后端分离部署，数据库只保存在你自己的后端服务器。</p></div>
+            <div><strong>会话保护</strong><p>HttpOnly 会话 Cookie、CSRF 校验、登录失败限流与家庭数据隔离。</p></div>
+          </div>
+          <p class="how-note">公共页面不调用任何私人账务接口，也不展示真实家庭金额、成员或账单。</p>
+        </section>
+      </main>
+
+      <footer class="landing-footer">
+        <div class="footer-brand"><img src="/icons/tinynest-original.png" alt="" /> <span>TinyNest · 小家</span></div>
+        <p>自托管家庭财务账本 · 开发阶段版本，发布门禁尚未全部通过</p>
+        <a href="https://github.com/Sunywr/tinynest" target="_blank" rel="noopener noreferrer">GitHub 仓库 ↗</a>
+      </footer>
+
+      <Transition name="dialog">
+        <div v-if="showLogin" class="dialog-backdrop" @click.self="closeLogin()">
+          <div ref="dialogRef" class="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title" aria-describedby="login-desc">
+            <button type="button" class="dialog-close" aria-label="关闭登录" @click="closeLogin()">×</button>
+            <img src="/icons/tinynest-original.png" alt="" class="dialog-logo" />
+            <h2 id="login-title">欢迎回家</h2>
+            <p id="login-desc">登录后进入你的家庭财务驾驶舱。</p>
+            <form @submit.prevent="submitLogin()">
+              <label>用户名<input ref="usernameRef" v-model="authForm.username" autocomplete="username" required /></label>
+              <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
+              <p v-if="loginError" class="err" role="alert">{{ loginError }}</p>
+              <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '正在进入…' : '登录' }}</button>
+            </form>
+            <p class="dialog-hint">连续输错会触发限流；会话使用 HttpOnly Cookie 保存。</p>
+          </div>
+        </div>
+      </Transition>
     </div>
 
     <div v-else-if="authed" class="website">
@@ -479,7 +661,8 @@ const metricCards = computed(() => {
           <p>每一笔都由分录重建</p><small>金额使用整数分<br />已入账记录不可物理删除</small></div>
       </aside>
 
-      <div class="main">
+      <Transition name="view" mode="out-in">
+        <div class="main" :key="view">
         <div class="mobilehead"><img alt="小家图标" class="logo" src="/icons/tinynest-original.png" /> TinyNest · 小家</div>
         <div class="top">
           <span class="crumb">我的小家 / {{ nav.find(n => n.key === view)?.label }}</span>
@@ -900,7 +1083,8 @@ const metricCards = computed(() => {
             尚未开发：多成员登录与细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
           </div></section>
         </template>
-      </div>
+        </div>
+      </Transition>
     </div>
     <div v-else class="authcard"><p>正在连接本地账本…</p></div>
     <div v-if="notice" class="toast show" role="status">{{ notice }}</div>
@@ -947,4 +1131,114 @@ form label { margin-bottom: 13px; }
 .rowacts .ghost + .ghost { margin-left: 0; }
 @media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .formgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .formgrid { grid-template-columns: 1fr; } .rankrow { flex-direction: column; align-items: flex-start; gap: 4px; } .rowacts { margin-left: 0; } }
+
+/* ---------- Public landing (A · Cream Mochi) ---------- */
+.stage.landing-stage{padding:0;background:var(--bg);min-height:100dvh;}
+.landing{max-width:1200px;margin:0 auto;padding:0 24px max(40px,env(safe-area-inset-bottom));color:var(--text);}
+.landing-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0;}
+.landing-brand{display:flex;align-items:center;gap:12px;}
+.landing-brand-icon{width:46px;height:46px;object-fit:contain;border-radius:14px;}
+.landing-brand strong{display:block;font-size:19px;font-weight:820;letter-spacing:-.5px;}
+.landing-brand span{display:block;font-size:11px;color:var(--muted);margin-top:3px;}
+.landing-nav{display:flex;align-items:center;gap:18px;font-size:13px;}
+.landing-nav a{color:var(--muted);text-decoration:none;}
+.landing-nav a:hover{color:var(--primary-deep);}
+.landing-login-link{border:1px solid var(--border);background:var(--card);color:var(--primary-deep);border-radius:999px;padding:10px 20px;font-size:13px;font-weight:650;min-height:44px;transition:transform var(--motion-fast) var(--ease-soft),box-shadow var(--motion-fast) var(--ease-soft),background var(--motion-fast) var(--ease-soft);}
+.landing-login-link:hover{transform:translateY(-1px);box-shadow:var(--shadow);background:var(--soft);}
+.landing-login-link:active{transform:scale(.98);}
+.hero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);align-items:center;gap:32px;padding:48px 0 56px;}
+.hero-copy>.hero-eyebrow,.hero-copy>h1,.hero-copy>.hero-sub,.hero-copy>.hero-actions,.hero-copy>.hero-note,.hero-copy>.landing-notice{animation:rise-in var(--motion-hero) var(--ease-soft) both;}
+.hero-copy>.hero-eyebrow{animation-delay:0ms;}
+.hero-copy>h1{animation-delay:30ms;}
+.hero-copy>.hero-sub{animation-delay:60ms;}
+.hero-copy>.hero-actions{animation-delay:90ms;}
+.hero-copy>.hero-note,.hero-copy>.landing-notice{animation-delay:120ms;}
+.hero-eyebrow{font-size:12px;color:var(--primary-deep);background:var(--primary-pale);display:inline-block;padding:7px 13px;border-radius:999px;margin:0 0 20px;}
+.hero h1{font-size:clamp(30px,3.4vw,44px);line-height:1.3;letter-spacing:-1.3px;margin:0 0 18px;font-weight:850;}
+.hero-sub{font-size:15px;line-height:1.85;color:var(--muted);margin:0 0 28px;max-width:34em;}
+.hero-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+.btn-primary{border:0;background:var(--primary);color:#fff;border-radius:14px;padding:13px 26px;font-size:14px;font-weight:750;min-height:46px;box-shadow:0 8px 22px rgba(189,119,104,.18);transition:transform var(--motion-fast) var(--ease-soft),box-shadow var(--motion-fast) var(--ease-soft),background var(--motion-fast) var(--ease-soft);}
+.btn-primary:hover{transform:translateY(-1px);background:var(--primary-deep);box-shadow:0 12px 26px rgba(189,119,104,.24);}
+.btn-primary:active{transform:scale(.98);}
+.btn-primary:disabled{opacity:.6;transform:none;cursor:default;}
+.btn-quiet{border:0;background:transparent;color:var(--primary-deep);font-size:13px;font-weight:650;padding:12px 10px;min-height:44px;}
+.btn-quiet:hover{text-decoration:underline;}
+.hero-note{font-size:12px;color:var(--muted);margin:24px 0 0;}
+.landing-notice{font-size:12px;color:var(--primary-deep);background:var(--soft);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:24px 0 0;animation:fade-in var(--motion-base) var(--ease-soft) both;}
+.hero-visual{position:relative;display:grid;place-items:center;min-height:320px;}
+.mochi-glow{position:absolute;width:min(340px,80%);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,rgba(249,232,223,.95) 0%,rgba(249,232,223,0) 70%);}
+.mochi-float{position:relative;animation:mochi-breathe var(--motion-breathe) ease-in-out infinite;will-change:transform;}
+.mochi-float img{width:min(260px,72%);max-width:100%;height:auto;object-fit:contain;display:block;margin:0 auto;filter:drop-shadow(0 16px 26px rgba(118,91,65,.12));}
+.features{padding:12px 0 56px;scroll-margin-top:24px;}
+.section-head h2{font-size:24px;letter-spacing:-.7px;margin:0 0 10px;font-weight:820;}
+.section-head p{font-size:12px;color:var(--muted);margin:0 0 26px;line-height:1.7;}
+.feature-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+.feature-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px 22px;box-shadow:var(--shadow);}
+.feature-glyph{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:var(--primary-pale);color:var(--primary-deep);font-size:18px;margin-bottom:14px;}
+.feature-card h3{font-size:15px;margin:0 0 9px;font-weight:780;}
+.feature-card p{font-size:12px;line-height:1.8;color:var(--muted);margin:0 0 14px;}
+.feature-status{display:inline-block;font-size:11px;color:var(--primary-deep);background:var(--primary-pale);border-radius:999px;padding:5px 11px;}
+.feature-status.planned{color:var(--muted);background:var(--soft);}
+.how{padding:8px 0 56px;}
+.how h2{font-size:22px;letter-spacing:-.6px;margin:0 0 22px;font-weight:820;}
+.how-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+.how-grid>div{background:var(--soft);border-radius:var(--radius);padding:22px;}
+.how-grid strong{font-size:14px;}
+.how-grid p{font-size:12px;line-height:1.8;color:var(--muted);margin:9px 0 0;}
+.how-note{font-size:12px;color:var(--muted);margin:20px 0 0;line-height:1.8;}
+.landing-footer{border-top:1px solid var(--border);padding:24px 0 8px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);}
+.footer-brand{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text);font-weight:750;}
+.footer-brand img{width:28px;height:28px;object-fit:contain;border-radius:9px;}
+.landing-footer p{margin:0;}
+.landing-footer a{color:var(--primary-deep);text-decoration:none;}
+
+/* ---------- Login dialog ---------- */
+.dialog-backdrop{position:fixed;inset:0;z-index:30;background:rgba(62,48,40,.34);display:grid;place-items:center;padding:20px;}
+.login-dialog{position:relative;width:min(420px,100%);max-height:calc(100dvh - 40px);overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 60px rgba(62,48,40,.18);padding:32px;text-align:center;}
+.dialog-close{position:absolute;top:12px;right:14px;border:0;background:transparent;color:var(--muted);font-size:22px;line-height:1;padding:6px 10px;border-radius:8px;}
+.dialog-close:hover{background:var(--soft);}
+.dialog-logo{width:64px;height:64px;object-fit:contain;display:block;margin:0 auto 12px;}
+.login-dialog h2{font-size:22px;margin:0 0 8px;font-weight:820;}
+.login-dialog #login-desc{font-size:12px;color:var(--muted);margin:0 0 22px;}
+.login-dialog form{text-align:left;}
+.login-dialog .btn-primary{width:100%;margin-top:8px;}
+.login-dialog .err{animation:fade-in var(--motion-base) var(--ease-soft) both;}
+.dialog-hint{font-size:11px;color:var(--muted);line-height:1.7;margin:18px 0 0;}
+.dialog-enter-active,.dialog-leave-active{transition:opacity var(--motion-base) var(--ease-soft);}
+.dialog-enter-active .login-dialog,.dialog-leave-active .login-dialog{transition:transform var(--motion-base) var(--ease-soft),opacity var(--motion-base) var(--ease-soft);}
+.dialog-enter-from,.dialog-leave-to{opacity:0;}
+.dialog-enter-from .login-dialog,.dialog-leave-to .login-dialog{transform:scale(.97);opacity:0;}
+
+/* ---------- View & toast transitions ---------- */
+.view-enter-active,.view-leave-active{transition:opacity var(--motion-base) var(--ease-soft),transform var(--motion-base) var(--ease-soft);}
+.view-enter-from{opacity:0;transform:translateY(8px);}
+.view-leave-to{opacity:0;transform:translateY(-6px);}
+.toast.show{animation:fade-in var(--motion-base) var(--ease-soft) both;}
+@keyframes rise-in{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
+@keyframes fade-in{from{opacity:0;}to{opacity:1;}}
+@keyframes mochi-breathe{0%,100%{transform:translateY(0);}50%{transform:translateY(-5px);}}
+
+/* ---------- Responsive ---------- */
+@media(max-width:900px){
+  .hero{grid-template-columns:1fr;gap:18px;padding:32px 0 40px;}
+  .hero-visual{min-height:230px;order:-1;}
+  .mochi-float img{width:min(200px,60%);}
+  .feature-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .how-grid{grid-template-columns:1fr;}
+}
+@media(max-width:560px){
+  .landing{padding-left:16px;padding-right:16px;}
+  .landing-header{padding:16px 0;}
+  .landing-nav{gap:12px;}
+  .hero h1{font-size:30px;letter-spacing:-1px;}
+  .hero-sub{font-size:14px;}
+  .feature-grid{grid-template-columns:1fr;}
+  .landing-footer{flex-direction:column;align-items:flex-start;}
+  .btn-primary{width:100%;}
+  .btn-quiet{width:100%;text-align:center;}
+}
+@media(prefers-reduced-motion: reduce){
+  .hero-copy>*,.mochi-float,.toast.show,.login-dialog .err,.landing-notice{animation:none !important;}
+  .landing-login-link,.btn-primary,.dialog-enter-active,.dialog-leave-active,.view-enter-active,.view-leave-active{transition:none !important;}
+}
 </style>

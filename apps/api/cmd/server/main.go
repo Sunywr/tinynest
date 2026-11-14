@@ -108,6 +108,22 @@ func main() {
 		slog.Warn("initialization disabled: empty database has no TINYNEST_SETUP_TOKEN; POST /api/v1/setup will refuse every request (token value is never logged)")
 	}
 
+	// After first initialization, operators can close the bootstrap endpoint
+	// entirely. Strictly parsed; absent/false keeps the controlled first-boot path.
+	var setupDisabled bool
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TINYNEST_SETUP_DISABLED"))) {
+	case "true":
+		setupDisabled = true
+	case "false", "":
+		setupDisabled = false
+	default:
+		slog.Error("TINYNEST_SETUP_DISABLED must be 'true' or 'false'; refusing to start")
+		os.Exit(1)
+	}
+	if setupDisabled {
+		slog.Info("bootstrap endpoint disabled by operator configuration")
+	}
+
 	// Session cookie security is an explicit deployment decision. There is no
 	// implicit fallback: a missing/invalid value refuses to start (fail closed).
 	var cookieSecure bool
@@ -165,6 +181,7 @@ func main() {
 
 	businessAPI := api.New(database, api.Options{
 		SetupToken:     setupToken,
+		SetupDisabled:  setupDisabled,
 		CookieSecure:   cookieSecure,
 		TrustedProxies: trustedProxies,
 		LoginLimiter: api.LoginLimiterConfig{
