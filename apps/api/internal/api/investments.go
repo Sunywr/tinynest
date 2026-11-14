@@ -161,23 +161,12 @@ func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
 		}
 		computed := money.Minor(0)
 		if ruleID != "" {
-			base, err := money.FeeWithMinimum(money.Minor(in.GrossMinor), cBPS, money.Minor(minFee))
-			if err != nil {
-				return err
+			// Single source of truth shared with POST /fee-rules/preview.
+			breakdown, calcErr := computeTradeFee(money.Minor(in.GrossMinor), cBPS, minFee, stampBPS, transferBPS, in.Side)
+			if calcErr != nil {
+				return calcErr
 			}
-			computed = base
-			if in.Side == "sell" {
-				stamp, err := money.MulBPS(money.Minor(in.GrossMinor), stampBPS)
-				if err != nil {
-					return err
-				}
-				computed += stamp
-			}
-			transfer, err := money.MulBPS(money.Minor(in.GrossMinor), transferBPS)
-			if err != nil {
-				return err
-			}
-			computed += transfer
+			computed = breakdown.TotalMinor
 		}
 		fee := computed
 		if in.FeeMinor != nil {

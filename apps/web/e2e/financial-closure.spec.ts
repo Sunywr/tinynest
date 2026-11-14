@@ -358,3 +358,72 @@ test('账单日期修正保留应还和已还金额', async ({ page }) => {
   await expect(row).toContainText(dueOn)
   await expect(row.locator('b')).toHaveText(amounts)
 })
+
+// --- V0.1.2: fee rules, fee preview and household net-worth composition ---
+// All three scenarios use the real Go API and the shared throwaway SQLite.
+
+test('23 投资费率规则与费用预览（真实 API）', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '家庭账户' }).click()
+  await page.getByLabel('类型').selectOption('securities')
+  await page.getByLabel('名称').fill('E2E 券商账户')
+  await page.getByLabel('期初余额（元）').fill('10000')
+  await page.getByRole('button', { name: '创建账户' }).click()
+  await expect(page.getByText('账户已创建')).toBeVisible()
+
+  await page.getByRole('button', { name: '投资' }).click()
+  const assetPanel = page.locator('section.panel', { hasText: '新增投资资产' })
+  await assetPanel.getByLabel('代码').fill('E2E600')
+  await assetPanel.getByLabel('名称').fill('E2E 股票')
+  await assetPanel.getByLabel('投资账户').selectOption({ label: 'E2E 券商账户' })
+  await page.getByRole('button', { name: '创建资产' }).click()
+  await expect(page.getByText('投资资产已创建')).toBeVisible()
+
+  const feePanel = page.locator('section.panel', { hasText: '账户费率规则' })
+  await feePanel.getByLabel('费率适用账户').selectOption({ label: 'E2E 券商账户' })
+  await feePanel.getByLabel('生效日期').fill(fmt(new Date(year, month - 1, 1)))
+  await feePanel.getByLabel('佣金费率（基点，25 = 0.25%）').fill('25')
+  await feePanel.getByLabel('最低佣金（元）').fill('5')
+  await feePanel.getByLabel('印花税（基点，仅卖出）').fill('10')
+  await feePanel.getByLabel('过户费（基点）').fill('2')
+  await page.getByRole('button', { name: '新增费率版本' }).click()
+  await expect(page.getByText('费率版本已新增（历史快照不变）')).toBeVisible()
+  await expect(feePanel.locator('.rankrow').first()).toContainText('v1')
+
+  const tradePanel = page.locator('section.panel', { hasText: '买入 / 卖出' })
+  await tradePanel.getByLabel('资产').selectOption({ label: 'E2E600 E2E 股票' })
+  await tradePanel.getByLabel('成交金额（元）').fill('1000')
+  await page.getByRole('button', { name: '预览费用' }).click()
+  const preview = page.locator('.note-box', { hasText: '费用预览' })
+  await expect(preview).toContainText('佣金 ¥5.00')
+  await expect(preview).toContainText('印花税 ¥0.00')
+  await expect(preview).toContainText('过户费 ¥0.20')
+  await expect(preview).toContainText('预计费用 ¥5.20')
+})
+
+test('24 留空费用按费率自动计费入账（与预览一致）', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '投资' }).click()
+  const tradePanel = page.locator('section.panel', { hasText: '买入 / 卖出' })
+  await tradePanel.getByLabel('资产').selectOption({ label: 'E2E600 E2E 股票' })
+  await tradePanel.getByLabel('数量（股/份）').fill('100')
+  await tradePanel.getByLabel('成交金额（元）').fill('1000')
+  await tradePanel.getByLabel('资金账户').selectOption({ label: 'E2E 券商账户' })
+  await expect(tradePanel.getByLabel('费用（元，留空自动计算）')).toHaveValue('')
+  await page.getByRole('button', { name: '确认交易' }).click()
+  await expect(page.getByText('投资交易已入账')).toBeVisible()
+  // 1000.00 gross + 5.20 auto-computed fee = 1005.20 cost.
+  await expect(page.locator('.rankrow', { hasText: 'E2E600' })).toContainText('成本 ¥1,005.20')
+})
+
+test('25 首页资产构成与净资产口径一致', async ({ page }) => {
+  await ensureLogin(page)
+  await expect(page.getByRole('heading', { name: '家庭资产构成' })).toBeVisible()
+  await expect(page.locator('.rankrow', { hasText: '投资持仓（成本）' })).toContainText('¥1,005.20')
+  await expect(page.locator('.note-box', { hasText: '估值日期' })).toContainText('尚未录入')
+  const card = await page.locator('.stat', { hasText: '家庭净资产' }).innerText()
+  const row = await page.locator('.rankrow', { hasText: '家庭净资产' }).innerText()
+  const amount = (s: string) => (s.match(/-?¥[\d,]+\.\d{2}/) || [''])[0]
+  expect(amount(row)).toBe(amount(card))
+  expect(amount(row)).not.toBe('')
+})
