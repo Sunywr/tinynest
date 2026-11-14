@@ -62,7 +62,12 @@ const categories = ref<any[]>([])
 const projectSearch = ref('')
 const projectName = ref('')
 const projectEdit = ref<{ id: string; name: string; start_on: string; end_on: string; note: string; status: string } | null>(null)
-const projectTotals = ref<{ income_minor: number; net_expense_minor: number } | null>(null)
+type ProjectAmounts = { income_minor: number; refunded_minor: number; net_expense_minor: number }
+const projectTotals = ref<(ProjectAmounts & {
+  categories: (ProjectAmounts & { category_id: string; category_name: string })[]
+  transactions: (ProjectAmounts & { split_id: number; occurred_on: string; category_name: string })[]
+  detail_limit: number
+}) | null>(null)
 const projects = ref<any[]>([])
 const creditInstruments = ref<any[]>([])
 const statements = ref<any[]>([])
@@ -1006,6 +1011,21 @@ const metricCards = computed(() => {
                 <button class="ghost" type="submit" :disabled="loading">保存项目</button>
               </template>
             </form>
+            <template v-if="projectTotals">
+              <h2>分类构成</h2>
+              <div v-for="category in projectTotals.categories" :key="category.category_id" class="rankrow">
+                <span>{{ category.category_name }}</span>
+                <b>收入 {{ formatMinor(category.income_minor) }} · 净支出 {{ formatMinor(category.net_expense_minor) }}</b>
+              </div>
+              <p v-if="!projectTotals.categories.length" class="empty">暂无分类记录</p>
+              <h2>近期流水明细</h2>
+              <div v-for="item in projectTotals.transactions" :key="item.split_id" class="rankrow">
+                <span>{{ item.occurred_on }} · {{ item.category_name }}</span>
+                <b>{{ item.income_minor > 0 ? '收入 ' + formatMinor(item.income_minor) : '净支出 ' + formatMinor(item.net_expense_minor) }}<template v-if="item.refunded_minor"> · 已退 {{ formatMinor(item.refunded_minor) }}</template></b>
+              </div>
+              <p v-if="!projectTotals.transactions.length" class="empty">暂无项目流水</p>
+              <p v-else-if="projectTotals.transactions.length === projectTotals.detail_limit" class="subinfo">显示最近 {{ projectTotals.detail_limit }} 条拆分明细</p>
+            </template>
           </details>
           <section class="panel formpanel">
             <div class="paneltitle"><h2>分类管理</h2></div>

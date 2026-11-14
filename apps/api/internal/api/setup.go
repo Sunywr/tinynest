@@ -422,21 +422,84 @@ func (a *API) handleProjectSummary(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", "项目不存在")
 		return
 	}
-	var expense, income int64
-	_ = a.DB.QueryRowContext(r.Context(), `
-		SELECT COALESCE(SUM(CASE WHEN t.type='expense' THEN s.amount_minor ELSE 0 END),0),
-		       COALESCE(SUM(CASE WHEN t.type='income'  THEN s.amount_minor ELSE 0 END),0)
+	type amounts struct {
+		Income     int64 `json:"income_minor"`
+		Expense    int64 `json:"expense_minor"`
+		Refunded   int64 `json:"refunded_minor"`
+		NetExpense int64 `json:"net_expense_minor"`
+	}
+	type categoryRow struct {
+		ID   string `json:"category_id"`
+		Name string `json:"category_name"`
+		amounts
+	}
+	type detailRow struct {
+		SplitID       int64  `json:"split_id"`
+		TransactionID string `json:"transaction_id"`
+		Date          string `json:"occurred_on"`
+		Category      string `json:"category_name"`
+		amounts
+	}
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT s.id,t.id,t.occurred_on,c.id,c.name,t.type,s.amount_minor,
+		       COALESCE((SELECT SUM(r.amount_minor) FROM refunds r
+		                WHERE r.household_id=t.household_id AND r.split_id=s.id),0)
 		FROM transaction_splits s JOIN transactions t ON t.id=s.transaction_id
-		WHERE s.project_id=? AND t.household_id=? AND t.status='posted'`, id, p.HouseholdID).Scan(&expense, &income)
-	var refunded int64
-	_ = a.DB.QueryRowContext(r.Context(), `
-		SELECT COALESCE(SUM(r.amount_minor),0) FROM refunds r
-		JOIN transaction_splits s ON s.id=r.split_id
-		WHERE s.project_id=? AND r.household_id=?`, id, p.HouseholdID).Scan(&refunded)
+		JOIN categories c ON c.id=s.category_id AND c.household_id=t.household_id
+		WHERE s.project_id=? AND t.household_id=? AND t.status='posted'
+		ORDER BY t.occurred_on DESC,t.id DESC,s.id DESC`, id, p.HouseholdID)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	const detailLimit = 100
+	details := []detailRow{}
+	categories := []categoryRow{}
+	index := map[string]int{}
+	var total amounts
+	for rows.Next() {
+		var detail detailRow
+		var categoryID, kind string
+		var amount int64
+		if err := rows.Scan(&detail.SplitID, &detail.TransactionID, &detail.Date, &categoryID, &detail.Category,
+			&kind, &amount, &detail.Refunded); err != nil {
+			internalErr(w, err)
+			return
+		}
+		if kind == "income" {
+			detail.Income = amount
+		} else {
+			detail.Expense = amount
+		}
+		detail.NetExpense = detail.Expense - detail.Refunded
+		total.Income += detail.Income
+		total.Expense += detail.Expense
+		total.Refunded += detail.Refunded
+		i, exists := index[categoryID]
+		if !exists {
+			i = len(categories)
+			index[categoryID] = i
+			categories = append(categories, categoryRow{ID: categoryID, Name: detail.Category})
+		}
+		c := &categories[i]
+		c.Income += detail.Income
+		c.Expense += detail.Expense
+		c.Refunded += detail.Refunded
+		c.NetExpense += detail.NetExpense
+		if len(details) < detailLimit {
+			details = append(details, detail)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		internalErr(w, err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"project_id": id, "name": name,
-		"expense_minor": expense, "income_minor": income,
-		"refunded_minor": refunded, "net_expense_minor": expense - refunded,
+		"expense_minor": total.Expense, "income_minor": total.Income,
+		"refunded_minor": total.Refunded, "net_expense_minor": total.Expense - total.Refunded,
+		"categories": categories, "transactions": details, "detail_limit": detailLimit,
 	})
 }
 

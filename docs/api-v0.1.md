@@ -60,7 +60,7 @@
 | GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（两级，level<=2） |
 | PATCH | `/categories/{id}` | IMPLEMENTED | 传入任一字段：`name`（非空）、`sort`（整数）、`active`（布尔值）；仅更新本家庭分类。停用后不可用于新流水，历史关联保留 |
 | GET/POST | `/projects` | IMPLEMENTED | 项目列表 / 新建 |
-| GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出 |
+| GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出、分类构成与最近 100 条拆分流水 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
 | GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
 | GET | `/household/current` | PLANNED | 家庭信息 |

@@ -47,6 +47,16 @@ func TestCrossYearCashRefundKeepsProjectAndCashflowSeparate(t *testing.T) {
 		number(summary["net_expense_minor"]) != 5_000 {
 		t.Errorf("project summary does not reflect both refunds: %v", summary)
 	}
+	categories, ok := summary["categories"].([]any)
+	if !ok || len(categories) != 1 || number(categories[0].(map[string]any)["net_expense_minor"]) != 5_000 {
+		t.Fatalf("unexpected category breakdown: %v", summary)
+	}
+	details, ok := summary["transactions"].([]any)
+	if !ok || len(details) != 1 || details[0].(map[string]any)["transaction_id"] != transaction ||
+		number(details[0].(map[string]any)["refunded_minor"]) != 5_000 {
+		t.Fatalf("unexpected transaction detail: %v", details)
+	}
+
 	for _, period := range []struct {
 		from, to string
 		want     int64
