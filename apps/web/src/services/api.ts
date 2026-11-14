@@ -53,7 +53,7 @@ export const api = {
 
   register: (body: { username: string; password: string }) => post('/auth/register', body),
   applyInvite: (body: { username: string; password: string; code: string }) => post('/auth/join', body),
-  issueInvite: (body: { member_id: string; username: string }) => post<{ code: string }>('/household/invitations', body),
+  issueInvite: (body: { member_id: string; member_name: string; username: string }) => post<{ code: string }>('/household/invitations', body),
   invitations: () => get<{ items: { id: string; member_name: string; target_username: string; expires_at: string }[] }>('/admin/invitations'),
   revokeInvitation: (id: string) => del(`/admin/invitations/${encodeURIComponent(id)}`),
   joinApplications: () => get<{ items: { id: string; username: string; member_name: string }[] }>('/admin/join-applications'),

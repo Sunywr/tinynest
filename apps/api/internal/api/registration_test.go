@@ -6,10 +6,10 @@ func TestRegistrationRequiresApproval(t *testing.T) {
 	ts, c, database := newTestServer(t)
 	defer database.Close()
 	defer ts.Close()
-	member := c.mustOK("POST", "/api/v1/household/members", map[string]string{"name": "新成员"})
+
 	credentials := map[string]string{"username": "new-member", "password": "valid-password-123"}
 	c.mustOK("POST", "/api/v1/auth/register", credentials)
-	invite := c.mustOK("POST", "/api/v1/household/invitations", map[string]any{"member_id": member["id"], "username": credentials["username"]})
+	invite := c.mustOK("POST", "/api/v1/household/invitations", map[string]any{"member_name": "新成员", "username": credentials["username"]})
 	c.mustOK("POST", "/api/v1/auth/join", map[string]any{"username": credentials["username"], "password": credentials["password"], "code": invite["code"]})
 	if status, _ := c.do("POST", "/api/v1/auth/session", credentials); status != 401 {
 		t.Fatalf("unapproved login returned %d", status)
@@ -22,11 +22,11 @@ func TestRegistrationRequiresApproval(t *testing.T) {
 	}
 	c.mustOK("POST", "/api/v1/auth/session", credentials)
 	me := c.mustOK("GET", "/api/v1/auth/me", nil)
-	if me["member_id"] != member["id"] {
+	if me["member_name"] != "新成员" || me["member_id"] == "" {
 		t.Fatalf("missing member identity: %v", me)
 	}
 	var bound string
-	if err := database.QueryRow("SELECT member_id FROM household_user_members WHERE user_id=?", me["user_id"]).Scan(&bound); err != nil || bound != member["id"] {
+	if err := database.QueryRow("SELECT member_id FROM household_user_members WHERE user_id=?", me["user_id"]).Scan(&bound); err != nil || bound != me["member_id"] {
 		t.Fatalf("invalid binding: %s %v", bound, err)
 	}
 }

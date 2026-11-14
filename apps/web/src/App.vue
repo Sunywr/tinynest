@@ -26,7 +26,7 @@ const users = ref<{ id: string; username: string; role: string; status: string }
 const joinMode = ref(false)
 const inviteCode = ref('')
 const joinNotice = ref('')
-const inviteDraft = reactive({ member_id: '', username: '' })
+const inviteDraft = reactive({ member_id: '', member_name: '', username: '' })
 const issuedCode = ref('')
 const invitations = ref<Awaited<ReturnType<typeof api.invitations>>['items']>([])
 const applications = ref<{ id: string; username: string; member_name: string }[]>([])
@@ -133,7 +133,7 @@ function clearPrivateState() {
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   instDetail.value = null; debtDetail.value = null
-  invitations.value = []; applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.username = '';
+  invitations.value = []; applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.member_name = ''; inviteDraft.username = '';
   users.value = [];
   members.value = []; memberName.value = ''; selectedMember.value = ''
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
@@ -412,7 +412,10 @@ async function applyForHousehold(register: boolean) {
 async function makeInvite() {
   issuedCode.value = ''
   await run(async () => {
-    const result = await api.issueInvite({ ...inviteDraft })
+    const result = await api.issueInvite({
+      ...inviteDraft, member_name: inviteDraft.member_id ? '' : inviteDraft.member_name.trim(),
+    })
+    inviteDraft.member_name = ''
     issuedCode.value = result.code
     await refreshApplications()
   }, '邀请码已生成')
@@ -837,10 +840,10 @@ const metricCards = computed(() => {
             <form @submit.prevent="joinMode ? applyForHousehold(true) : submitLogin()">
               <label>用户名<input ref="usernameRef" v-model="authForm.username" autocomplete="username" required /></label>
               <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
-              <label v-if="joinMode">邀请码<input v-model="inviteCode" autocomplete="off" /></label>
+              <label v-if="joinMode">邀请码（加入家庭时填写）<input v-model="inviteCode" autocomplete="off" /></label>
               <p v-if="joinNotice && joinMode" role="status">{{ joinNotice }}</p>
               <p v-if="loginError" class="err" role="alert">{{ loginError }}</p>
-              <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '处理中…' : joinMode ? '注册' : '登录' }}</button>
+              <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '处理中…' : joinMode ? (inviteCode.trim() ? '注册并申请加入' : '注册') : '登录' }}</button>
               <button v-if="joinMode && inviteCode.trim()" class="btn-quiet" type="button" :disabled="loading" @click="applyForHousehold(false)">已有注册，提交申请</button>
               <button class="btn-quiet" type="button" :disabled="loading" @click="joinMode = !joinMode; loginError = ''; joinNotice = ''; authForm.password = ''; inviteCode = ''">{{ joinMode ? '返回登录' : '注册新账号' }}</button>
             </form>
@@ -1396,14 +1399,15 @@ const metricCards = computed(() => {
             <div class="paneltitle"><h2>邀请加入家庭</h2></div>
             <form @submit.prevent="makeInvite">
               <div class="formgrid">
-                <label>绑定成员档案<SearchableSelect><select v-model="inviteDraft.member_id" required>
-                  <option value="">请选择</option>
+                <label>绑定成员档案<SearchableSelect><select v-model="inviteDraft.member_id">
+                  <option value="">新建成员档案</option>
                   <option v-for="member in members.filter(m => m.status === 'active')" :key="member.id" :value="member.id">{{ member.name }}</option>
                 </select></SearchableSelect></label>
-                <label>指定新账号登录名（可选）<input v-model.trim="inviteDraft.username" /></label>
+                <label v-if="!inviteDraft.member_id">新成员姓名<input v-model.trim="inviteDraft.member_name" maxlength="100" required /></label>
+                <label>指定新账号登录名（可选）<input v-model.trim="inviteDraft.username" pattern="[a-z0-9][a-z0-9_.\-]{2,39}" placeholder="3–40 位小写字母、数字或 ._-" /></label>
               </div>
               <button type="submit" class="ghost" :disabled="loading">生成邀请码</button>
-              <label v-if="issuedCode">邀请码（48 小时有效）<input :value="issuedCode" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
+              <label v-if="issuedCode">邀请码（48 小时有效，请发给受邀人）<input :value="issuedCode" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
             </form>
             <div v-if="me?.role === 'admin'" class="ranklist">
               <h2>有效邀请</h2>

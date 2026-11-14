@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"tinynest/api/internal/auth"
 )
@@ -68,11 +69,21 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleIssueInvite(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
-		MemberID string `json:"member_id"`
-		Username string
+		MemberID   string `json:"member_id"`
+		MemberName string `json:"member_name"`
+		Username   string
 	}
-	if decode(r, &in) != nil || (in.Username != "" && !registrationName.MatchString(in.Username)) {
+	if decode(r, &in) != nil {
 		writeErr(w, 400, "invalid_request", "邀请码资料无效")
+		return
+	}
+	in.MemberName = strings.TrimSpace(in.MemberName)
+	if (in.MemberID == "") == (in.MemberName == "") || utf8.RuneCountInString(in.MemberName) > 100 {
+		writeErr(w, 400, "invalid_request", "请选择现有档案，或填写新成员姓名（最多 100 字）")
+		return
+	}
+	if in.Username != "" && !registrationName.MatchString(in.Username) {
+		writeErr(w, 400, "invalid_request", "指定登录名须为 3–40 位小写字母、数字或 ._-")
 		return
 	}
 	raw, hash, err := auth.NewToken()
@@ -80,18 +91,39 @@ func (a *API) handleIssueInvite(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	result, err := a.DB.ExecContext(r.Context(), `INSERT INTO household_invites(token_hash,household_id,member_id,target_username,expires_at)
- SELECT ?,m.household_id,m.id,NULLIF(?,''),? FROM household_members m
- WHERE m.id=? AND m.household_id=? AND m.status='active'
- AND NOT EXISTS(SELECT 1 FROM household_user_members b WHERE b.member_id=m.id)`,
-		hash, in.Username, a.now().UTC().Add(48*time.Hour).Format(time.RFC3339), in.MemberID, p.HouseholdID)
-	if err != nil {
-		internalErr(w, err)
+	unavailable := errors.New("成员档案已绑定或不可用，请选择其他档案")
+	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		ctx := r.Context()
+		if in.MemberName != "" {
+			in.MemberID = newID("mem")
+			if _, err := tx.ExecContext(ctx, `INSERT INTO household_members(id,household_id,name) VALUES(?,?,?)`,
+				in.MemberID, p.HouseholdID, in.MemberName); err != nil {
+				return err
+			}
+		}
+		result, err := tx.ExecContext(ctx, `INSERT INTO household_invites(token_hash,household_id,member_id,target_username,expires_at)
+			SELECT ?,m.household_id,m.id,NULLIF(?,''),? FROM household_members m
+			WHERE m.id=? AND m.household_id=? AND m.status='active'
+			AND NOT EXISTS(SELECT 1 FROM household_user_members b WHERE b.member_id=m.id)`,
+			hash, in.Username, a.now().UTC().Add(48*time.Hour).Format(time.RFC3339), in.MemberID, p.HouseholdID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return unavailable
+		}
+		return audit(ctx, tx, p, "issue_invitation", "household_member", in.MemberID, "{}")
+	})
+	if errors.Is(err, unavailable) {
+		writeErr(w, 404, "not_found", err.Error())
 		return
 	}
-	n, _ := result.RowsAffected()
-	if n != 1 {
-		writeErr(w, 404, "not_found", "成员档案不可绑定")
+	if err != nil {
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 201, map[string]string{"code": raw})
