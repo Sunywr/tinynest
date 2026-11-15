@@ -87,7 +87,6 @@ export const api = {
   transactions: (params = '') => get(`/transactions${params}`),
   createTransaction: (body: any) => post('/transactions', body),
   transaction: (id: string) => get(`/transactions/${id}`),
-  reverseTransaction: (id: string) => post(`/transactions/${id}/reverse`, {}),
   createRefund: (body: any) => post('/refunds', body),
   refunds: (txId: string) => get(`/refunds/by-transaction/${txId}`),
 

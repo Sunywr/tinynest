@@ -81,6 +81,18 @@ const debts = ref<any[]>([])
 const debtDetail = ref<any>(null)
 const dueItems = ref<any[]>([])
 const transactions = ref<any[]>([])
+const firstTransactionCursor = ref<string | null>(null)
+const ledgerFilters = reactive({ from: '', to: '', type: '' })
+const appliedLedgerFilter = ref('')
+const ledgerPage = ref<{ items: any[]; next_cursor: string | null } | null>(null)
+const ledgerLoading = ref(false)
+let ledgerRequest = 0
+const ledgerTransactions = computed(() => ledgerPage.value?.items ?? transactions.value)
+const ledgerCursor = computed(() => ledgerPage.value ? ledgerPage.value.next_cursor : firstTransactionCursor.value)
+const refundOptions = computed(() => {
+  const unique = new Map([...transactions.value, ...ledgerTransactions.value].map(t => [t.id, t]))
+  return [...unique.values()].filter(t => t.type === 'expense' && t.status === 'posted')
+})
 const catRanking = ref<any[]>([])
 const assets = ref<any[]>([])
 const positions = ref<any[]>([])
@@ -143,6 +155,12 @@ function clearPrivateState() {
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   debts.value = []; dueItems.value = []; transactions.value = []
+  ledgerRequest++
+  ledgerLoading.value = false
+  firstTransactionCursor.value = null
+  ledgerPage.value = null
+  appliedLedgerFilter.value = ''
+  Object.assign(ledgerFilters, { from: '', to: '', type: '' })
   catRanking.value = []; assets.value = []; positions.value = []; feeRules.value = []
   setCSRFToken('')
 }
@@ -285,7 +303,10 @@ async function loadAll() {
     [api.categories(), v => categories.value = v.items || []],
     [api.projects(), v => projects.value = v.items || []],
     [api.accounts(), v => accounts.value = v.items || []],
-    [api.transactions(), v => transactions.value = v.items || []],
+    [api.transactions(), v => {
+      transactions.value = v.items || []
+      firstTransactionCursor.value = v.next_cursor ?? null
+    }],
     [api.creditInstruments(), v => creditInstruments.value = v.items || []],
     [api.statements(), v => statements.value = v.items || []],
     [api.installments(), v => installments.value = v.items || []],
@@ -305,7 +326,42 @@ async function loadAll() {
   const failed = results.filter(r => r.status === 'rejected').length
   if (failed) apiStatus.value = `部分数据加载失败 (${failed})`
   else apiStatus.value = '已连接'
+  if (appliedLedgerFilter.value) await loadLedgerPage(appliedLedgerFilter.value)
+  else {
+    ledgerRequest++
+    ledgerLoading.value = false
+    ledgerPage.value = null
+  }
   loading.value = false
+}
+
+async function loadLedgerPage(filter: string, cursor?: string) {
+  const request = ++ledgerRequest
+  ledgerLoading.value = true
+  try {
+    const params = new URLSearchParams(filter)
+    if (cursor) params.set('cursor', cursor)
+    const page = await api.transactions(`?${params}`)
+    if (request !== ledgerRequest) return
+    const items = cursor ? [...ledgerTransactions.value, ...page.items] : page.items
+    ledgerPage.value = { items, next_cursor: page.next_cursor ?? null }
+    appliedLedgerFilter.value = filter
+  } catch (e) {
+    if (request === ledgerRequest) fail(e)
+  } finally {
+    if (request === ledgerRequest) ledgerLoading.value = false
+  }
+}
+
+function filterLedger() {
+  if (ledgerFilters.from && ledgerFilters.to && ledgerFilters.from > ledgerFilters.to) {
+    return toast('开始日期须早于或等于结束日期')
+  }
+  const filter = new URLSearchParams()
+  for (const [key, value] of Object.entries(ledgerFilters)) {
+    if (value) filter.set(key, value)
+  }
+  return loadLedgerPage(filter.toString())
 }
 
 async function reloadSummary() {
@@ -806,7 +862,12 @@ function submitRefund() {
     destination_type: f.refund.destination_type, destination_id: f.refund.destination_id,
   }), '退款已冲减原支出')
 }
-function reverse(id: string) { return run(() => api.reverseTransaction(id), '已冲正，原分录保留') }
+
+function setAccountStatus(a: any, status: 'active' | 'disabled') {
+  return run(() => api.updateAccount(a.id, {
+    name: a.name, subtype: a.subtype || '', owner_member_id: a.owner_member_id || '', note: a.note || '', status,
+  }), status === 'disabled' ? '账户已停用' : '账户已启用')
+}
 
 function instrumentUsage(id: string) {
   const row = (creditDash.value?.credit?.instruments || []).find((i: any) => i.id === id)
@@ -848,7 +909,7 @@ const metricCards = computed(() => {
       <main class="landing-main">
         <section class="hero" aria-labelledby="hero-title">
           <div class="hero-copy">
-            <p class="hero-eyebrow">为自托管而设计 · 数据保存在你自己的服务器</p>
+            <p class="hero-eyebrow">为家庭而设计 · 你的数据始终由你掌控</p>
             <h1 id="hero-title">家的每一笔，都值得被温柔记录。</h1>
             <p class="hero-sub">从日常收支到账户与资产，让家庭的财务生活变得简单、清晰、有条理。</p>
             <div class="hero-actions">
@@ -881,7 +942,7 @@ const metricCards = computed(() => {
           <h2 id="how-title">简单、透明、自己掌握</h2>
           <div class="how-grid">
             <div><strong>复式分录</strong><p>每一笔都由借贷平衡的分录重建余额，金额使用整数分。</p></div>
-            <div><strong>自主托管</strong><p>前后端分离部署，数据库只保存在你自己的后端服务器。</p></div>
+            <div><strong>数据自主</strong><p>数据库保存在你自己的服务器上，数据始终由你掌控。</p></div>
             <div><strong>会话保护</strong><p>HttpOnly 会话 Cookie、CSRF 校验、登录失败限流与家庭数据隔离。</p></div>
           </div>
         </section>
@@ -889,7 +950,7 @@ const metricCards = computed(() => {
 
       <footer class="landing-footer">
         <div class="footer-brand"><img src="/icons/tinynest-original.png" alt="" /> <span>TinyNest · 小家</span></div>
-        <p>自托管家庭财务账本 · 开发阶段版本，发布门禁尚未全部通过</p>
+        <p>家庭财务账本 · 开发阶段版本，发布门禁尚未全部通过</p>
         <a href="https://github.com/Sunywr/tinynest" target="_blank" rel="noopener noreferrer">GitHub 仓库 ↗</a>
       </footer>
 
@@ -936,15 +997,13 @@ const metricCards = computed(() => {
         <div class="top">
           <span class="crumb">我的小家 / {{ nav.find(n => n.key === view)?.label }}</span>
           <div class="topright">
-            <span class="demotag">✦ 真实本地账本</span>
-            <span class="api-indicator" role="status">API：{{ apiStatus }}</span>
             <button class="ghost" @click="logout()">登出</button>
           </div>
         </div>
 
         <!-- 首页 -->
         <template v-if="view === 'home'">
-          <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>所有数字均由后端分录实时汇总，不含演示数据。</p></div>
+          <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>所有数字均由实时汇总，不含演示数据。</p></div>
             <div class="day">{{ range.from }} ～ {{ range.to }}</div>
             <button v-if="canWrite" type="button" class="btn-primary quick-entry" @click="quickEntry()">＋ 记一笔</button></section>
           <div class="rangebar">
@@ -1018,24 +1077,38 @@ const metricCards = computed(() => {
 
         <!-- 记账流水：默认先展示全部流水，表单经按钮进入 -->
         <template v-else-if="view === 'ledger'">
-          <section class="greeting"><div><h1>记账流水</h1><p>金额以「元」输入，后端按整数分入账；已入账记录只能冲正，不能删除。</p></div></section>
+          <section class="greeting"><div><h1>记账流水</h1><p>金额以「元」输入，按整数分入账。</p></div></section>
           <div class="actions-bar">
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('tx')">＋ 记一笔</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('refund')">退款</button>
             <button type="button" class="ghost" @click="openPanel('project')">项目管理</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('category')">分类管理</button>
           </div>
-          <section class="panel"><div class="paneltitle"><div><h2>全部流水</h2><span class="subinfo">已入账记录只能冲正，不能删除</span></div></div>
-            <div class="translist"><div class="transaction" v-for="t in transactions" :key="t.id">
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>全部流水</h2></div></div>
+            <form class="formgrid" @submit.prevent="filterLedger">
+              <label>流水开始日期<input v-model="ledgerFilters.from" type="date" /></label>
+              <label>流水结束日期<input v-model="ledgerFilters.to" type="date" /></label>
+              <label>流水类型<select v-model="ledgerFilters.type">
+                <option value="">全部</option><option value="expense">支出</option>
+                <option value="income">收入</option><option value="transfer">转账</option>
+              </select></label>
+              <div class="actions-bar">
+                <button type="submit" class="ghost" :disabled="ledgerLoading || loading">筛选</button>
+                <button type="button" class="ghost" :disabled="ledgerLoading || loading" @click="Object.assign(ledgerFilters, { from: '', to: '', type: '' }); filterLedger()">清除筛选</button>
+              </div>
+            </form>
+            <div class="translist"><div class="transaction" v-for="t in ledgerTransactions" :key="t.id">
               <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
               <div class="txbody"><div class="txname">{{ t.merchant || t.type }}</div>
-                <div class="txcat">{{ t.occurred_on }} · {{ t.status }} · {{ t.id.slice(0, 12) }}</div></div>
+                <div class="txcat">{{ t.occurred_on }} · {{ t.status }}</div></div>
               <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
-              <div class="rowacts" v-if="t.status === 'posted'">
-                <button v-if="canWrite" type="button" class="ghost" @click="reverse(t.id)">冲正</button>
-                <button v-if="canWrite && (t.type === 'expense')" type="button" class="ghost" @click="refund(t.id)">退款</button>
+              <div class="rowacts" v-if="t.status === 'posted' && t.type === 'expense'">
+                <button v-if="canWrite" type="button" class="ghost" @click="refund(t.id)">退款</button>
               </div>
-            </div><p v-if="!transactions.length" class="empty">还没有流水，点上方「记一笔」开始吧</p></div>
+            </div><p v-if="!ledgerTransactions.length && !ledgerLoading" class="empty">没有符合条件的流水</p></div>
+            <button v-if="ledgerCursor" type="button" class="ghost" :disabled="ledgerLoading || loading" @click="loadLedgerPage(appliedLedgerFilter, ledgerCursor)">
+              {{ ledgerLoading ? '加载中…' : '加载更多流水' }}
+            </button>
           </section>
           <form v-if="panel === 'tx'" class="panel formpanel" @submit.prevent="createTx">
             <div class="paneltitle"><div><h2>记一笔</h2><span class="subinfo">常用分类与账户会自动记住（仅本机偏好）</span></div>
@@ -1074,7 +1147,7 @@ const metricCards = computed(() => {
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>原交易<SearchableSelect><select v-model="f.refund.transaction_id"><option value="">请选择</option>
-                <option v-for="t in transactions.filter(t => t.type === 'expense' && t.status === 'posted')" :key="t.id" :value="t.id">{{ t.occurred_on }} · {{ formatMinor(t.amount_minor) }}</option></select></SearchableSelect></label>
+                <option v-for="t in refundOptions" :key="t.id" :value="t.id">{{ t.occurred_on }} · {{ formatMinor(t.amount_minor) }}</option></select></SearchableSelect></label>
               <label>退款金额<input v-model="f.refund.amount" inputmode="decimal" placeholder="0.00" /></label>
               <label>退款去向<SearchableSelect><select v-model="f.refund.destination_type"><option value="cash">现金账户</option><option value="credit">原信用工具</option></select></SearchableSelect></label>
               <label>到账账户 / 信用工具<SearchableSelect><select v-model="f.refund.destination_id"><option value="">请选择</option>
@@ -1167,10 +1240,13 @@ const metricCards = computed(() => {
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('create')">＋ 新建账户</button>
             <button type="button" class="ghost" @click="openPanel('edit')">账户资料与流水</button>
           </div>
-          <section class="panel"><div class="paneltitle"><div><h2>账户列表</h2></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账户列表</h2></div></div>
             <div class="ranklist"><div v-for="a in accounts" :key="a.id" class="rankrow">
               <span>{{ a.name }} <small>{{ a.kind }}<template v-if="a.status === 'disabled'"> · 已停用</template></small></span><b>{{ formatMinor(a.balance_minor) }}</b>
-              <span class="rowacts"><button type="button" class="ghost" @click="openAccountById(a.id); openPanel('edit')">资料/流水</button></span></div>
+              <span class="rowacts">
+                <button type="button" class="ghost" @click="openAccountById(a.id); openPanel('edit')">编辑</button>
+                <button v-if="canWrite" type="button" class="ghost" @click="setAccountStatus(a, a.status === 'disabled' ? 'active' : 'disabled')">{{ a.status === 'disabled' ? '启用' : '停用' }}</button>
+              </span></div>
               <p v-if="!accounts.length" class="empty">还没有账户，点上方「新建账户」开始吧</p></div>
           </section>
           <form v-if="panel === 'create'" class="panel formpanel" @submit.prevent="createAccount">
@@ -1209,7 +1285,7 @@ const metricCards = computed(() => {
             <div v-if="accountEdit" class="ranklist">
               <h2>近期资金流水</h2>
               <div v-for="item in accountJournal" :key="item.id" class="rankrow">
-                <span>{{ item.occurred_on }} · {{ item.reversal_of ? '冲正' : item.change_minor > 0 ? '资金增加' : item.change_minor < 0 ? '资金减少' : '无净变动' }}</span>
+                <span>{{ item.occurred_on }} · {{ item.reversal_of ? '已调整' : item.change_minor > 0 ? '资金增加' : item.change_minor < 0 ? '资金减少' : '无净变动' }}</span>
                 <b>{{ item.change_minor > 0 ? '+' : '' }}{{ formatMinor(item.change_minor) }}</b>
               </div>
               <p v-if="!accountJournal.length" class="empty">暂无资金流水</p>
@@ -1250,7 +1326,7 @@ const metricCards = computed(() => {
               <label>日期<input type="date" v-model="f.payment.paid_on" /></label>
             </div><button class="ghost" type="submit">确认还款</button>
           </form>
-          <section class="panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
             <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow">
               <span>{{ c.name }} <small>{{ c.kind }} · {{ c.status }}</small></span>
               <b v-if="creditDash">{{ instrumentUsage(c.id) }}</b>
@@ -1258,7 +1334,7 @@ const metricCards = computed(() => {
             </div>
               <p v-if="!creditInstruments.length" class="empty">还没有信用工具，点上方「新增信用工具」开始吧</p></div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo">系统应还由明细汇总；点击「还款」直接填入金额</span></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo">系统应还由明细汇总；点击「还款」直接填入金额</span></div></div>
             <div class="ranklist"><div v-for="s in statements" :key="s.id" class="rankrow">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ s.status }}</span>
               <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}</b>
@@ -1284,7 +1360,7 @@ const metricCards = computed(() => {
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('instCreate')">＋ 新建分期</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('convert')">账单转分期</button>
           </div>
-          <section class="panel"><div class="paneltitle"><div><h2>固定负债合同</h2></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>固定负债合同</h2></div></div>
             <div class="ranklist"><div v-for="d in debts" :key="d.id" class="rankrow">
               <span>{{ d.name }} <small>{{ d.kind }} · {{ d.status }}</small></span>
               <b>本金余额 {{ formatMinor(d.remaining_principal_minor) }}</b>
@@ -1292,7 +1368,7 @@ const metricCards = computed(() => {
             </div>
               <p v-if="!debts.length" class="empty">还没有固定负债合同，点上方「新建固定负债」开始吧</p></div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>分期合同</h2></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>分期合同</h2></div></div>
             <div class="ranklist"><div v-for="i in installments" :key="i.id" class="rankrow">
               <span>{{ i.name }} <small>{{ i.status }}</small></span>
               <b>剩余应付 {{ formatMinor(i.remaining_minor) }}</b>
@@ -1300,7 +1376,7 @@ const metricCards = computed(() => {
             </div>
               <p v-if="!installments.length" class="empty">还没有分期合同，点上方「新建分期」开始吧</p></div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>待支付事项</h2><span class="subinfo">重复执行不会重复生成；付款后自动核销</span></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>待支付事项</h2><span class="subinfo">重复执行不会重复生成；付款后自动核销</span></div>
             <button v-if="canWrite" type="button" class="ghost" @click="generateDue()">重新生成（幂等）</button></div>
             <div class="ranklist"><div v-for="d in dueItems" :key="d.id" class="rankrow">
               <span>{{ d.due_on }} · {{ d.source_label || d.source_type }} · {{ d.status }}</span><b>{{ formatMinor(d.amount_minor) }}</b></div>
@@ -1431,13 +1507,13 @@ const metricCards = computed(() => {
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('feeRule')">账户费率规则</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('dividend')">分红与估值</button>
           </div>
-          <section class="panel"><div class="paneltitle"><div><h2>持仓</h2></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>持仓</h2></div></div>
             <div class="ranklist"><div v-for="p in positions" :key="p.asset_id" class="rankrow">
               <span>{{ p.code }} {{ p.name }} · 成本 {{ formatMinor(p.total_cost_minor) }}</span>
               <b>已实现 {{ formatMinor(p.realized_pnl_minor) }} · 净分红 {{ formatMinor(p.net_dividend_minor) }}<span v-if="p.reference_return_bps != null"> · 参考收益率 {{ (p.reference_return_bps / 100).toFixed(2) }}%（总收益 ÷ 累计买入成本，非年化）</span><span v-else-if="p.unrealized_pnl_minor == null"> · 尚未估值</span><span v-if="p.last_valued_on"> · 估值日 {{ p.last_valued_on }}</span><span v-if="isValuationStale(p.last_valued_on)" class="overdue"> · 估值待更新</span><span v-if="p.dividend_tax_unknown"> · 红利税待确认</span></b></div>
               <p v-if="!positions.length" class="empty">暂无持仓，点上方「新增资产」开始吧</p></div>
           </section>
-          <section class="panel"><div class="paneltitle"><div><h2>分红记录与年度汇总</h2><span class="subinfo">来自真实业务表；税额留空代表未知，不按 0 处理</span></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>分红记录与年度汇总</h2><span class="subinfo">来自真实业务表；税额留空代表未知，不按 0 处理</span></div></div>
             <div class="ranklist" v-if="dividendHistory">
               <div class="rankrow"><span>累计税前 / 已知税 / 净到账</span><b>{{ formatMinor(dividendHistory.summary?.total_gross_minor) }} / {{ formatMinor(dividendHistory.summary?.total_tax_minor) }} / {{ formatMinor(dividendHistory.summary?.total_net_minor) }}</b></div>
               <div class="rankrow" v-for="y in (dividendHistory.summary?.by_year || [])" :key="y.year">
@@ -1446,7 +1522,7 @@ const metricCards = computed(() => {
                 <span>{{ d.received_on }} · {{ d.code }} {{ d.name }}</span><b>{{ formatMinor(d.gross_minor) }} − {{ d.tax_minor == null ? '税额未填写' : formatMinor(d.tax_minor) }} ＝ {{ formatMinor(d.net_minor) }}<span v-if="d.tax_unknown" class="overdue"> · 税额未知</span></b></div>
               <p v-if="!dividendHistory.items?.length" class="empty">暂无分红记录</p>
             </div>
-            <p v-if="!dividendHistory" class="empty">分红记录加载中或后端不可用</p>
+            <p v-if="!dividendHistory" class="empty">分红记录加载中或暂时不可用</p>
             <div class="note-box" v-if="dividendHistory?.summary?.unknown_tax_count">♡ 有 {{ dividendHistory.summary.unknown_tax_count }} 笔分红税额未填写（税前合计 {{ formatMinor(dividendHistory.summary.unknown_gross_minor) }}），净收益口径不完整，请勿据此计算税负。</div>
           </section>
           <form v-if="panel === 'asset'" class="panel formpanel" @submit.prevent="createAsset">
@@ -1546,7 +1622,7 @@ const metricCards = computed(() => {
               <button type="submit" class="ghost" :disabled="loading">生成邀请码</button>
               <label v-if="issuedCode">邀请码（48 小时有效，请发给受邀人）<input :value="issuedCode" readonly @focus="($event.target as HTMLInputElement).select()" /></label>
           </form>
-          <section v-if="me?.role === 'admin'" class="panel"><div class="paneltitle"><h2>有效邀请与加入审批</h2></div>
+          <section v-if="me?.role === 'admin' && !panel" class="panel"><div class="paneltitle"><h2>有效邀请与加入审批</h2></div>
             <div class="ranklist">
               <h2>有效邀请</h2>
               <div v-for="invite in invitations" :key="invite.id" class="rankrow">
@@ -1565,7 +1641,7 @@ const metricCards = computed(() => {
               <p v-if="!applications.length" class="empty">暂无待审批申请</p>
             </div>
           </section>
-          <section v-if="me?.role === 'admin'" class="panel formpanel">
+          <section v-if="me?.role === 'admin' && !panel" class="panel formpanel">
             <div class="paneltitle"><h2>登录账号</h2></div>
             <div class="ranklist">
               <div v-for="user in users" :key="user.id" class="rankrow">
@@ -1581,11 +1657,11 @@ const metricCards = computed(() => {
             <label>成员名称<input v-model="memberName" maxlength="100" required /></label>
             <button class="ghost" type="submit" :disabled="loading">新增成员</button>
           </form>
-          <section class="panel"><div class="paneltitle"><h2>家庭成员档案</h2></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><h2>家庭成员档案</h2></div>
             <ul v-if="members.length"><li v-for="member in members" :key="member.id">{{ member.name }}</li></ul>
             <p v-else class="empty">暂无成员档案</p>
           </section>
-          <section class="panel"><div class="note-box">
+          <section class="panel" v-if="!panel"><div class="note-box">
             <template v-if="household">家庭：{{ household.name }}<br />账本币种：{{ household.currency }}<br /></template>当前登录：{{ me?.username }}<span v-if="me?.role === 'viewer'">（只读）</span><br /><span v-if="me?.member_name">绑定档案：{{ me.member_name }}<br /></span><br />
             管理员可审批加入申请和停用成员账号。成员可使用家庭账本。<br /><br />
             尚未开发：细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
