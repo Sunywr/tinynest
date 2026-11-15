@@ -650,7 +650,7 @@ test('33 首页「记一笔」直达记账表单', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '＋ 记一笔' }).click()
   await expect(page.getByRole('heading', { name: '记账流水' })).toBeVisible()
-  await expect(page.getByLabel('金额（元）')).toBeVisible()
+  await expect(page.getByLabel('金额（元）')).toBeFocused()
 })
 
 test('34 流水行内「退款」直接打开预填表单', async ({ page }) => {
@@ -687,4 +687,39 @@ test('35 常用分类与账户会被本机记住', async ({ page }) => {
   const form2 = page.locator('form.formpanel')
   await expect(form2.getByLabel('分类')).toHaveValue(cat.id)
   await expect(form2.getByLabel('收/付款账户')).toHaveValue(acc.id)
+})
+test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page, browser }) => {
+  await ensureLogin(page)
+  const csrf = (await (await page.request.get('/api/v1/auth/me')).json()).csrf_token
+  const headers = { 'X-CSRF-Token': csrf }
+  const body = { username: 'viewer-e2e', password: 'viewer-fixture-password' }
+  const invite = await page.request.post('/api/v1/household/invitations', { headers, data: { member_name: '只读演练成员' } })
+  expect(invite.status()).toBe(201)
+  expect((await page.request.post('/api/v1/auth/register', { data: body })).status()).toBe(202)
+  expect((await page.request.post('/api/v1/auth/join', { data: { ...body, code: (await invite.json()).code } })).status()).toBe(202)
+  const pending = await (await page.request.get('/api/v1/admin/join-applications')).json()
+  const application = pending.items.find((item: { username: string }) => item.username === body.username)
+  expect((await page.request.post('/api/v1/admin/join-applications/' + application.id, { headers, data: { approve: true } })).ok()).toBe(true)
+  await page.getByRole('button', { name: '设置' }).click()
+  const row = page.locator('.rankrow').filter({ hasText: body.username })
+  await row.getByRole('button', { name: '设为只读' }).click()
+  await expect(row).toContainText('只读')
+
+  const member = await browser.newPage()
+  try {
+    await member.goto('/')
+    await member.getByRole('button', { name: '进入我的小家' }).click()
+    await member.getByLabel('用户名').fill(body.username)
+    await member.getByLabel('密码').fill(body.password)
+    await member.getByRole('button', { name: '登录', exact: true }).last().click()
+    await expect(member.getByText('今天也要好好生活呀')).toBeVisible()
+    await expect(member.getByRole('button', { name: '＋ 记一笔' })).toHaveCount(0)
+    await member.getByRole('button', { name: '设置' }).click()
+    await expect(member.getByText('（只读）')).toBeVisible()
+    await expect(member.getByRole('heading', { name: '登录账号' })).toHaveCount(0)
+    await member.getByRole('button', { name: '登出' }).click()
+    await expect(member.getByRole('button', { name: '进入我的小家' })).toBeVisible()
+  } finally {
+    await member.close()
+  }
 })

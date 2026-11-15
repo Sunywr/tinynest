@@ -101,3 +101,5 @@ npm run build
 或用 `bash scripts/check-phase0.sh`（脚本名保留历史，实际执行全仓自检）/ Windows `powershell -ExecutionPolicy Bypass -File scripts/check-phase0.ps1`。CI 工作流见 `.github/workflows/ci.yml`（首次绿灯需真正在 GitHub Actions 跑过）。
 
 设计文档：`docs/accounting-rules-v0.1.md`（账务规则，第 8 节 10 项**待确认**）、`docs/er-v0.1.md`（ER）、`docs/api-v0.1.md`（API 契约含状态列）、`docs/plan-v0.1.md`（V0.1 实施计划）、`IMPLEMENTATION_REPORT.md`（交付与未竟事项）。
+
+SQLite 带数据升级演练使用 `python scripts/db_drill.py --api-dir apps/api --baseline-api-dir <旧版源码的 apps/api>`。旧版先写入临时账本，新版迁移后检查迁移序列、期初余额、分录和备份恢复。省略基线路径时执行当前版本的空库演练。

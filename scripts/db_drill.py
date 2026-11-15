@@ -59,16 +59,18 @@ def wait_health(proc, deadline_s: int = 60) -> None:
     raise SystemExit("server did not become healthy in time")
 
 
-def start_server(workdir: Path, logname: str):
+def start_server(workdir: Path, logname: str, binary: str = "tinynest-server", db_path: Path | None = None):
     log = open(workdir / logname, "w")
     proc = subprocess.Popen(
-        [str(workdir / "tinynest-server")],
+        [str(workdir / binary)],
         env={
             **os.environ,  # full environment: Winsock needs SystemRoot etc.
             "TINYNEST_LISTEN_ADDR": "127.0.0.1:18788",
             "TINYNEST_DATA_DIR": str(workdir / "data"),
-            "TINYNEST_DB_PATH": str(workdir / "data" / "drill.sqlite3"),
+            "TINYNEST_DB_PATH": str(db_path or workdir / "data" / "drill.sqlite3"),
             "TINYNEST_SETUP_TOKEN": SETUP_TOKEN,
+            "TINYNEST_SETUP_DISABLED": "false",
+            "TINYNEST_DB_DRIVER": "sqlite",
             "TINYNEST_COOKIE_SECURE": "false",
             "TINYNEST_TRUSTED_PROXIES": "",
         },
@@ -98,6 +100,11 @@ def business_snapshot(db_path: Path) -> dict:
         return {
             "migrations": [r[0] for r in conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version")],
+            "contracts_and_holdings": {
+                table: conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+                for table in ("debt_contracts", "debt_schedule_items", "debt_payments",
+                              "investment_assets", "investment_trades", "investment_positions")
+            },
             "accounts": conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0],
             "journal_entries": conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],
             "journal_lines": conn.execute("SELECT COUNT(*) FROM journal_lines").fetchone()[0],
@@ -115,6 +122,7 @@ def business_snapshot(db_path: Path) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--api-dir", required=True)
+    ap.add_argument("--baseline-api-dir", type=Path, help="older API source used to populate the fixture before upgrade")
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     api = Path(a.api_dir).resolve()
@@ -125,9 +133,15 @@ def main() -> None:
     subprocess.run(["go", "build", "-o", str(work / "tinynest-server"), "./cmd/server"],
                    cwd=api, check=True)
 
+    baseline = "tinynest-server"
+    if a.baseline_api_dir:
+        baseline = "tinynest-baseline"
+        subprocess.run(["go", "build", "-o", str(work / baseline), "./cmd/server"],
+                       cwd=a.baseline_api_dir.resolve(), check=True)
+
     print("[2/8] start on EMPTY database -> embedded migrations apply")
     (work / "data").mkdir()
-    proc, log = start_server(work, "server1.log")
+    proc, log = start_server(work, "server1.log", baseline)
 
     print("[3/8] setup + login + create account via real HTTP")
     code, _ = api_call("POST", "/api/v1/setup",
@@ -151,14 +165,55 @@ def main() -> None:
     assert code == 201, f"account create failed: {acct}"
     account_id = acct["id"]
 
+    def post(path, body):
+        status, result = api_call("POST", "/api/v1/" + path, body, cookie=cookie, csrf=csrf)
+        assert 200 <= status < 300, f"fixture write failed: {path}"
+        return result
+
+    debt = post("debts", {
+        "kind": "mortgage", "name": "演练房贷", "principal_minor": 20000,
+        "start_on": "2026-11-01", "due_day": 10, "cycle": "monthly",
+    })["id"]
+    post(f"debts/{debt}/schedule", {"items": [
+        {"installment_no": 1, "due_on": "2026-12-10",
+         "principal_minor": 5000, "interest_minor": 500, "fee_minor": 0},
+        {"installment_no": 2, "due_on": "2027-01-10",
+         "principal_minor": 15000, "interest_minor": 400, "fee_minor": 0},
+    ]})
+    post(f"debts/{debt}/payments", {
+        "installment_no": 1, "amount_minor": 5500, "paid_on": "2026-12-10",
+        "channel": "cash", "channel_id": account_id,
+        "principal_minor": 5000, "interest_minor": 500, "fee_minor": 0,
+    })
+    securities = post("accounts", {
+        "kind": "securities", "name": "演练证券", "opening_balance_minor": 20000,
+    })["id"]
+    asset = post("investments/assets", {
+        "code": "DRILL", "name": "演练持仓", "kind": "stock", "account_id": securities,
+    })["id"]
+    post("investments/trades", {
+        "asset_id": asset, "side": "buy", "trade_on": "2026-11-12",
+        "quantity_scaled": 1000000, "gross_minor": 10000,
+        "fee_minor": 100, "from_account_id": securities,
+    })
+
     print("[4/8] restart server against the SAME file (crash-recovery shape)")
     proc.terminate(); proc.wait(timeout=15); log.close()
+    db = work / "data" / "drill.sqlite3"
+    before_upgrade = business_snapshot(db)
     proc, log = start_server(work, "server2.log")
+    if a.baseline_api_dir:
+        after_upgrade = business_snapshot(db)
+        old_versions = before_upgrade.pop("migrations")
+        new_versions = after_upgrade.pop("migrations")
+        assert new_versions[:len(old_versions)] == old_versions and len(new_versions) > len(old_versions), (
+            f"expected a schema upgrade: {old_versions} -> {new_versions}")
+        assert before_upgrade == after_upgrade, "upgrade changed business totals"
+        print(f"  upgraded {old_versions} -> {new_versions}; business totals unchanged")
     code, bal = api_call("GET", f"/api/v1/accounts/{account_id}/balance", cookie=cookie)
-    assert code == 200 and bal["balance_minor"] == 50000, f"data lost across restart: {bal}"
+    assert code == 200 and bal["balance_minor"] == 44500, f"data lost across restart: {bal}"
     print(f"  balance survived restart: {bal['balance_minor']}")
 
-    db = work / "data" / "drill.sqlite3"
     print("[5/8] start a THIRD time on the existing DB (repeat migrations are a no-op)")
     snap_before = business_snapshot(db)
     proc.terminate(); proc.wait(timeout=15); log.close()
@@ -201,6 +256,18 @@ def main() -> None:
     check(db)
 
     proc.terminate(); proc.wait(timeout=15); log.close()
+    proc, log = start_server(work, "restored.log", db_path=restored)
+    try:
+        _, restored_balance = api_call("GET", f"/api/v1/accounts/{account_id}/balance", cookie=cookie)
+        assert restored_balance["balance_minor"] == 44500, restored_balance
+        _, positions = api_call("GET", "/api/v1/investments/positions", cookie=cookie)
+        position = next(item for item in positions["items"] if item["asset_id"] == asset)
+        assert position["quantity_scaled"] == 1000000 and position["total_cost_minor"] == 10100, position
+        print("  restored API: cash=44500, investment quantity=1000000, cost=10100")
+    finally:
+        proc.terminate()
+        proc.wait(timeout=15)
+        log.close()
     print("DRILL PASS: empty-migrate / restart / repeat-migrate / balanced-journal / backup / restore / snapshot-match / quick_check / foreign_key_check")
     if not a.keep:
         shutil.rmtree(work, ignore_errors=True)

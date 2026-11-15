@@ -59,6 +59,8 @@ export const api = {
   joinApplications: () => get<{ items: { id: string; username: string; member_name: string }[] }>('/admin/join-applications'),
   decideApplication: (id: string, approve: boolean) => post(`/admin/join-applications/${encodeURIComponent(id)}`, { approve }),
   users: () => get<{ items: { id: string; username: string; role: string; status: string }[] }>('/admin/users'),
+  updateUserRole: (id: string, role: 'member' | 'viewer') =>
+    request(`/admin/users/${encodeURIComponent(id)}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   disableUser: (id: string) => post(`/admin/users/${encodeURIComponent(id)}/disable`),
   household: () => get<{ name: string; currency: string; timezone: string }>('/household/current'),
   members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
@@ -77,7 +79,7 @@ export const api = {
   accounts: () => get('/accounts'),
   createAccount: (body: any) => post('/accounts', body),
   account: (id: string) => get(`/accounts/${encodeURIComponent(id)}`),
-  updateAccount: (id: string, body: { name: string; subtype: string; owner_member_id: string; note: string }) =>
+  updateAccount: (id: string, body: { name: string; subtype: string; owner_member_id: string; note: string; status: string }) =>
     request(`/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   accountJournal: (id: string) => get<{ items: { id: string; occurred_on: string; change_minor: number; reversal_of: string | null }[] }>(`/accounts/${encodeURIComponent(id)}/journal`),
   accountBalance: (id: string) => get(`/accounts/${id}/balance`),

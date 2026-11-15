@@ -71,7 +71,7 @@
 |---|---|---|---|
 | GET/POST | `/accounts` | IMPLEMENTED | 现金/证券/理财账户；创建可带 `opening_balance_minor` |
 | GET | `/accounts/{id}/balance` | IMPLEMENTED | 由分录重建余额 |
-| GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注），余额由分录计算 |
+| GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注、启用状态），余额由分录计算 |
 | GET | `/ledger/accounts` | PLANNED | 科目表（调试/对账） |
 | GET | `/accounts/{id}/journal` | IMPLEMENTED | 本家庭账户最近 100 笔分录净变动，含期初余额和冲正 |
 
@@ -170,3 +170,7 @@
 
 > 未完成模块与正式发布门禁见 `IMPLEMENTATION_REPORT.md` 第 8/9 节、`docs/reviews/v0.1-release-gates.md`；10 项账务口径状态见 `docs/reviews/v0.1-accounting-decisions.md`（**2026-11-14 用户已确认 1–10 全部推荐值，十项 `CONFIRMED`**；旧报告中的「0/10 待确认」为历史记录）。
 > V0.1.2 追加端点的实施与测试证据见 `docs/reviews/latest-feature-evidence-matrix.md`、`docs/reviews/next-version-test-report.md`。
+
+### 家庭账号角色
+
+管理员可通过 `PATCH /admin/users/{id}/role` 将本家庭的启用成员设为 `member` 或 `viewer`。角色在每次请求时读取，已有会话随下一次请求采用新权限。只读成员可查看账本并退出登录，账本写入与邀请码写操作返回 403。管理员角色不通过此接口修改。

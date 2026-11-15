@@ -112,3 +112,47 @@ func TestV011_T5_FinancialIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountStatusAndMemberRoleStayInHousehold(t *testing.T) {
+	e := newRemEnv(t, Options{SetupToken: testSetupToken})
+	a := bootstrapHousehold(t, e, "status_a")
+	b := bootstrapHousehold(t, e, "status_b")
+	admin := a.client(t, e.ts.URL)
+	owner := b.client(t, e.ts.URL)
+
+	account := owner.call("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "other household", "opening_balance_minor": 1200,
+	}, nil)
+	if account.Status != 201 {
+		t.Fatalf("create fixture account: %d %v", account.Status, account.Body)
+	}
+	accountPath := "/api/v1/accounts/" + account.Body["id"].(string)
+	const member = "other-household-member"
+	if _, err := e.database.Exec(`INSERT INTO users(id,household_id,username,password_hash,role)
+		SELECT ?,household_id,?,password_hash,'member' FROM users WHERE id=?`, member, member, b.user); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{accountPath, accountPath + "/journal"} {
+		if got := admin.call("GET", path, nil, nil); got.Status != 404 {
+			t.Errorf("foreign GET %s returned %d", path, got.Status)
+		}
+	}
+	if got := admin.call("PATCH", accountPath, map[string]string{"status": "disabled"}, nil); got.Status != 404 {
+		t.Errorf("foreign account update returned %d", got.Status)
+	}
+	rolePath := "/api/v1/admin/users/" + member + "/role"
+	if got := admin.call("PATCH", rolePath, map[string]string{"role": "viewer"}, nil); got.Status != 404 {
+		t.Errorf("foreign role update returned %d", got.Status)
+	}
+	if got := owner.call("PATCH", "/api/v1/admin/users/"+b.user+"/role", map[string]string{"role": "viewer"}, nil); got.Status != 404 {
+		t.Errorf("admin demotion returned %d", got.Status)
+	}
+	got := owner.call("GET", accountPath, nil, nil)
+	if got.Status != 200 || got.Body["status"] != "active" || number(got.Body["balance_minor"]) != 1200 {
+		t.Fatalf("owner account changed: %d %v", got.Status, got.Body)
+	}
+	var role string
+	if err := e.database.QueryRow(`SELECT role FROM users WHERE id=? AND household_id=?`, member, b.id).Scan(&role); err != nil || role != "member" {
+		t.Fatalf("foreign role changed: %q, %v", role, err)
+	}
+}

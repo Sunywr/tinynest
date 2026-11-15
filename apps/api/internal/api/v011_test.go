@@ -655,18 +655,19 @@ func TestV011_T3_InstallmentConservationAndPartialPayment(t *testing.T) {
 	}
 
 	c.headers = map[string]string{"Idempotency-Key": "inst-pay-1"}
-	p1 := c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
+	paymentPath := "/api/v1/installments/" + inst + "/payments"
+	payment := map[string]any{
 		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
 		"channel": "cash", "channel_id": cash,
-	})
-	p1Again := c.mustOK("POST", "/api/v1/installments/"+inst+"/payments", map[string]any{
-		"installment_no": 1, "amount_minor": 51_500, "paid_on": "2026-12-01",
-		"channel": "cash", "channel_id": cash,
-	})
-	c.headers = nil
-	if p1["id"] != p1Again["id"] || p1Again["replayed"] != true {
-		t.Fatalf("idempotent replay broken: %v / %v", p1, p1Again)
 	}
+	p1 := c.mustOK("POST", paymentPath, payment)
+	for i := 0; i < 20; i++ {
+		replay := c.mustOK("POST", paymentPath, payment)
+		if p1["id"] != replay["id"] || replay["replayed"] != true {
+			t.Fatalf("payment replay %d: %v / %v", i+1, p1, replay)
+		}
+	}
+	c.headers = nil
 	detail = c.mustOK("GET", "/api/v1/installments/"+inst, nil)
 	sched, _ = detail["schedule"].([]any)
 	first = sched[0].(map[string]any)

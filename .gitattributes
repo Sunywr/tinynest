@@ -1,1 +1,2 @@
 apps/api/go.sum text eol=lf
+scripts/mysql-ci-drill.sh text eol=lf

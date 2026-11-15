@@ -47,7 +47,7 @@ func (a *API) handleDisableUser(w http.ResponseWriter, r *http.Request) {
 	var matched bool
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var found string
-		err := tx.QueryRowContext(r.Context(), `SELECT id FROM users WHERE id=? AND household_id=? AND role='member'`,
+		err := tx.QueryRowContext(r.Context(), `SELECT id FROM users WHERE id=? AND household_id=? AND role IN ('member','viewer')`,
 			id, p.HouseholdID).Scan(&found)
 		if err == sql.ErrNoRows {
 			return nil
@@ -56,7 +56,7 @@ func (a *API) handleDisableUser(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		matched = true
-		if _, err := tx.ExecContext(r.Context(), `UPDATE users SET status='disabled' WHERE id=? AND household_id=? AND role='member'`, id, p.HouseholdID); err != nil {
+		if _, err := tx.ExecContext(r.Context(), `UPDATE users SET status='disabled' WHERE id=? AND household_id=? AND role IN ('member','viewer')`, id, p.HouseholdID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL`, a.nowUTC(), id); err != nil {
@@ -73,4 +73,38 @@ func (a *API) handleDisableUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"id": id, "status": "disabled"})
+}
+
+func (a *API) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	var in struct {
+		Role string `json:"role"`
+	}
+	if err := decode(r, &in); err != nil || (in.Role != "member" && in.Role != "viewer") {
+		writeErr(w, 400, "invalid_request", "角色须为成员或只读")
+		return
+	}
+	id := r.PathValue("id")
+	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		var role string
+		err := tx.QueryRowContext(r.Context(), `SELECT role FROM users
+			WHERE id=? AND household_id=? AND role IN ('member','viewer') AND status='active'`, id, p.HouseholdID).Scan(&role)
+		if err != nil || role == in.Role {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(), `UPDATE users SET role=?
+			WHERE id=? AND household_id=? AND role IN ('member','viewer') AND status='active'`, in.Role, id, p.HouseholdID); err != nil {
+			return err
+		}
+		return audit(r.Context(), tx, p, "update_user_role", "user", id, "{}")
+	})
+	if err == sql.ErrNoRows {
+		writeErr(w, 404, "not_found", "成员账号不存在或已停用")
+		return
+	}
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"id": id, "role": in.Role})
 }

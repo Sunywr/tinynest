@@ -261,7 +261,15 @@ func (a *API) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // route registers an authenticated endpoint and injects the CSRF requirement for writes.
 func (a *API) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
-	mux.HandleFunc(pattern, a.requireAuth(h))
+	mux.HandleFunc(pattern, a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := principal(r)
+		if p.Role == "viewer" && r.Method != http.MethodGet && r.Method != http.MethodHead &&
+			pattern != "DELETE /api/v1/auth/session" {
+			writeErr(w, 403, "forbidden", "只读账号不能修改家庭账本")
+			return
+		}
+		h(w, r)
+	}))
 }
 
 // audit returns an error so a failed audit write rolls the whole business transaction back.

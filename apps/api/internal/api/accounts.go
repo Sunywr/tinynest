@@ -59,11 +59,17 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		Subtype *string `json:"subtype"`
 		Owner   *string `json:"owner_member_id"`
 		Note    *string `json:"note"`
+		Status  *string `json:"status"`
 	}
-	if err := decode(r, &in); err != nil || (in.Name == nil && in.Subtype == nil && in.Owner == nil && in.Note == nil) {
+	if err := decode(r, &in); err != nil || (in.Name == nil && in.Subtype == nil && in.Owner == nil && in.Note == nil && in.Status == nil) {
 		writeErr(w, 400, "invalid_request", "请提供要修改的账户资料")
 		return
 	}
+	if in.Status != nil && *in.Status != "active" && *in.Status != "disabled" {
+		writeErr(w, 400, "invalid_request", "账户状态无效")
+		return
+	}
+
 	if in.Name != nil {
 		*in.Name = strings.TrimSpace(*in.Name)
 		if *in.Name == "" || len([]rune(*in.Name)) > 100 {
@@ -81,12 +87,12 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `UPDATE accounts SET
-			name=COALESCE(?,name),
+			name=COALESCE(?,name), status=COALESCE(?,status),
 			subtype=CASE WHEN ? IS NULL THEN subtype ELSE NULLIF(?,'') END,
 			owner_member_id=CASE WHEN ? IS NULL THEN owner_member_id ELSE NULLIF(?,'') END,
 			note=CASE WHEN ? IS NULL THEN note ELSE NULLIF(?,'') END
 			WHERE id=? AND household_id=?`,
-			in.Name, in.Subtype, in.Subtype, in.Owner, in.Owner, in.Note, in.Note, id, p.HouseholdID); err != nil {
+			in.Name, in.Status, in.Subtype, in.Subtype, in.Owner, in.Owner, in.Note, in.Note, id, p.HouseholdID); err != nil {
 			return err
 		}
 		if in.Name != nil {

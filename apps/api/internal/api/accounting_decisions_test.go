@@ -174,3 +174,52 @@ func TestInvestmentFeeRuleUsesTradeDate(t *testing.T) {
 		}
 	}
 }
+
+func TestTransactionReversalAndRefundReplay20Times(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "replay fixture", "opening_balance_minor": 10000,
+	})["id"].(string)
+	category := c.firstCategory("expense")
+	spend := func() string {
+		return c.mustOK("POST", "/api/v1/transactions", map[string]any{
+			"type": "expense", "amount_minor": 1000, "occurred_on": "2026-11-14",
+			"payment_kind": "cash", "account_id": account,
+			"splits": []map[string]any{{"category_id": category, "amount_minor": 1000}},
+		})["id"].(string)
+	}
+	reversePath := "/api/v1/transactions/" + spend() + "/reverse"
+	reversal := c.mustOK("POST", reversePath, nil)
+	for i := 0; i < 20; i++ {
+		if code, _ := c.do("POST", reversePath, nil); code != 400 {
+			t.Fatalf("reversal replay %d returned %d", i+1, code)
+		}
+	}
+	refundTx := spend()
+	refund := map[string]any{
+		"transaction_id": refundTx, "amount_minor": 50, "refund_on": "2026-11-15",
+		"destination_type": "cash", "destination_id": account,
+	}
+	c.headers = map[string]string{"Idempotency-Key": "refund-once"}
+	c.mustOK("POST", "/api/v1/refunds", refund)
+	for i := 0; i < 20; i++ {
+		if code, _ := c.do("POST", "/api/v1/refunds", refund); code != 400 {
+			t.Fatalf("refund replay %d returned %d", i+1, code)
+		}
+	}
+	c.headers = nil
+	balance := c.mustOK("GET", "/api/v1/accounts/"+account+"/balance", nil)
+	if number(balance["balance_minor"]) != 9050 {
+		t.Fatalf("replay changed balance: %v", balance)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM journal_entries WHERE reversal_of=(
+		SELECT reversal_of FROM journal_entries WHERE id=?)`, reversal["reversal_entry_id"]).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("reversal entries = %d, error = %v", count, err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM refunds WHERE transaction_id=?`, refundTx).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("refund records = %d, error = %v", count, err)
+	}
+}

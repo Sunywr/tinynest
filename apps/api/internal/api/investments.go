@@ -52,7 +52,7 @@ func (a *API) handleCreateAsset(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var cashSubject string
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND kind IN ('securities','wealth')`,
+			`SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status='active' AND kind IN ('securities','wealth')`,
 			in.AccountID, p.HouseholdID).Scan(&cashSubject); err != nil {
 			return errors.New("投资账户不存在或类型不符")
 		}
@@ -151,7 +151,7 @@ func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
 			return errors.New("投资资产不存在")
 		}
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT ledger_code FROM accounts WHERE id=? AND household_id=?`, in.FromAccountID, p.HouseholdID).
+			`SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status='active'`, in.FromAccountID, p.HouseholdID).
 			Scan(&cashSubject); err != nil {
 			return errors.New("资金账户不存在")
 		}
@@ -379,7 +379,7 @@ func (a *API) handleCreateDividend(w http.ResponseWriter, r *http.Request) {
 		var toSubject string
 		var n int
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT ledger_code FROM accounts WHERE id=? AND household_id=?`, in.ToAccountID, p.HouseholdID).
+			`SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status='active'`, in.ToAccountID, p.HouseholdID).
 			Scan(&toSubject); err != nil {
 			return errors.New("到账账户不存在")
 		}

@@ -54,3 +54,27 @@
 首次启动应用会创建 MySQL 专用基线结构。切换已有环境前暂停写入并备份。旧 SQLite 含业务数据时需要先迁移并逐表核验，不可直接更换驱动。就绪接口在 MySQL 模式返回 `mysql_ping_and_migrations`。把备份定时任务同步切换为 MySQL 一致性导出，并用独立库验证恢复。
 
 首次创建家庭和管理员同样通过后端的一次性初始化令牌由运维在受控环境调用 `POST /api/v1/setup` 完成（公开前端无初始化入口），完成后设置 `TINYNEST_SETUP_DISABLED=true` 收口。
+
+### MySQL 生产备份恢复与异地副本验收
+
+使用运维批准的备份和专用隔离 MySQL 实例。隔离实例版本应与源端兼容，凭据只具备隔离库权限。演练记录只保留备份时间、摘要、恢复结果和经授权的汇总值。备份、凭据与逐笔账务留在受控位置。
+
+1. **确认备份可用。** 从备份作业取得已完成的备份及其 SHA-256。比较异地副本下载后的 SHA-256 与原始值，留存备份时间、校验时间与副本所在故障域。若备份经过加密，先对同一层的密文校验，再在隔离环境解密及解压。
+2. **恢复到空库。** 核对目标实例标识和目标库，确认它们属于本次演练。检查备份格式与内嵌数据库切换指令是否符合隔离目标。标准单库 SQL 转储可使用下面的命令，受保护的客户端配置文件须明确指定隔离实例地址与账号。
+3. **核对恢复结果。** 比较备份时记录的迁移版本、账户及分录计数、借贷合计、选定账户余额以及合同和持仓快照。单独检查借贷平衡不能证明数据恢复完整。如原备份没有对应快照，记录该限制，并在下一次备份补齐同一快照的证据。
+4. **启动隔离 API。** 使用该演练库和只在隔离环境有效的配置，确认就绪检查正常，并以授权的测试方式读取账户、合同和持仓，核对余额与汇总。记录恢复耗时。按数据保留策略清理临时库和解密产物。
+
+```sh
+mysql --defaults-extra-file=/secure/drill-client.cnf --database=tinynest_restore < /secure/backup.sql
+mysql --defaults-extra-file=/secure/drill-client.cnf --database=tinynest_restore <<'SQL'
+SELECT version FROM schema_migrations ORDER BY version;
+SELECT COUNT(*) AS accounts FROM accounts;
+SELECT COUNT(*) AS entries FROM journal_entries;
+SELECT COUNT(*) AS lines,
+       COALESCE(SUM(debit_minor),0) AS debit_minor,
+       COALESCE(SUM(credit_minor),0) AS credit_minor
+FROM journal_lines;
+SQL
+```
+
+证据应分别记录原始备份校验、异地副本校验、隔离恢复、账务比对及 API 验收的结果。未执行的项目记为 UNVERIFIED。合成数据演练可用于验证流程和工具，生产备份由运维单独验收。

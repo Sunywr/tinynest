@@ -22,3 +22,34 @@ func TestAccountMaintenance(t *testing.T) {
 		t.Fatalf("unexpected account after clearing owner: %v", got)
 	}
 }
+
+func TestDisabledAccountRetainsBalance(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{"name": "停用测试", "kind": "cash", "opening_balance_minor": 1200})
+	id := account["id"].(string)
+	path := "/api/v1/accounts/" + id
+	c.mustOK("PATCH", path, map[string]string{"status": "disabled"})
+	got := c.mustOK("GET", path, nil)
+	if got["status"] != "disabled" || number(got["balance_minor"]) != 1200 {
+		t.Fatalf("unexpected account: %v", got)
+	}
+	if status, _ := c.do("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 100, "occurred_on": "2026-11-14",
+		"payment_kind": "cash", "account_id": id,
+		"splits": []map[string]any{{"category_id": c.firstCategory("expense"), "amount_minor": 100}},
+	}); status != 400 {
+		t.Fatalf("disabled account accepted new payment: %d", status)
+	}
+
+	dashboard := c.mustOK("GET", "/api/v1/dashboard/summary", nil)
+	if len(dashboard["accounts"].([]any)) != 1 {
+		t.Fatalf("disabled account missing from dashboard: %v", dashboard)
+	}
+	c.mustOK("GET", path+"/journal", nil)
+	c.mustOK("PATCH", path, map[string]string{"status": "active"})
+	if got := c.mustOK("GET", path, nil); got["status"] != "active" {
+		t.Fatalf("reactivation failed: %v", got)
+	}
+}
