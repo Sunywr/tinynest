@@ -3,6 +3,10 @@
 > **状态说明（2026-11-13）**：本文件原为 **Phase 0** 规范。自 `feature/tinynest-phase0-v0.1` 起，项目已进入 **V0.1 家庭账本主体** 阶段：复式记账内核、真实 SQLite 持久化、登录/会话/CSRF/审计、真实 API 前端界面均已实现。
 > 凡标注「Phase 0（历史）」的条目只描述历史阶段，**不再约束当前代码**。当前开发请以「V0.1 当前守则」和 V0.1 设计/审查文档为准。Phase 0 的交付见 `docs/execution-report.md`，原计划可从 Git 历史查阅。
 
+## 项目专属技能
+
+执行 TinyNest 开发、审查、修复或发布验收前，读取并应用 [TinyNest 高级开发工程师](.agents/skills/tinynest-senior-engineer/SKILL.md)。支持原生 Skill 的 Agent 可调用 `tinynest-senior-engineer`。其他 Agent 可直接读取同一份 Markdown，并按本文件的仓库规则执行。
+
 ## 当前阶段从 main 开始
 
 - 项目入口为 TinyNest 仓库根目录。本机主工作区为 `D:/Code/tinynest`，远程为 `Sunywr/tinynest`。用 `git rev-parse --show-toplevel` 和 `git worktree list` 核对路径。

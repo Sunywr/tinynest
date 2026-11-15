@@ -15,4 +15,4 @@
 - 当前候选的远端 Linux MySQL Unix socket 与备份恢复演练失败。生产备份隔离恢复、异地副本、生产并发性能与 iPhone Safari 实机 PWA 待验收。
 - 到期待办自动运行失败后重试一次。数据库不可写时从服务日志查看失败。账务测试和恢复演练使用隔离环境及合成数据。
 
-账务口径、验证结果与发布门禁分别见[决策台账](reviews/v0.1-accounting-decisions.md)、[发布候选复核](reviews/rc-readiness.md)和[下一轮待办](reviews/next-iteration-backlog.md)。
+账务口径、发布证据和后续任务见[决策台账](reviews/v0.1-accounting-decisions.md)、[发布候选复核](reviews/rc-readiness.md)和[待实施计划](plans/next-implementation-plan.md)。

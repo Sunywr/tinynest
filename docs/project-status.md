@@ -36,8 +36,8 @@
 
 ## 待实施与待验收
 
-- [核心账本计划](plan-v0.1.md)保留，待补齐的功能和验收见发布候选复核。
-- [短期发布缺口](plans/next-implementation-plan.md)保留。iPhone Safari 实机 PWA、生产 MySQL 隔离恢复、异地备份与并发性能仍待验收。
+- [待实施计划](plans/next-implementation-plan.md)汇总当前开发任务、待决策事项和生产验收。
+- [核心账本计划](plan-v0.1.md)记录原始设计和范围。
 - 生产浏览器抽查覆盖访客路径。账务回归使用隔离测试库。
 
 开发入口见 [开发说明](DEVELOPMENT.md)。

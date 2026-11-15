@@ -22,7 +22,7 @@
 
 ## 项目进度与接手
 
-当前开发基线为 main。项目状态见 [当前进度](docs/project-status.md)，AI Agent 从 [AGENTS.md](AGENTS.md) 开始。
+当前开发基线为 main。继续开发请查看 [待实施计划](docs/plans/next-implementation-plan.md) 和 [当前进度](docs/project-status.md)。AI Agent 从 [AGENTS.md](AGENTS.md) 加载项目专属的 [高级开发工程师 Skill](.agents/skills/tinynest-senior-engineer/SKILL.md)。如果工具没有加载仓库指引，在对话中要求它先读取这两个文件，再按待实施计划继续。
 
 ## 关于 TinyNest
 

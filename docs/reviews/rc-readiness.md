@@ -32,7 +32,7 @@ Windows 本机独立 MySQL 8.0.46 实例运行 TestV01EndToEnd，通过测试进
 
 此证据覆盖本机 MySQL 业务与逻辑恢复。Linux Unix socket、生产备份恢复、异地副本与 iPhone 实机仍为 UNVERIFIED。本机 Windows 补齐 MinGW 运行库后，Go 1.23.6 的 go test -race ./... -count=1 全部通过。CI 已加入同一命令，修改后的远端工作流仍待运行。
 
-独立交付记录：[当前提交与覆盖](current-sha-and-coverage.md)、[账务回归](ledger-regression.md)、[浏览器回归](web-e2e-results.md)、[CI 与备份](ci-and-backup-verification.md)、[下一轮待办](next-iteration-backlog.md)。
+交付记录见[当前提交与覆盖](current-sha-and-coverage.md)、[账务回归](ledger-regression.md)、[浏览器回归](web-e2e-results.md)、[CI 与备份](ci-and-backup-verification.md)和[待实施计划](../plans/next-implementation-plan.md)。
 
 ## 本地账本读性能基线
 
