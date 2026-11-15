@@ -1,85 +1,78 @@
 <script setup lang="ts">
-import { nextTick, onUpdated, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import SmartSelect from './SmartSelect.vue'
+
+const props = defineProps<{
+  allowCreate?: boolean
+  createLabel?: (q: string) => string
+}>()
+const emit = defineEmits<{ (e: 'create', q: string): void }>()
 
 const root = ref<HTMLElement>()
-const search = ref<HTMLInputElement>()
-const open = ref(false)
-const query = ref('')
-const matches = ref(0)
+const displayValue = ref('')
+const options = ref<{ id: string; name: string }[]>([])
+const placeholder = ref('请选择')
+let observer: MutationObserver | null = null
 
-function filter() {
-  const select = root.value?.querySelector('select')
-  if (!select) return
-  const keyword = query.value.trim().toLocaleLowerCase()
-  matches.value = 0
-  for (const option of select.options) {
-    const match = option.text.trim().toLocaleLowerCase().includes(keyword)
-    if (option.value && match) matches.value++
-    option.hidden = !!keyword && !!option.value && !option.selected && !match
+function getSelect(): HTMLSelectElement | null {
+  return (root.value?.querySelector('select')) as HTMLSelectElement | null
+}
+function syncOptions() {
+  const sel = getSelect()
+  if (!sel) return
+  const opts: { id: string; name: string }[] = []
+  let ph = ''
+  for (const o of Array.from(sel.options)) {
+    const val = (o.value ?? '').toString()
+    if (val === '') { if (!ph) ph = o.text.trim(); continue }
+    opts.push({ id: val, name: o.text.trim() })
   }
+  options.value = opts
+  placeholder.value = ph || '请选择'
+}
+function syncValue() {
+  const sel = getSelect()
+  if (!sel) return
+  displayValue.value = sel.value
+}
+function onPick(v: string) {
+  const sel = getSelect()
+  if (!sel) return
+  sel.value = v
+  sel.dispatchEvent(new Event('change', { bubbles: true }))
+  displayValue.value = v
 }
 
-watch(query, filter, { flush: 'post' })
-onUpdated(filter)
-
-async function toggle() {
-  open.value = !open.value
-  query.value = ''
-  if (open.value) {
-    await nextTick()
-    filter()
-    search.value?.focus()
-  }
-}
-
-function closeSearch() {
-  open.value = false
-  query.value = ''
-  root.value?.querySelector('select')?.focus()
-}
+onMounted(() => {
+  const sel = getSelect()
+  if (!sel) return
+  observer = new MutationObserver(() => { syncOptions(); syncValue() })
+  observer.observe(sel, { attributes: true, attributeFilter: ['value'], childList: true, subtree: true })
+  syncOptions()
+  syncValue()
+})
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
-  <span ref="root" class="searchable-select" @change="filter">
-    <slot />
-    <button type="button" class="search-toggle" :aria-expanded="open" @click="toggle">
-      {{ open ? '收起' : '搜索' }}
-    </button>
-    <span v-if="open" class="option-search">
-      <input ref="search" v-model="query" type="search" aria-label="筛选选项" placeholder="输入关键词" @keydown.esc.stop.prevent="closeSearch" @keydown.enter.prevent="root?.querySelector('select')?.focus()" />
-      <span v-if="query.trim() && !matches" role="status">没有匹配的选项</span>
-    </span>
+  <span ref="root" class="searchable-select">
+    <span class="ss-native"><slot /></span>
+    <SmartSelect
+      :model-value="displayValue"
+      :options="options"
+      :placeholder="placeholder"
+      :allow-create="allowCreate"
+      :create-label="createLabel"
+      @update:model-value="onPick"
+      @create="(q) => emit('create', q)" />
   </span>
 </template>
 
 <style scoped>
-.searchable-select {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-}
-.searchable-select :slotted(select) { min-width: 0; }
-.search-toggle {
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: var(--soft);
-  color: var(--primary-deep);
-  cursor: pointer;
-  font: inherit;
-  padding: 0 9px;
-  min-height: 44px;
-}
-.option-search { grid-column: 1 / -1; }
-.option-search input {
-  width: 100%;
-  min-height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: var(--card);
-  color: var(--text);
-  font: inherit;
-  font-size: 16px;
-  padding: 8px 12px;
+.searchable-select { display: block; min-width: 0; }
+/* 原生 select 保留在 DOM 中作为值与选项的真实来源，但移出可视区域，由 SmartSelect 接管展示 */
+.ss-native {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 </style>

@@ -3,6 +3,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError } from './services/api'
 
 import SearchableSelect from './components/SearchableSelect.vue'
+import SmartSelect from './components/SmartSelect.vue'
 
 type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
 const nav: { key: View; label: string; glyph: string }[] = [
@@ -105,6 +106,104 @@ const categoryDraft = reactive({ name: '', kind: 'expense', parent_id: '' })
 const categoryEdit = ref<{ id: string; name: string; sort: number; active: boolean } | null>(null)
 const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense' && c.active === 1))
 const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income' && c.active === 1))
+
+// —— 记账表单：关联项的可搜索 + 可即时新建选项 ——
+const txCategoryOptions = computed(() => {
+  const base = (f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value)
+    .map(c => ({ id: c.id, name: c.name }))
+  const cur = f.tx.category_id
+  if (cur) {
+    const sel = categories.value.find(c => c.id === cur)
+    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: sel.name + '（已停用）' })
+  }
+  return base
+})
+const txProjectOptions = computed(() =>
+  projects.value.filter(p => p.status === 'active' || p.id === f.tx.project_id).map(p => ({ id: p.id, name: p.name })))
+const txMemberOptions = computed(() =>
+  members.value.filter(m => m.status === 'active' || m.id === selectedMember.value).map(m => ({ id: m.id, name: m.name })))
+const txAccountOptions = computed(() => activeAccounts.value.map(a => ({ id: a.id, name: a.name })))
+
+// —— 关联项「下拉内快速创建」弹窗 ——
+// 在下拉中选择「创建新XX」→ 弹出临时小窗填写 → 创建成功后回填并回到原表单，原表单内容不重置。
+const accountKindOptions = [
+  { id: 'cash', name: '现金/银行' },
+  { id: 'securities', name: '证券账户' },
+  { id: 'wealth', name: '理财账户' },
+]
+const instrumentKindOptions = [
+  { id: 'credit_card', name: '信用卡' },
+  { id: 'huabei', name: '花呗' },
+  { id: 'meituan', name: '美团月付' },
+  { id: 'douyin', name: '抖音月付' },
+  { id: 'custom', name: '自定义' },
+]
+type CreateEntity = 'category' | 'project' | 'member' | 'account' | 'instrument'
+const createModal = reactive({
+  open: false,
+  entity: '' as CreateEntity,
+  name: '',
+  accountKind: 'cash',
+  instrumentKind: 'credit_card',
+  meta: {} as Record<string, any>,
+  loading: false,
+})
+let createDone: ((id: string) => void) | null = null
+function openCreate(entity: CreateEntity, suggestedName: string, onCreated: (id: string) => void, meta: Record<string, any> = {}) {
+  createDone = onCreated
+  createModal.entity = entity
+  createModal.name = suggestedName
+  createModal.accountKind = 'cash'
+  createModal.instrumentKind = 'credit_card'
+  createModal.meta = meta
+  createModal.loading = false
+  createModal.open = true
+}
+const createTitle = computed(() => {
+  const map: Record<string, string> = { category: '新建分类', project: '新建项目', member: '新建成员', account: '新建账户', instrument: '新建信用工具' }
+  return map[createModal.entity] || '新建'
+})
+const createHint = computed(() => {
+  if (createModal.entity === 'category') return `将创建为「${createModal.meta.kind === 'income' ? '收入' : '支出'}」分类`
+  if (createModal.entity === 'account') return '创建后立即选入当前表单，原表单已填内容保持不变'
+  if (createModal.entity === 'instrument') return '创建后可用于本次记账'
+  if (createModal.entity === 'member') return '创建成员档案，可立即关联到当前表单'
+  if (createModal.entity === 'project') return '创建项目，可立即关联到当前表单'
+  return ''
+})
+const createPlaceholder = computed(() => {
+  const map: Record<string, string> = { category: '如：餐饮', project: '如：装修', member: '如：宝宝', account: '如：工资卡', instrument: '如：招行信用卡' }
+  return map[createModal.entity] || '请输入名称'
+})
+
+async function confirmCreate() {
+  const name = createModal.name.trim()
+  if (!name || createModal.loading) return
+  createModal.loading = true
+  try {
+    let id = ''
+    if (createModal.entity === 'category') {
+      const r: any = await api.createCategory({ name, kind: createModal.meta.kind || (f.tx.type === 'income' ? 'income' : 'expense') })
+      id = r.id
+    } else if (createModal.entity === 'project') {
+      const r: any = await api.createProject(name); id = r.id
+    } else if (createModal.entity === 'member') {
+      const r: any = await api.createMember(name); id = r.id
+    } else if (createModal.entity === 'account') {
+      const r: any = await api.createAccount({ name, kind: createModal.accountKind, owner_member_id: null, opening_balance_minor: 0 }); id = r.id
+    } else if (createModal.entity === 'instrument') {
+      const r: any = await api.createCreditInstrument({ name, kind: createModal.instrumentKind }); id = r.id
+    }
+    await loadAll()
+    createModal.open = false
+    createDone?.(id)
+    createDone = null
+  } catch (e: any) {
+    toast(String(e?.message || e))
+  } finally {
+    createModal.loading = false
+  }
+}
 
 const f = reactive<any>({
   tx: { type: 'expense', amount: '', occurred_on: today(), payment_kind: 'cash', account_id: '', to_account_id: '', credit_instrument_id: '', category_id: '', project_id: '', note: '' },
@@ -284,6 +383,7 @@ async function logout() {
 }
 onMounted(() => {
   void boot()
+  ;(window as any).__tnToast = toast
   window.addEventListener('popstate', onPopState)
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('tinynest:session-expired', onSessionExpired)
@@ -1148,10 +1248,10 @@ const metricCards = computed(() => {
             <form class="formgrid" @submit.prevent="filterLedger">
               <label>流水开始日期<input v-model="ledgerFilters.from" type="date" /></label>
               <label>流水结束日期<input v-model="ledgerFilters.to" type="date" /></label>
-              <label>流水类型<select v-model="ledgerFilters.type">
+              <label>流水类型<SearchableSelect><select v-model="ledgerFilters.type">
                 <option value="">全部</option><option value="expense">支出</option>
                 <option value="income">收入</option><option value="transfer">转账</option>
-              </select></label>
+              </select></SearchableSelect></label>
               <div class="actions-bar">
                 <button type="submit" class="ghost" :disabled="ledgerLoading || loading">筛选</button>
                 <button type="button" class="ghost" :disabled="ledgerLoading || loading" @click="Object.assign(ledgerFilters, { from: '', to: '', type: '' }); filterLedger()">清除筛选</button>
@@ -1179,25 +1279,28 @@ const metricCards = computed(() => {
               <label>金额（元）<input ref="transactionAmount" v-model="f.tx.amount" inputmode="decimal" placeholder="0.00" /></label>
               <label>日期<input type="date" v-model="f.tx.occurred_on" /></label>
               <template v-if="f.tx.type !== 'transfer'">
-                <label>分类<SearchableSelect><select v-model="f.tx.category_id"><option value="">请选择</option>
-                  <option v-for="c in (f.tx.type === 'income' ? incomeCategories : expenseCategories)" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
-                <label>项目（可选）<SearchableSelect><select v-model="f.tx.project_id"><option value="">不关联</option>
-                  <option v-for="p in projects.filter(p => p.id === f.tx.project_id || p.status === 'active')" :key="p.id" :value="p.id">{{ p.name }}</option></select></SearchableSelect></label>
+                <label>分类
+                  <SmartSelect v-model="f.tx.category_id" :options="txCategoryOptions" placeholder="请选择分类"
+                    :allow-create="true" @create="(q) => openCreate('category', q, (id) => f.tx.category_id = id, { kind: f.tx.type === 'income' ? 'income' : 'expense' })" /></label>
+                <label>项目（可选）
+                  <SmartSelect v-model="f.tx.project_id" :options="txProjectOptions" placeholder="不关联"
+                    :allow-create="true" @create="(q) => openCreate('project', q, (id) => f.tx.project_id = id)" /></label>
               </template>
               <template v-if="f.tx.type === 'expense'">
                 <label>支付工具<SearchableSelect><select v-model="f.tx.payment_kind"><option value="cash">现金/银行账户</option><option value="credit">信用工具</option></select></SearchableSelect></label>
-                <label v-if="f.tx.payment_kind === 'credit'">信用工具<SearchableSelect><select v-model="f.tx.credit_instrument_id"><option value="">请选择</option>
-                  <option v-for="c in creditInstruments" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
+                <label v-if="f.tx.payment_kind === 'credit'">信用工具
+                  <SmartSelect v-model="f.tx.credit_instrument_id" :options="creditInstruments.map(c => ({ id: c.id, name: c.name }))" placeholder="请选择信用工具"
+                    :allow-create="true" @create="(q) => openCreate('instrument', q, (id) => f.tx.credit_instrument_id = id)" /></label>
               </template>
               <label v-if="f.tx.type !== 'expense' || f.tx.payment_kind === 'cash'">{{ f.tx.type === 'transfer' ? '转出账户' : '收/付款账户' }}
-                <SearchableSelect><select v-model="f.tx.account_id"><option value="">请选择</option>
-                  <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label v-if="f.tx.type === 'transfer'">转入账户<SearchableSelect><select v-model="f.tx.to_account_id"><option value="">请选择</option>
-                <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>家庭成员（可选）<SearchableSelect><select v-model="selectedMember">
-                <option value="">不关联</option>
-                <option v-for="member in members.filter(m => m.status === 'active')" :key="member.id" :value="member.id">{{ member.name }}</option>
-              </select></SearchableSelect></label>
+                <SmartSelect v-model="f.tx.account_id" :options="txAccountOptions" placeholder="请选择账户"
+                  :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.tx.account_id = id)" /></label>
+              <label v-if="f.tx.type === 'transfer'">转入账户
+                <SmartSelect v-model="f.tx.to_account_id" :options="txAccountOptions" placeholder="请选择账户"
+                  :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.tx.to_account_id = id)" /></label>
+              <label>家庭成员（可选）
+                <SmartSelect v-model="selectedMember" :options="txMemberOptions" placeholder="不关联"
+                  :allow-create="true" @create="(q) => openCreate('member', q, (id) => selectedMember = id)" /></label>
               <label>备注<input v-model="f.tx.note" placeholder="可选" /></label>
             </div>
             <button class="primary" type="submit" :disabled="loading">确认入账</button>
@@ -1265,7 +1368,7 @@ const metricCards = computed(() => {
                 <label>分类方向<SearchableSelect><select v-model="categoryDraft.kind" @change="categoryDraft.parent_id = ''">
                   <option value="expense">支出</option><option value="income">收入</option>
                 </select></SearchableSelect></label>
-                <label>上级分类<SearchableSelect><select v-model="categoryDraft.parent_id">
+                <label>上级分类<SearchableSelect :allow-create="true" @create="(q) => openCreate('category', q, (id) => categoryDraft.parent_id = id, { kind: categoryDraft.kind })"><select v-model="categoryDraft.parent_id">
                   <option value="">无（一级分类）</option>
                   <option v-for="c in categories.filter(c => c.level === 1 && c.kind === categoryDraft.kind && c.active === 1)" :key="c.id" :value="c.id">{{ c.name }}</option>
                 </select></SearchableSelect></label>
@@ -1330,7 +1433,7 @@ const metricCards = computed(() => {
                 <div class="formgrid">
                   <label>账户显示名称<input v-model.trim="accountEdit.name" maxlength="100" required /></label>
                   <label>子类型或平台<input v-model.trim="accountEdit.subtype" maxlength="100" /></label>
-                  <label>归属成员<SearchableSelect><select v-model="accountEdit.owner_member_id">
+                  <label>归属成员<SearchableSelect :allow-create="true" @create="(q) => openCreate('member', q, (id) => accountEdit && (accountEdit.owner_member_id = id))"><select v-model="accountEdit.owner_member_id">
                     <option value="">未指定</option>
                     <option v-for="member in members.filter(m => m.status === 'active' || m.id === accountEdit?.owner_member_id)" :key="member.id" :value="member.id">{{ member.name }}</option>
                   </select></SearchableSelect></label>
@@ -1381,7 +1484,7 @@ const metricCards = computed(() => {
               <label>账单<SearchableSelect><select v-model="f.payment.statement_id"><option value="">请选择</option>
                 <option v-for="s in statements" :key="s.id" :value="s.id">{{ s.instrument_name }} · {{ s.cycle_start_on }}~{{ s.cycle_end_on }} · 余 {{ formatMinor(s.remaining_minor) }}</option></select></SearchableSelect></label>
               <label>还款金额<input v-model="f.payment.amount" inputmode="decimal" placeholder="0.00" /></label>
-              <label>付款账户<SearchableSelect><select v-model="f.payment.from_account_id"><option value="">请选择</option>
+              <label>付款账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.payment.from_account_id = id)"><select v-model="f.payment.from_account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               <label>日期<input type="date" v-model="f.payment.paid_on" /></label>
             </div><button class="ghost" type="submit">确认还款</button>
@@ -1472,7 +1575,7 @@ const metricCards = computed(() => {
                 <label>利息拆分（元）<input v-model="f.debtPayment.interest" inputmode="decimal" /></label>
                 <label>费用拆分（元）<input v-model="f.debtPayment.fee" inputmode="decimal" /></label>
                 <label>渠道<SearchableSelect><select v-model="f.debtPayment.channel"><option value="cash">现金账户</option><option value="credit">信用工具（新增信用负债）</option></select></SearchableSelect></label>
-                <label>账户/工具<SearchableSelect><select v-model="f.debtPayment.channel_id"><option value="">请选择</option>
+                <label>账户/工具<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.debtPayment.channel_id = id)"><select v-model="f.debtPayment.channel_id"><option value="">请选择</option>
                   <option v-for="a in (f.debtPayment.channel === 'cash' ? activeAccounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
                 <label>付款日期<input type="date" v-model="f.debtPayment.paid_on" /></label>
               </div>
@@ -1497,7 +1600,7 @@ const metricCards = computed(() => {
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
               <label>名称<input v-model="f.installment.name" placeholder="如：客厅装修" /></label>
-              <label>消费分类<SearchableSelect><select v-model="f.installment.category_id"><option value="">请选择</option>
+              <label>消费分类<SearchableSelect :allow-create="true" @create="(q) => openCreate('category', q, (id) => f.installment.category_id = id, { kind: 'expense' })"><select v-model="f.installment.category_id"><option value="">请选择</option>
                 <option v-for="c in expenseCategories" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
               <label>本金（元）<input v-model="f.installment.principal" inputmode="decimal" /></label>
               <label>总手续费（元）<input v-model="f.installment.fee" inputmode="decimal" /></label>
@@ -1514,7 +1617,7 @@ const metricCards = computed(() => {
               <label>期次<input type="number" min="1" v-model.number="f.instPayment.installment_no" /></label>
               <label>实付金额（元）<input v-model="f.instPayment.amount" inputmode="decimal" /></label>
               <label>渠道<SearchableSelect><select v-model="f.instPayment.channel"><option value="cash">现金账户</option><option value="credit">信用工具（新增信用负债）</option></select></SearchableSelect></label>
-              <label>账户/工具<SearchableSelect><select v-model="f.instPayment.channel_id"><option value="">请选择</option>
+              <label>账户/工具<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.instPayment.channel_id = id)"><select v-model="f.instPayment.channel_id"><option value="">请选择</option>
                 <option v-for="a in (f.instPayment.channel === 'cash' ? activeAccounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               <label>付款日期<input type="date" v-model="f.instPayment.paid_on" /></label>
             </div>
@@ -1532,7 +1635,7 @@ const metricCards = computed(() => {
               <div class="formgrid">
                 <label>退款金额（元）<input v-model="f.instRefund.amount" inputmode="decimal" /></label>
                 <label>退款去向<SearchableSelect><select v-model="f.instRefund.destination_type"><option value="cash">现金账户</option><option value="credit">信用工具</option></select></SearchableSelect></label>
-                <label>到账账户/工具<SearchableSelect><select v-model="f.instRefund.destination_id"><option value="">请选择</option>
+                <label>到账账户/工具<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.instRefund.destination_id = id)"><select v-model="f.instRefund.destination_id"><option value="">请选择</option>
                   <option v-for="a in (f.instRefund.destination_type === 'cash' ? activeAccounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
                 <label>备注<input v-model="f.instRefund.note" placeholder="可选" /></label>
               </div>
@@ -1545,7 +1648,7 @@ const metricCards = computed(() => {
             <div class="paneltitle"><div><h2>信用账单转分期</h2><span class="subinfo">仅重分类负债：本金绝不重复</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
-              <label>信用工具<SearchableSelect><select v-model="f.convert.credit_instrument_id" @change="f.convert.statement_id = ''"><option value="">请选择</option>
+              <label>信用工具<SearchableSelect :allow-create="true" @create="(q) => openCreate('instrument', q, (id) => f.convert.credit_instrument_id = id)"><select v-model="f.convert.credit_instrument_id" @change="f.convert.statement_id = ''"><option value="">请选择</option>
                 <option v-for="c in creditInstruments.filter(c => c.status === 'active')" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
               <label>原账单<SearchableSelect><select v-model="f.convert.statement_id"><option value="">请选择</option>
                 <option v-for="s in statements.filter(s => s.instrument_id === f.convert.credit_instrument_id && s.system_due_minor > s.paid_minor)" :key="s.id" :value="s.id">{{ s.due_on }} · 未还 {{ formatMinor(s.system_due_minor - s.paid_minor) }}</option></select></SearchableSelect></label>
@@ -1591,7 +1694,7 @@ const metricCards = computed(() => {
             <div class="formgrid">
               <label>代码<input v-model="f.asset.code" /></label><label>名称<input v-model="f.asset.name" /></label>
               <label>类型<SearchableSelect><select v-model="f.asset.kind"><option value="stock">股票</option><option value="etf">ETF</option><option value="wealth">理财产品</option></select></SearchableSelect></label>
-              <label>投资账户<SearchableSelect><select v-model="f.asset.account_id"><option value="">请选择</option>
+              <label>投资账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.asset.account_id = id)"><select v-model="f.asset.account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
             </div><button class="primary" type="submit">创建资产</button>
           </form>
@@ -1599,7 +1702,7 @@ const metricCards = computed(() => {
             <div class="paneltitle"><div><h2>账户费率规则</h2><span class="subinfo">按账户与生效日追加版本；交易自动计费，单笔可覆盖并保留快照</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
-              <label>费率适用账户<SearchableSelect><select v-model="f.feeRule.account_id"><option value="">请选择</option>
+              <label>费率适用账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.feeRule.account_id = id)"><select v-model="f.feeRule.account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               <label>生效日期<input type="date" v-model="f.feeRule.effective_from" /></label>
               <label>佣金费率（基点，25 = 0.25%）<input v-model="f.feeRule.commission_bps" inputmode="numeric" /></label>
@@ -1626,7 +1729,7 @@ const metricCards = computed(() => {
               <label>数量（股/份）<input v-model="f.trade.quantity" inputmode="decimal" /></label>
               <label>成交金额（元）<input v-model="f.trade.gross" inputmode="decimal" /></label>
               <label>费用（元，留空自动计算）<input v-model="f.trade.fee" inputmode="decimal" placeholder="留空按费率规则计费" /></label>
-              <label>资金账户<SearchableSelect><select v-model="f.trade.from_account_id"><option value="">请选择</option>
+              <label>资金账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.trade.from_account_id = id)"><select v-model="f.trade.from_account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               <label>日期<input type="date" v-model="f.trade.trade_on" /></label>
             </div>
@@ -1647,7 +1750,7 @@ const metricCards = computed(() => {
                   <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
                 <label>税前分红（元）<input v-model="f.dividend.gross" inputmode="decimal" /></label>
                 <label>红利税（元，可留空）<input v-model="f.dividend.tax" inputmode="decimal" /></label>
-                <label>到账账户<SearchableSelect><select v-model="f.dividend.to_account_id"><option value="">请选择</option>
+                <label>到账账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.dividend.to_account_id = id)"><select v-model="f.dividend.to_account_id"><option value="">请选择</option>
                   <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
               </div><button class="ghost" type="submit">记录分红</button>
             </form>
@@ -1672,7 +1775,7 @@ const metricCards = computed(() => {
             <div class="paneltitle"><div><h2>邀请加入家庭</h2></div>
               <button type="button" class="ghost" @click="closePanel()">返回</button></div>
             <div class="formgrid">
-                <label>绑定成员档案<SearchableSelect><select v-model="inviteDraft.member_id">
+                <label>绑定成员档案<SearchableSelect :allow-create="true" @create="(q) => openCreate('member', q, (id) => inviteDraft.member_id = id)"><select v-model="inviteDraft.member_id">
                   <option value="">新建成员档案</option>
                   <option v-for="member in members.filter(m => m.status === 'active')" :key="member.id" :value="member.id">{{ member.name }}</option>
                 </select></SearchableSelect></label>
@@ -1742,6 +1845,29 @@ const metricCards = computed(() => {
           <div class="confirm-actions">
             <button type="button" class="ghost" @click="cancelConfirm()">{{ confirmState?.cancelText }}</button>
             <button type="button" class="btn-primary" :class="{ danger: confirmState?.tone === 'danger' }" @click="doConfirm()">{{ confirmState?.confirmText }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="dialog">
+      <div v-if="createModal.open" class="confirm-overlay" @click.self="createModal.open = false">
+        <div class="confirm-card create-modal">
+          <div class="confirm-emoji">✨</div>
+          <h3 class="confirm-title">{{ createTitle }}</h3>
+          <p class="confirm-msg">{{ createHint }}</p>
+          <div class="formgrid" style="margin-top:8px">
+            <label>名称<input v-model="createModal.name" :placeholder="createPlaceholder" /></label>
+            <label v-if="createModal.entity === 'account'">类型
+              <SmartSelect v-model="createModal.accountKind" :options="accountKindOptions" placeholder="请选择类型" />
+            </label>
+            <label v-if="createModal.entity === 'instrument'">类型
+              <SmartSelect v-model="createModal.instrumentKind" :options="instrumentKindOptions" placeholder="请选择类型" />
+            </label>
+          </div>
+          <div class="confirm-actions">
+            <button type="button" class="ghost" @click="createModal.open = false">取消</button>
+            <button type="button" class="btn-primary" :disabled="createModal.loading" @click="confirmCreate()">创建</button>
           </div>
         </div>
       </div>
@@ -1874,9 +2000,9 @@ form label { margin-bottom: 13px; }
 .dialog-enter-from .login-dialog,.dialog-leave-to .login-dialog{transform:scale(.97);opacity:0;}
 
 /* ---------- View & toast transitions ---------- */
-.view-enter-active,.view-leave-active{transition:opacity var(--motion-base) var(--ease-soft),transform var(--motion-base) var(--ease-soft);}
-.view-enter-from{opacity:0;transform:translateY(14px) scale(.985);}
-.view-leave-to{opacity:0;transform:translateY(-10px) scale(.99);}
+.view-enter-active,.view-leave-active{transition:opacity var(--motion-base) var(--ease-soft);}
+.view-enter-from{opacity:0;}
+.view-leave-to{opacity:0;}
 .toast.show{animation:fade-in var(--motion-base) var(--ease-soft) both;}
 @keyframes rise-in{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
 @keyframes fade-in{from{opacity:0;}to{opacity:1;}}
@@ -1884,7 +2010,7 @@ form label { margin-bottom: 13px; }
 
 /* Soft "mochi" entrance for every panel — covers list ↔ form switches and page mounts */
 .panel{animation:mochi-pop var(--motion-base) var(--ease-soft) both;}
-@keyframes mochi-pop{from{opacity:0;transform:translateY(14px) scale(.985);}to{opacity:1;transform:none;}}
+@keyframes mochi-pop{from{opacity:0;}to{opacity:1;}}
 
 /* ---------- Cute confirm dialog ---------- */
 .confirm-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(74,52,48,.30);backdrop-filter:blur(3px);}
