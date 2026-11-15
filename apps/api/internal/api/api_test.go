@@ -16,14 +16,14 @@ import (
 )
 
 type testClient struct {
-	t       *testing.T
+	t       testing.TB
 	base    string
 	hc      *http.Client
 	csrf    string
 	headers map[string]string
 }
 
-func newTestServer(t *testing.T) (*httptest.Server, *testClient, *db.DB) {
+func newTestServer(t testing.TB) (*httptest.Server, *testClient, *db.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	var database *db.DB

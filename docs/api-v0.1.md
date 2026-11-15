@@ -79,11 +79,13 @@
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| GET/POST | `/transactions` | IMPLEMENTED | 流水 / 支出·收入·转账（`splits[]` 合计=总额） |
+| GET/POST | `/transactions` | IMPLEMENTED | 流水筛选与游标分页 / 支出·收入·转账（`splits[]` 合计=总额） |
 | GET | `/transactions/{id}` | IMPLEMENTED | 详情（业务 + 分录影响） |
 | POST | `/transactions/{id}/reverse` | IMPLEMENTED | 冲正（保留原分录，业务日按 Asia/Shanghai） |
 | POST | `/refunds` | IMPLEMENTED | 全额/部分退款、超额拒绝 |
 | GET | `/refunds/by-transaction/{id}` | IMPLEMENTED | 累计退款、净支出、剩余可退 |
+
+`GET /transactions` 接受 `from`、`to`（含边界，YYYY-MM-DD）、`type`（expense、income、transfer）及 `limit`（1–200，默认 200）。响应含 `items`、本页条数 `total` 和 `next_cursor`。下一页保持原筛选条件，将 `next_cursor` 传为 `cursor`；值为 `null` 时已到末页。流水按业务日期、创建时间与 ID 降序排列。
 
 `POST /transactions` 请求示例（信用消费 1000.00，拆两行）：
 
@@ -122,7 +124,8 @@
 | POST | `/installments/{id}/payments` | IMPLEMENTED | 确认实付（`channel=cash\|credit`） |
 | POST | `/installments/convert-from-credit` | IMPLEMENTED（V0.1.1） | 指定 `credit_instrument_id` 与 `statement_id`，同一事务重分类本金、冲减原账单及已有待办。仅当该工具恰有一张未还账单时可省略 `statement_id` |
 | GET | `/schedule/due-items` | IMPLEMENTED | 待支付事项（只读，业务日时钟） |
-| POST | `/schedule/generate` | IMPLEMENTED（PARTIAL 语义） | **手动**幂等投影未来 30 天期次；每日自动调度器仍为 PLANNED |
+| POST | `/schedule/generate` | IMPLEMENTED | 手动幂等生成未来 30 天待办 |
+| GET | `/schedule/runs` | IMPLEMENTED | 当前家庭最近 50 次投影记录，含成功及可持久化的失败 |
 | GET | `/installments/{id}` | PLANNED | 合同 + 期次计划 |
 | POST | `/installments/{id}/confirm-schedule` · `/settle-early` | PLANNED | 计划确认 / 提前结清 |
 | GET/POST | `/debts` · `/debts/{id}/schedule` · `/debts/{id}/payments` | PLANNED | 房贷/贷款/保险 HTTP CRUD 与期次付款 |

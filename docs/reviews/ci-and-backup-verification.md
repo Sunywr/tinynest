@@ -13,3 +13,11 @@
 新增 Linux CI 步骤调用 `scripts/mysql-ci-drill.sh`，在禁用网络的临时 MySQL 8.0 容器上通过挂载的 Unix socket 执行真实 API 用例，再将一致性备份恢复到空库并比对数据和借贷平衡。本地仅做 Bash 语法检查，Docker 运行与远端 CI 均为 UNVERIFIED。
 
 生产备份的操作与验收口径见[部署文档](../deployment.md#mysql-生产备份恢复与异地副本验收)。当前缺少生产备份、隔离目标和异地副本的实测记录，状态仍为 UNVERIFIED。
+
+## 候选 4f24e34 的远端结果
+
+运行 43673087853 已结束。仓库检查、Web 构建、Chromium E2E、Go 普通测试与竞态检测通过。Go 作业在 MySQL Unix socket 与备份恢复步骤失败，公开注解仅有退出码 1。须取得该步骤日志确认根因。此结果不能用于放行 Linux MySQL 验收。
+
+[CI 运行](https://github.com/Sunywr/tinynest/actions/runs/43673087853) · [失败作业](https://github.com/Sunywr/tinynest/actions/runs/43673087853/job/132687225510)
+
+本地候选先尝试正常停止临时容器，再强制移除，并允许 runner 清理被容器 MySQL 用户接管的 socket 子目录。宿主机临时父目录仍是私有目录。Bash 语法和模拟启动失败后的清理顺序已验证。当前 Windows 主机无可用 Docker，WSL 查询返回 REGDB_E_CLASSNOTREG。远端失败根因及真实 Linux 复跑仍待验证。

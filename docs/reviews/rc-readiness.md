@@ -1,14 +1,14 @@
 # 发布候选复核
 
-2026-11-15，复核基线为远端 main 的 f3279d1。190269e 实现列表优先、动作打开表单、首页快速记账和本机偏好。f3279d1 补入计划和历史验收资料。
+2026-11-15，当前候选为远端 main 的 4f24e34。Go 普通测试及竞态检测、Web 构建、Chromium E2E 和仓库检查通过，Linux MySQL Unix socket 与备份恢复步骤失败。公开记录仅提供退出码。见[候选 CI 与备份复核](ci-and-backup-verification.md)。
 
 | 计划 | 证据与状态 |
 | --- | --- |
-| M1 源码、范围与 CI | [源码审计](latest-source-audit.md)及[功能矩阵](feature-acceptance-matrix.md)记录历史基线。[当前基线 CI](https://github.com/Sunywr/tinynest/actions/runs/43606578300)的 Go、Web、E2E、仓库检查四项通过 |
+| M1 源码、范围与 CI | [源码审计](latest-source-audit.md)及[功能矩阵](feature-acceptance-matrix.md)记录历史基线。f3279d1 的四项 CI 通过，4f24e34 的 MySQL 步骤失败 |
 | M2 公开入口、认证、PWA | 公开页、受控初始化、会话与退出、焦点陷阱、减少动态效果、安装图标与旧缓存清理均有自动化覆盖。iPhone 实机未验证 |
 | M3 账务回归 | Go 全量通过，涵盖信用、保险本金约束、分期、跨年退款、投资估值与家庭隔离。验证使用测试库 |
 | M4 浏览器和 SQLite | 三视口及主要业务流程由浏览器回归覆盖。SQLite 演练八步通过，迁移 1–10、重启、重复迁移、备份还原、借贷各 50,000 分、完整性与外键检查通过 |
-| M5 发布准备度 | 开发基线 CI 已通过。预发布与生产验收仍有未验证条目 |
+| M5 发布准备度 | 当前候选 CI 未通过。预发布与生产验收仍有未验证条目 |
 
 ## 待验收
 
@@ -33,3 +33,17 @@ Windows 本机独立 MySQL 8.0.46 实例运行 TestV01EndToEnd，通过测试进
 此证据覆盖本机 MySQL 业务与逻辑恢复。Linux Unix socket、生产备份恢复、异地副本与 iPhone 实机仍为 UNVERIFIED。本机 Windows 补齐 MinGW 运行库后，Go 1.23.6 的 go test -race ./... -count=1 全部通过。CI 已加入同一命令，修改后的远端工作流仍待运行。
 
 独立交付记录：[当前提交与覆盖](current-sha-and-coverage.md)、[账务回归](ledger-regression.md)、[浏览器回归](web-e2e-results.md)、[CI 与备份](ci-and-backup-verification.md)、[下一轮待办](next-iteration-backlog.md)。
+
+## 本地账本读性能基线
+
+Windows amd64、Go 1.23.6、SQLite，以 API 写入一个家庭的 2,500 条合成支出后，对认证后的 HTTP 读路径执行 Go 并发基准。每次请求校验返回状态，以及月度支出总额或最近流水条数。
+
+| 读路径 | 1 个并行工作协程 | 8 个并行工作协程 |
+| --- | ---: | ---: |
+| 月度首页汇总 | 55.89 ms/op | 56.61 ms/op |
+| 流水首页（200 条） | 4.65 ms/op | 2.44 ms/op |
+| 流水第二页（200 条） | 6.26 ms/op | 2.53 ms/op |
+
+从 `apps/api` 运行 `go test ./internal/api -run '^$' -bench '^BenchmarkLedgerReads$' -benchtime=2s '-cpu=1,8'`。并发列为按吞吐量折算的平均每操作时间。延迟分位数、写入吞吐及生产 MySQL 性能仍为 UNVERIFIED。
+
+SQLite 并发写入回归以 16 个并行 HTTP 请求提交同一笔支出。连续 25 轮均验证一次创建、15 次返回同一流水 ID、账户只扣款一次。复跑命令为 `go test ./internal/api -run '^TestConcurrentTransactionReplays$' -count=25 -parallel=16`。

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"tinynest/api/internal/db"
@@ -87,19 +88,18 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		in.Currency = "CNY"
 	}
 	key := idempotencyKey(r)
-	if key != "" {
-		var existing string
-		if err := a.DB.QueryRowContext(r.Context(),
-			`SELECT id FROM transactions WHERE idempotency_key=? AND household_id=?`, key, p.HouseholdID).Scan(&existing); err == nil {
-			writeJSON(w, 200, map[string]any{"id": existing, "status": "posted", "replayed": true})
-			return
-		}
-	}
-
+	const findExisting = `SELECT id FROM transactions WHERE idempotency_key=? AND household_id=?`
+	var existing string
 	txID, entryID := newID("tx"), newID("je")
 	c := ledger.Context{EntryID: entryID, BizID: txID, OccurredOn: in.OccurredOn}
 
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if key != "" {
+			err := tx.QueryRowContext(r.Context(), findExisting, key, p.HouseholdID).Scan(&existing)
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		var entry *ledger.Entry
 		var err error
 		var splits []splitInput
@@ -211,8 +211,20 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		}
 		return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, "")
 	})
+	if err != nil && key != "" && existing == "" {
+		// Another database client may commit the same key after our lookup.
+		// Read again after our transaction has been rolled back.
+		var committed string
+		if lookupErr := a.DB.QueryRowContext(r.Context(), findExisting, key, p.HouseholdID).Scan(&committed); lookupErr == nil {
+			existing, err = committed, nil
+		}
+	}
 	if err != nil {
 		writeErr(w, 400, "invalid_request", err.Error())
+		return
+	}
+	if existing != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"id": existing, "status": "posted", "replayed": true})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": txID, "entry_id": entryID, "status": "posted"})
@@ -230,13 +242,39 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, to := q.Get("from"), q.Get("to")
 	txType := q.Get("type")
-	rows, err := a.DB.QueryContext(r.Context(), `
+	limit := 200
+	if raw := q.Get("limit"); raw != "" {
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 200 {
+			writeErr(w, 400, "invalid_request", "每页条数须为 1 至 200")
+			return
+		}
+	}
+	query := `
 		SELECT id,type,amount_minor,occurred_on,account_id,to_account_id,credit_instrument_id,
 		       merchant,note,status,entry_id
 		FROM transactions WHERE household_id=?
-		  AND (?='' OR occurred_on>=?) AND (?='' OR occurred_on<=?) AND (?='' OR type=?)
-		ORDER BY occurred_on DESC, created_at DESC LIMIT 200`,
-		p.HouseholdID, from, from, to, to, txType, txType)
+		  AND (?='' OR occurred_on>=?) AND (?='' OR occurred_on<=?) AND (?='' OR type=?)`
+	args := []any{p.HouseholdID, from, from, to, to, txType, txType}
+	ctx := r.Context()
+	if cursor := q.Get("cursor"); cursor != "" {
+		var date, created string
+		err := a.DB.QueryRowContext(ctx, `SELECT occurred_on,created_at FROM transactions
+			WHERE household_id=? AND id=?`, p.HouseholdID, cursor).Scan(&date, &created)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, 400, "invalid_request", "流水分页游标无效")
+			return
+		}
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		query += ` AND (occurred_on, created_at, id) < (?, ?, ?)`
+		args = append(args, date, created, cursor)
+	}
+	query += ` ORDER BY occurred_on DESC, created_at DESC, id DESC LIMIT ?`
+	rows, err := a.DB.QueryContext(ctx, query, append(args, limit+1)...)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -257,7 +295,16 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 			"merchant": merchant, "note": note, "status": status, "entry_id": entryID,
 		})
 	}
-	writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
+	if err := rows.Err(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	var nextCursor any
+	if len(items) > limit {
+		items = items[:limit]
+		nextCursor = items[limit-1]["id"]
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "total": len(items), "next_cursor": nextCursor})
 }
 
 // loadEntry rebuilds a ledger.Entry from persisted lines (used for reversals).

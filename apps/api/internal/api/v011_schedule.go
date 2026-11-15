@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -55,6 +56,7 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 		horizonDays = 30
 	}
 	horizon := a.businessToday().AddDate(0, 0, horizonDays).Format("2006-01-02")
+	runOn := a.businessDate()
 	type found struct {
 		kind, id, due, label string
 		remaining            int64
@@ -87,6 +89,9 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 			add("credit_statement", id, due, name+" 账单", remaining)
 		}
 		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
 		// Installment and debt periods with unpaid remainders.
 		for _, src := range []struct{ table, kind, contractTable string }{
 			{"installment_schedule_items", "installment", "installment_contracts"},
@@ -112,6 +117,9 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 				add(src.kind, id, due, name+" 第"+itoa(no)+"期", remaining)
 			}
 			_ = rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
 		}
 		insertDue := "INSERT OR IGNORE INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label) VALUES(?,?,?,?,?,?,?,'pending',?)"
 		if a.DB.IsMySQL() {
@@ -131,12 +139,22 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO schedule_runs(id,household_id,run_on,`+"`trigger`"+`,horizon_days,`+"`generated`"+`,status,detail)
 			VALUES(?,?,?,?,?,?,'ok',NULL)`,
-			newID("run"), householdID, a.businessDate(), trigger, horizonDays, generated); err != nil {
+			newID("run"), householdID, runOn, trigger, horizonDays, generated); err != nil {
 			return err
 		}
 		return nil
 	})
-	return generated, err
+	if err == nil {
+		return generated, nil
+	}
+	slog.Error("api: due-item projection failed", "household", householdID, "trigger", trigger, "error", err)
+	if _, recordErr := a.DB.ExecContext(ctx, `
+		INSERT INTO schedule_runs(id,household_id,run_on,`+"`trigger`"+`,horizon_days,`+"`generated`"+`,status,detail)
+		VALUES(?,?,?,?,?,0,'failed',?)`,
+		newID("run"), householdID, runOn, trigger, horizonDays, "待办生成失败，详情见服务日志"); recordErr != nil {
+		slog.Error("api: could not record failed projection", "household", householdID, "trigger", trigger, "error", recordErr)
+	}
+	return 0, err
 }
 
 // runDailyProjection projects due items for EVERY household, isolating
@@ -156,16 +174,20 @@ func (a *API) runDailyProjection(ctx context.Context, trigger string) (int, erro
 		ids = append(ids, id)
 	}
 	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
 	total := 0
+	var failures []error
 	for _, id := range ids {
 		n, err := a.projectDueItems(ctx, id, trigger, 30)
 		if err != nil {
-			slog.Error("api: due-item projection failed", "household", id, "trigger", trigger, "error", err)
+			failures = append(failures, err)
 			continue
 		}
 		total += n
 	}
-	return total, nil
+	return total, errors.Join(failures...)
 }
 
 // nextDailyRun returns the next Asia/Shanghai 00:07 boundary after t.
@@ -228,8 +250,26 @@ func (a *API) schedulerLoop(parent context.Context, every time.Duration) {
 func (a *API) runSchedulerOnce(ctx context.Context, trigger string) {
 	a.schedMu.Lock()
 	defer a.schedMu.Unlock()
-	if _, err := a.runDailyProjection(ctx, trigger); err != nil {
+	if _, err := a.runDailyProjection(ctx, trigger); err == nil {
+		return
+	} else {
 		slog.Error("api: scheduler run failed", "trigger", trigger, "error", err)
+	}
+	delay := time.Minute
+	if a.opts.SchedulerInterval > 0 {
+		delay = a.opts.SchedulerInterval
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+	if ctx.Err() == nil {
+		if _, err := a.runDailyProjection(ctx, "retry"); err != nil {
+			slog.Error("api: scheduler retry failed", "trigger", trigger, "error", err)
+		}
 	}
 }
 

@@ -723,3 +723,34 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
     await member.close()
   }
 })
+
+test('流水筛选覆盖历史数据并加载第 201 条', async ({ page }) => {
+  await ensureLogin(page)
+  const me = await (await page.request.get('/api/v1/auth/me')).json()
+  const headers = { 'X-CSRF-Token': me.csrf_token }
+  const accounts = await (await page.request.get('/api/v1/accounts')).json()
+  const account = accounts.items.find((item: { name: string }) => item.name === 'E2E 工资卡')
+  const categories = await (await page.request.get('/api/v1/categories')).json()
+  const category = categories.items.find((item: { kind: string; active: number }) => item.kind === 'expense' && item.active)
+  for (let i = 0; i < 201; i++) {
+    const response = await page.request.post('/api/v1/transactions', { headers, data: {
+      type: 'expense', amount_minor: 1, occurred_on: '2020-01-01', payment_kind: 'cash',
+      account_id: account.id, merchant: `分页商户 ${i}`,
+      splits: [{ category_id: category.id, amount_minor: 1 }],
+    } })
+    expect(response.status()).toBe(201)
+  }
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.getByLabel('流水开始日期').fill('2020-01-01')
+  await page.getByLabel('流水结束日期').fill('2020-01-01')
+  await page.getByLabel('流水类型').selectOption('expense')
+  await page.getByRole('button', { name: '筛选', exact: true }).click()
+  const rows = page.locator('.translist .transaction')
+  await expect(rows).toHaveCount(200)
+  await expect(rows.first()).toContainText('分页商户')
+  await page.getByRole('button', { name: '加载更多流水' }).click()
+  await expect(rows).toHaveCount(201)
+  await expect(page.getByRole('button', { name: '加载更多流水' })).toHaveCount(0)
+  await rows.last().getByRole('button', { name: '退款' }).click()
+  await expect(page.getByLabel('原交易')).not.toHaveValue('')
+})
