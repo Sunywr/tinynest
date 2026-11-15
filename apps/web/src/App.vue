@@ -382,6 +382,39 @@ watch(transactionAmount, input => {
 function go(v: View) { view.value = v; errorMsg.value = ''; panel.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
 function openPanel(p: string) { panel.value = p; errorMsg.value = '' }
 function closePanel() { panel.value = ''; errorMsg.value = '' }
+
+// Soft confirmation before destructive actions (cute in-app modal).
+const confirmState = ref<{
+  title: string
+  message: string
+  confirmText: string
+  cancelText: string
+  tone: 'default' | 'danger'
+  onConfirm: () => void
+} | null>(null)
+function requestConfirm(opts: {
+  title: string
+  message: string
+  confirmText?: string
+  cancelText?: string
+  tone?: 'default' | 'danger'
+  onConfirm: () => void
+}) {
+  confirmState.value = {
+    title: opts.title,
+    message: opts.message,
+    confirmText: opts.confirmText ?? '确定',
+    cancelText: opts.cancelText ?? '取消',
+    tone: opts.tone ?? 'default',
+    onConfirm: opts.onConfirm,
+  }
+}
+function doConfirm() {
+  const cb = confirmState.value?.onConfirm
+  confirmState.value = null
+  cb?.()
+}
+function cancelConfirm() { confirmState.value = null }
 // Quick entry (D3): one tap from the home dashboard into the ledger form.
 function quickEntry() { go('ledger'); openPanel('tx') }
 
@@ -439,7 +472,7 @@ async function saveCategory() {
 async function run(fn: () => Promise<any>, okMsg: string) {
   loading.value = true; errorMsg.value = ''
   try {
-    await fn(); toast(okMsg); await loadAll()
+    await fn(); toast(okMsg); await loadAll(); closePanel()
     if (f.instPayment.contract_id) await refreshInstDetail()
     if (f.debtPayment.contract_id) { try { debtDetail.value = await api.debt(f.debtPayment.contract_id) } catch { /* keep stale */ } }
   }
@@ -529,12 +562,17 @@ async function refreshApplications() {
 }
 
 async function revokeInvitation(id: string) {
-  if (!window.confirm('撤销后，关联的待审批申请也将失效。确定撤销？')) return
-  await run(async () => {
-    await api.revokeInvitation(id)
-    issuedCode.value = ''
-    await refreshApplications()
-  }, '邀请码已撤销')
+  requestConfirm({
+    title: '撤销邀请',
+    message: '撤销后，关联的待审批申请也将失效。确定撤销吗？',
+    tone: 'danger',
+    confirmText: '撤销',
+    onConfirm: () => { void run(async () => {
+      await api.revokeInvitation(id)
+      issuedCode.value = ''
+      await refreshApplications()
+    }, '邀请码已撤销') },
+  })
 }
 
 async function decideApplication(id: string, approve: boolean) {
@@ -561,11 +599,16 @@ async function changeUserRole(id: string, role: 'member' | 'viewer') {
 }
 
 async function disableUser(id: string, username: string) {
-  if (!window.confirm(`停用「${username}」并退出该账号的所有会话？`)) return
-  await run(async () => {
-    await api.disableUser(id)
-    await refreshUsers()
-  }, '成员账号已停用')
+  requestConfirm({
+    title: '停用成员账号',
+    message: `确定停用「${username}」吗？该账号的所有会话将立即退出。`,
+    tone: 'danger',
+    confirmText: '停用',
+    onConfirm: () => { void run(async () => {
+      await api.disableUser(id)
+      await refreshUsers()
+    }, '成员账号已停用') },
+  })
 }
 
 async function addMember() {
@@ -777,9 +820,17 @@ function settleDebt() {
   return run(() => api.settleDebtEarly(f.debtPayment.contract_id, reason), '已提前结清')
 }
 function deactivateInstrument(id: string) {
-  const reason = window.prompt('停用后该工具不能再消费。请填写原因：')
-  if (reason === null) return
-  return run(() => api.patchCreditInstrument(id, { status: 'inactive', reason }), '信用工具已停用')
+  requestConfirm({
+    title: '停用信用工具',
+    message: '停用后该工具将不能再消费。确定停用吗？',
+    tone: 'danger',
+    confirmText: '停用',
+    onConfirm: () => {
+      const reason = window.prompt('请填写停用原因：')
+      if (reason === null) return
+      void run(() => api.patchCreditInstrument(id, { status: 'inactive', reason }), '信用工具已停用')
+    },
+  })
 }
 function generateDue() { return run(() => api.generateDueItems(), '待支付事项已按幂等键生成') }
 function createAsset() {
@@ -864,9 +915,18 @@ function submitRefund() {
 }
 
 function setAccountStatus(a: any, status: 'active' | 'disabled') {
-  return run(() => api.updateAccount(a.id, {
-    name: a.name, subtype: a.subtype || '', owner_member_id: a.owner_member_id || '', note: a.note || '', status,
-  }), status === 'disabled' ? '账户已停用' : '账户已启用')
+  const disabling = status === 'disabled'
+  requestConfirm({
+    title: disabling ? '停用账户' : '启用账户',
+    message: disabling
+      ? `确定停用「${a.name}」吗？停用后该账户将不再参与记账与汇总。`
+      : `确定重新启用「${a.name}」吗？`,
+    tone: disabling ? 'danger' : 'default',
+    confirmText: disabling ? '停用' : '启用',
+    onConfirm: () => { void run(() => api.updateAccount(a.id, {
+      name: a.name, subtype: a.subtype || '', owner_member_id: a.owner_member_id || '', note: a.note || '', status,
+    }), status === 'disabled' ? '账户已停用' : '账户已启用') },
+  })
 }
 
 function instrumentUsage(id: string) {
@@ -1672,6 +1732,20 @@ const metricCards = computed(() => {
     </div>
     <div v-else class="authcard"><p>正在连接本地账本…</p></div>
     <div v-if="notice" class="toast show" role="status">{{ notice }}</div>
+
+    <Transition name="dialog">
+      <div v-if="confirmState" class="confirm-overlay" @click.self="cancelConfirm()">
+        <div class="confirm-card" :class="{ danger: confirmState?.tone === 'danger' }">
+          <div class="confirm-emoji">{{ confirmState?.tone === 'danger' ? '⚠️' : '💭' }}</div>
+          <h3 class="confirm-title">{{ confirmState?.title }}</h3>
+          <p class="confirm-msg">{{ confirmState?.message }}</p>
+          <div class="confirm-actions">
+            <button type="button" class="ghost" @click="cancelConfirm()">{{ confirmState?.cancelText }}</button>
+            <button type="button" class="btn-primary" :class="{ danger: confirmState?.tone === 'danger' }" @click="doConfirm()">{{ confirmState?.confirmText }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -1801,12 +1875,30 @@ form label { margin-bottom: 13px; }
 
 /* ---------- View & toast transitions ---------- */
 .view-enter-active,.view-leave-active{transition:opacity var(--motion-base) var(--ease-soft),transform var(--motion-base) var(--ease-soft);}
-.view-enter-from{opacity:0;transform:translateY(8px);}
-.view-leave-to{opacity:0;transform:translateY(-6px);}
+.view-enter-from{opacity:0;transform:translateY(14px) scale(.985);}
+.view-leave-to{opacity:0;transform:translateY(-10px) scale(.99);}
 .toast.show{animation:fade-in var(--motion-base) var(--ease-soft) both;}
 @keyframes rise-in{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
 @keyframes fade-in{from{opacity:0;}to{opacity:1;}}
 @keyframes mochi-breathe{0%,100%{transform:translateY(0);}50%{transform:translateY(-5px);}}
+
+/* Soft "mochi" entrance for every panel — covers list ↔ form switches and page mounts */
+.panel{animation:mochi-pop var(--motion-base) var(--ease-soft) both;}
+@keyframes mochi-pop{from{opacity:0;transform:translateY(14px) scale(.985);}to{opacity:1;transform:none;}}
+
+/* ---------- Cute confirm dialog ---------- */
+.confirm-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(74,52,48,.30);backdrop-filter:blur(3px);}
+.confirm-card{width:100%;max-width:360px;background:var(--card);border:1px solid var(--border);border-radius:24px;padding:26px 24px 22px;text-align:center;box-shadow:0 22px 55px rgba(120,80,70,.28);}
+.confirm-card.danger{border-color:rgba(217,140,122,.5);}
+.confirm-emoji{font-size:34px;line-height:1;margin-bottom:8px;}
+.confirm-title{margin:0 0 8px;font-size:18px;color:var(--text);}
+.confirm-card.danger .confirm-title{color:var(--danger,#d98c7a);}
+.confirm-msg{margin:0 0 20px;font-size:14px;line-height:1.65;color:var(--muted,#8a7a72);}
+.confirm-actions{display:flex;gap:12px;justify-content:center;}
+.confirm-actions .btn-primary{min-width:110px;}
+.confirm-actions .btn-primary.danger{background:var(--danger,#d98c7a);box-shadow:0 10px 24px rgba(217,140,122,.28);}
+.dialog-enter-active .confirm-card,.dialog-leave-active .confirm-card{transition:transform var(--motion-base) var(--ease-soft),opacity var(--motion-base) var(--ease-soft);}
+.dialog-enter-from .confirm-card,.dialog-leave-to .confirm-card{transform:scale(.94) translateY(8px);opacity:0;}
 
 /* ---------- Responsive ---------- */
 @media(max-width:900px){
@@ -1828,7 +1920,7 @@ form label { margin-bottom: 13px; }
   .btn-quiet{width:100%;text-align:center;}
 }
 @media(prefers-reduced-motion: reduce){
-  .hero-copy>*,.mochi-float,.toast.show,.login-dialog .err,.landing-notice{animation:none !important;}
+  .hero-copy>*,.mochi-float,.toast.show,.login-dialog .err,.landing-notice,.panel,.confirm-card{animation:none !important;}
   .landing-login-link,.btn-primary,.dialog-enter-active,.dialog-leave-active,.view-enter-active,.view-leave-active{transition:none !important;}
 }
 
