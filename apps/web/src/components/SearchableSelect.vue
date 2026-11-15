@@ -14,8 +14,21 @@ const options = ref<{ id: string; name: string }[]>([])
 const placeholder = ref('请选择')
 let observer: MutationObserver | null = null
 
+function trapProp(sel: HTMLSelectElement, prop: string) {
+  const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, prop)
+  if (!desc?.get || !desc.set) return
+  Object.defineProperty(sel, prop, {
+    configurable: true,
+    get: () => desc.get!.call(sel),
+    set: (v: never) => { desc.set!.call(sel, v); syncValue() },
+  })
+}
+
 function getSelect(): HTMLSelectElement | null {
   return (root.value?.querySelector('select')) as HTMLSelectElement | null
+}
+function sameOptions(a: { id: string; name: string }[], b: { id: string; name: string }[]) {
+  return a.length === b.length && a.every((o, i) => o.id === b[i].id && o.name === b[i].name)
 }
 function syncOptions() {
   const sel = getSelect()
@@ -27,13 +40,17 @@ function syncOptions() {
     if (val === '') { if (!ph) ph = o.text.trim(); continue }
     opts.push({ id: val, name: o.text.trim() })
   }
-  options.value = opts
-  placeholder.value = ph || '请选择'
+  // Skip unchanged writes: Vue re-invokes this slot on every SmartSelect
+  // re-render and unconditionally re-sets each option's value attribute;
+  // writing our own reactive state back would feed an infinite update loop.
+  if (!sameOptions(opts, options.value)) options.value = opts
+  const nextPh = ph || '请选择'
+  if (nextPh !== placeholder.value) placeholder.value = nextPh
 }
 function syncValue() {
   const sel = getSelect()
   if (!sel) return
-  displayValue.value = sel.value
+  if (displayValue.value !== sel.value) displayValue.value = sel.value
 }
 function onPick(v: string) {
   const sel = getSelect()
@@ -46,12 +63,29 @@ function onPick(v: string) {
 onMounted(() => {
   const sel = getSelect()
   if (!sel) return
+  // Vue's v-model on <select> never touches attributes: it writes el.value
+  // or el.selectedIndex (setSelected) as properties, so a MutationObserver
+  // cannot see value updates. Wrap both properties to keep the displayed
+  // selection in sync with programmatic v-model changes.
+  trapProp(sel, 'value')
+  trapProp(sel, 'selectedIndex')
+  // Track structural changes (options added/removed/renamed). Option value
+  // ATTRIBUTE mutations are intentionally ignored: Vue re-sets them on every
+  // slot re-invocation, and observing them creates a render↔observer loop.
   observer = new MutationObserver(() => { syncOptions(); syncValue() })
-  observer.observe(sel, { attributes: true, attributeFilter: ['value'], childList: true, subtree: true })
+  observer.observe(sel, { childList: true, subtree: true, characterData: true })
   syncOptions()
   syncValue()
 })
-onBeforeUnmount(() => observer?.disconnect())
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  const sel = getSelect()
+  if (!sel) return
+  for (const prop of ['value', 'selectedIndex']) {
+    const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, prop)
+    if (desc) Object.defineProperty(sel, prop, desc)
+  }
+})
 </script>
 
 <template>

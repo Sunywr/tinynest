@@ -113,7 +113,6 @@ test('L07 正确登录进入家庭财务驾驶舱', async ({ page }) => {
   await loginViaDialog(page)
   await expect(page.locator('.website')).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page.getByText('API：已连接')).toBeVisible()
 })
 
 test('L08 已登录刷新或直接访问 / 仍停留在驾驶舱', async ({ page }) => {

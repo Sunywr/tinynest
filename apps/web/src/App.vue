@@ -182,7 +182,7 @@ const createTitle = computed(() => {
 const createHint = computed(() => {
   if (createModal.entity === 'category') return `将创建为「${createModal.meta.kind === 'income' ? '收入' : '支出'}」分类`
   if (createModal.entity === 'account') return '创建后立即选入当前表单，原表单已填内容保持不变'
-  if (createModal.entity === 'instrument') return '创建后可用于本次记账'
+  if (createModal.entity === 'instrument') return '创建后可用于本次记账；账单周期默认 1–31 日、还款日次月 10 日，可事后在信用账单中修正'
   if (createModal.entity === 'member') return '创建成员档案，可立即关联到当前表单'
   if (createModal.entity === 'project') return '创建项目，可立即关联到当前表单'
   if (createModal.entity === 'asset') return '创建投资标的（代码、类型与所属投资账户必填），创建后立即选入当前表单'
@@ -214,7 +214,8 @@ async function confirmCreate() {
     } else if (createModal.entity === 'account') {
       const r: any = await api.createAccount({ name, kind: createModal.accountKind, owner_member_id: null, opening_balance_minor: 0 }); id = r.id
     } else if (createModal.entity === 'instrument') {
-      const r: any = await api.createCreditInstrument({ name, kind: createModal.instrumentKind }); id = r.id
+      // 后端要求完整账单周期；内联创建采用与完整表单一致的默认值（1–31 周期、次月 10 日还款）。
+      const r: any = await api.createCreditInstrument({ name, kind: createModal.instrumentKind, cycle_start_day: 1, cycle_end_day: 31, due_day: 10, due_month_offset: 1 }); id = r.id
     } else if (createModal.entity === 'asset') {
       const r: any = await api.createAsset({ name, code: createModal.assetCode, kind: createModal.assetKind, account_id: createModal.assetAccountId }); id = r.id
     }
@@ -595,8 +596,12 @@ async function saveCategory() {
 
 async function run(fn: () => Promise<any>, okMsg: string) {
   loading.value = true; errorMsg.value = ''
+  // Auto-back must not clobber a newer navigation: only close the panel that
+  // was open when this submit started, and only if it is still open.
+  const submittedPanel = panel.value
   try {
-    await fn(); toast(okMsg); await loadAll(); closePanel()
+    await fn(); toast(okMsg); await loadAll()
+    if (panel.value === submittedPanel) closePanel()
     if (f.instPayment.contract_id) await refreshInstDetail()
     if (f.debtPayment.contract_id) { try { debtDetail.value = await api.debt(f.debtPayment.contract_id) } catch { /* keep stale */ } }
   }
