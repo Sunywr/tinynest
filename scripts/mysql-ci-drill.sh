@@ -54,29 +54,33 @@ mysql_root mysql --protocol=socket --user=root <<'SQL'
 CREATE DATABASE tinynest_drill;
 CREATE DATABASE tinynest_credit;
 CREATE DATABASE tinynest_concurrency;
+CREATE DATABASE tinynest_mixed_load;
 CREATE DATABASE tinynest_restore;
 CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';
 GRANT ALL ON tinynest_drill.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_credit.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_concurrency.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_mixed_load.* TO 'tinynest_drill'@'localhost';
 SQL
 
 stage='check the host socket'
 test -S "$work/socket/mysqld.sock"
 run_ledger_test() {
   local database=$1 test_name=$2
+  shift 2
   stage="run $test_name over the host socket"
   TINYNEST_TEST_MYSQL_SOCKET="$work/socket/mysqld.sock" \
   TINYNEST_TEST_MYSQL_DATABASE="$database" \
   TINYNEST_TEST_MYSQL_USER=tinynest_drill \
   TINYNEST_TEST_MYSQL_PASSWORD_FILE="$work/password" \
-  go test ./internal/api -run "^$test_name$" -count=1 -parallel=16
+  go test ./internal/api -run "^$test_name$" -count=1 -parallel=16 "$@"
 }
 
 # Each test owns a fresh schema and initializes its own household.
 run_ledger_test tinynest_drill TestV01EndToEnd
 run_ledger_test tinynest_credit TestV011_T1_CreditStatementLifecycle
 run_ledger_test tinynest_concurrency TestConcurrentTransactionReplays
+run_ledger_test tinynest_mixed_load TestMixedLedgerLoad -v
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)
