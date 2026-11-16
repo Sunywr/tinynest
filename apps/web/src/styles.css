@@ -61,6 +61,30 @@ body{background:#f4eee8;}
   --motion-breathe:5.2s;
   --ease-soft:cubic-bezier(.22,.61,.36,1);
 }
+
+button {
+  transition:
+    transform var(--motion-fast) var(--ease-soft),
+    filter var(--motion-fast) var(--ease-soft),
+    background-color var(--motion-fast) var(--ease-soft),
+    border-color var(--motion-fast) var(--ease-soft),
+    color var(--motion-fast) var(--ease-soft),
+    box-shadow var(--motion-fast) var(--ease-soft),
+    opacity var(--motion-fast) var(--ease-soft);
+}
+
+@media (hover: hover) {
+  button:enabled:hover {
+    filter: brightness(.96);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button:enabled:active {
+    transform: scale(.98);
+  }
+}
+
 body.dialog-open{overflow:hidden;}
 @media(prefers-reduced-motion: reduce){
   *,*::before,*::after{

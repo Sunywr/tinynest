@@ -173,13 +173,30 @@ test('L12 已初始化环境直接调用 setup 不能创建或覆盖管理员', 
   await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
 })
 
-test('L13 prefers-reduced-motion 停用持续动效，登录仍可用', async ({ page }) => {
+test('L13 按钮使用统一过渡并尊重减少动态效果设置', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await page.goto('/')
+  await openDialog(page)
+  const visibleButtons = page.locator('button:visible')
+  const properties = await visibleButtons.evaluateAll(buttons =>
+    buttons.map(button => getComputedStyle(button).transitionProperty.split(', ')),
+  )
+  expect(properties.length).toBeGreaterThan(3)
+  for (const transition of properties) {
+    expect(transition).toEqual(expect.arrayContaining(['transform', 'filter', 'background-color']))
+  }
+
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
   const animation = await page.locator('.mochi-float').evaluate(el => getComputedStyle(el).animationName)
   expect(animation).toBe('none')
   await openDialog(page)
   await expect(page.getByRole('dialog', { name: '欢迎回家' })).toBeVisible()
+  const durations = await visibleButtons.evaluateAll(buttons =>
+    buttons.map(button => getComputedStyle(button).transitionDuration),
+  )
+  expect(durations).toHaveLength(properties.length)
+  expect(durations.every(duration => duration === '0s')).toBe(true)
 })
 
 test('L14 390 / 768 / 1440px 三视口无横向溢出且 CTA 与表单可用', async ({ page }) => {
