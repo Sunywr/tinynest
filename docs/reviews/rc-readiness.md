@@ -1,6 +1,15 @@
 # 发布候选复核
 
-2026-11-15，当前候选为远端 main 的 4f24e34。Go 普通测试及竞态检测、Web 构建、Chromium E2E 和仓库检查通过，Linux MySQL Unix socket 与备份恢复步骤失败。公开记录仅提供退出码。见[候选 CI 与备份复核](ci-and-backup-verification.md)。
+## 2026-11-16 本地候选
+
+代码基线为 `5f395da`（包含 `b538a3f` 的信用额度修复）。Windows 本地使用 Go 1.27.4 和隔离 SQLite，通过 `go test ./... -count=1`、`go vet ./...`、`go mod tidy -diff`、`go build ./...`、`npm run build`、全部 62 条 Chromium E2E 及品牌哈希检查。两项缺陷均在修复前复现，修复后通过回归。
+
+- Go race 与候选远端 CI 为 `UNVERIFIED`。本机 MinGW 缺少可运行的依赖，Zig 备选工具链在 ThreadSanitizer 初始化失败。
+- `STAGING_READY` 和 `PRODUCTION_READY` 仍为 `UNVERIFIED`。候选缺少隔离 Linux MySQL 预发布及并发测量、A/B 私网 TLS 现场验收、生产备份隔离恢复与异地副本校验、iPhone Safari 实机验收。生产未部署。
+
+## 历史候选
+
+2026-11-15 的历史候选为远端 main 的 4f24e34。Go 普通测试及竞态检测、Web 构建、Chromium E2E 和仓库检查通过，Linux MySQL Unix socket 与备份恢复步骤失败。公开记录仅提供退出码。见[候选 CI 与备份复核](ci-and-backup-verification.md)。
 
 | 计划 | 证据与状态 |
 | --- | --- |

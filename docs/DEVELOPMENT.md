@@ -61,7 +61,7 @@ Set-Clipboard -Value (Get-Content -Raw .\apps\api\data\.env.setup-token).Trim()
 | `TINYNEST_TRUSTED_PROXIES` | 可选，逗号分隔 IP/CIDR；只有这些来源的 `X-Forwarded-*` 才被采信 |
 | `TINYNEST_LOGIN_MAX_FAILURES` / `_WINDOW_SECONDS` / `_LOCKOUT_SECONDS` | 可选，登录失败限流参数，留空用内置默认值 |
 
-数据库文件只在后端，`.gitignore` 已排除。健康检查：`GET http://127.0.0.1:8787/api/v1/healthz`；`readyz` 会做真实 SQLite `quick_check` 与迁移版本校验。前端 `/api` 经 Vite 代理访问后端。
+本地 SQLite 文件只在后端，`.gitignore` 已排除。`GET http://127.0.0.1:8787/api/v1/healthz` 检查进程存活。`readyz` 在 SQLite 模式运行 `quick_check`，在 MySQL 模式执行 ping，两种模式均验证迁移版本。前端 `/api` 经 Vite 代理访问后端。
 
 ## 工程目录（当前）
 
@@ -72,7 +72,7 @@ tinynest/
 ├── assets/brand/                 # 用户原始团子图标（不改绘）
 ├── previews/                     # Phase 0 静态原型存档（虚构金额）
 ├── apps/web/                     # Vue 3 + TS + Vite；真实 API 界面 / PWA / SW
-├── apps/api/                     # Go + SQLite：健康检查 + V0.1 账本 API + 7 版本迁移
+├── apps/api/                     # Go 账本 API，含 SQLite 与 MySQL 迁移
 ├── scripts/                      # 品牌哈希核对、备份、自检、可选元表预初始化
 ├── deploy/frontend/ · backend/  # A 机 Nginx HTTPS 同源代理 / B 机私网 Nginx + systemd 模板
 ├── docs/                         # 设计、架构、安全、部署、账务规则、API 契约
@@ -81,7 +81,7 @@ tinynest/
 
 ## 部署方向
 
-A 机提供前端静态资源和 HTTPS 统一入口；B 机运行 Go 与 SQLite；A→B 经私网加密链路，B 不公开数据库/Go 端口。生产必须设置 `TINYNEST_COOKIE_SECURE=true`、可信反代列表与一次性初始化令牌。详见 `docs/deployment.md`、`docs/architecture.md`、`deploy/*`。**上线前仍需完成发布门禁**（见 `docs/reviews/v0.1-release-gates.md`）。
+A 机提供前端静态资源和 HTTPS 统一入口，B 机运行 Go 服务及通过 Unix socket 连接的生产 MySQL。A→B 经私网加密链路，B 不公开数据库或 Go 端口。生产设置 `TINYNEST_COOKIE_SECURE=true` 和可信反代列表。一次性令牌仅用于首次初始化，完成即移除令牌并设置 `TINYNEST_SETUP_DISABLED=true`。部署步骤见 [部署指南](deployment.md)，上线前按 [发布候选复核](reviews/rc-readiness.md) 完成门禁。
 
 ## 验证命令
 
@@ -100,6 +100,6 @@ npm run build
 
 或用 `bash scripts/check-phase0.sh`（脚本名保留历史，实际执行全仓自检）/ Windows `powershell -ExecutionPolicy Bypass -File scripts/check-phase0.ps1`。CI 工作流见 `.github/workflows/ci.yml`（首次绿灯需真正在 GitHub Actions 跑过）。
 
-设计文档：`docs/accounting-rules-v0.1.md`（账务规则，第 8 节 10 项**待确认**）、`docs/er-v0.1.md`（ER）、`docs/api-v0.1.md`（API 契约含状态列）、`docs/plan-v0.1.md`（V0.1 实施计划）、`IMPLEMENTATION_REPORT.md`（交付与未竟事项）。
+设计文档包括 [账务规则](accounting-rules-v0.1.md)、[ER](er-v0.1.md)、[API 契约](api-v0.1.md)和 [V0.1 实施计划](plan-v0.1.md)。账务规则第 8 节的十项确认记录见 [账务决策台账](reviews/v0.1-accounting-decisions.md)。
 
 SQLite 带数据升级演练使用 `python scripts/db_drill.py --api-dir apps/api --baseline-api-dir <旧版源码的 apps/api>`。旧版先写入临时账本，新版迁移后检查迁移序列、期初余额、分录和备份恢复。省略基线路径时执行当前版本的空库演练。

@@ -2,7 +2,7 @@
 
 > 依据 V0.1 实施计划第 14 节与**当前实际注册路由**。前缀统一 `/api/v1`。
 > **状态定义**：`IMPLEMENTED` = 已注册且有自动化回归；`PARTIAL` = 已注册但能力/口径未完整；`PLANNED` = 仅设计、未注册路由。
-> 本文件不是「承诺清单」：凡标 `PLANNED` 的端点当前调用会返回 404/405，请勿据此开发前端。状态依据 `apps/api/internal/api/*.go` 的 `Register` 与 `IMPLEMENTATION_REPORT.md` 第 8 节。
+> 凡标 `PLANNED` 的端点尚未注册。当前状态以 `apps/api/internal/api/*.go` 的路由注册和自动化回归为准。
 
 ## 1. 通用约定
 
@@ -27,7 +27,7 @@
 | 端点 | 状态 | 认证 | 说明 |
 |---|---|---|---|
 | `GET /healthz` | IMPLEMENTED | 无 | 仅进程存活 |
-| `GET /readyz` | IMPLEMENTED | 无 | SQLite `PRAGMA quick_check` + 迁移版本校验 |
+| `GET /readyz` | IMPLEMENTED | 无 | SQLite `PRAGMA quick_check` 或 MySQL ping，并校验迁移版本 |
 | `POST /auth/session` | IMPLEMENTED | 无（口令校验 + 失败限流） | 成功后签发会话 Cookie |
 | `POST /setup` | IMPLEMENTED（运维专用，无公开 UI） | **一次性 `X-Setup-Token`** | 仅空库可调用一次，创建首个家庭与唯一 admin；`TINYNEST_SETUP_DISABLED=true` 时全量拒绝 |
 
@@ -52,6 +52,7 @@
 | POST | `/auth/session` | IMPLEMENTED | 登录、建会话；含失败限流 |
 | DELETE | `/auth/session` | IMPLEMENTED | 登出、撤销会话 |
 | GET | `/auth/me` | IMPLEMENTED | 当前用户、角色、household_id 与 csrf_token；已绑定且启用的成员档案返回 member_id 和 member_name，否则为空 |
+| POST | `/auth/register` · `/auth/join` | IMPLEMENTED | 注册登录名、凭邀请码申请加入家庭。申请由家庭管理员审批 |
 
 ### `/household` · `/categories` · `/projects`（S1）
 
@@ -64,6 +65,7 @@
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
 | GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
 | GET | `/household/current` | IMPLEMENTED | 当前会话所属家庭的名称、币种和业务时区 |
+| POST | `/household/invitations` | IMPLEMENTED | 为现有或新建成员档案签发邀请 |
 
 ### `/accounts`（S1）
 
@@ -72,7 +74,7 @@
 | GET/POST | `/accounts` | IMPLEMENTED | 现金/证券/理财账户；创建可带 `opening_balance_minor` |
 | GET | `/accounts/{id}/balance` | IMPLEMENTED | 由分录重建余额 |
 | GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注、启用状态），余额由分录计算 |
-| GET | `/ledger/accounts` | PLANNED | 科目表（调试/对账） |
+| GET | `/ledger/accounts` | PLANNED | 完整科目表。现有账户、账户分录和净资产接口支持已公开的账户与科目下钻 |
 | GET | `/accounts/{id}/journal` | IMPLEMENTED | 本家庭账户最近 100 笔分录净变动，含期初余额和冲正 |
 
 ### `/transactions` · `/refunds`（S2 / S4）
@@ -111,10 +113,12 @@
 | GET | `/credit-statements` | IMPLEMENTED | 账单列表（自动归集） |
 | POST | `/credit-statements/{id}/payments` | IMPLEMENTED | 部分/全额还款 |
 | POST | `/credit-statements/{id}/reconcile` | IMPLEMENTED | 录入平台账单金额（只记核对值） |
-| PATCH | `/credit-instruments/{id}` | PLANNED | 周期/额度/停用 |
-| GET | `/credit-statements/{id}` | PLANNED | 账单明细与核对差额 |
-| POST | `/credit-instruments/{id}/convert-to-installment` | PLANNED | 内核函数已实现并测试，**HTTP 端点未接线** |
-| — | 账单状态自动流转 / 额度已用·可用·使用率 | PLANNED | S3 未完成项 |
+| PATCH | `/credit-instruments/{id}` | IMPLEMENTED | 周期、额度和启停，记录变更审计 |
+| GET | `/credit-instruments/{id}/limit` | IMPLEMENTED | 实时负债、已用额度、可用额度与使用率（基点）；未配置额度时后两项为 null |
+| GET | `/credit-statements/{id}` | IMPLEMENTED | 账单明细与核对差额 |
+| PATCH | `/credit-statements/{id}/cycle` | IMPLEMENTED | 人工修正单期账单日期，须填写原因 |
+
+账单列表和详情根据上海业务日与应还、实还金额派生状态。信用转分期见下节。
 
 ### `/installments` · `/debts` · `/schedule`（S4）
 
@@ -126,9 +130,13 @@
 | GET | `/schedule/due-items` | IMPLEMENTED | 待支付事项（只读，业务日时钟） |
 | POST | `/schedule/generate` | IMPLEMENTED | 手动幂等生成未来 30 天待办 |
 | GET | `/schedule/runs` | IMPLEMENTED | 当前家庭最近 50 次投影记录，含成功及可持久化的失败 |
-| GET | `/installments/{id}` | PLANNED | 合同 + 期次计划 |
-| POST | `/installments/{id}/confirm-schedule` · `/settle-early` | PLANNED | 计划确认 / 提前结清 |
-| GET/POST | `/debts` · `/debts/{id}/schedule` · `/debts/{id}/payments` | PLANNED | 房贷/贷款/保险 HTTP CRUD 与期次付款 |
+| GET | `/installments/{id}` | IMPLEMENTED | 合同与期次计划 |
+| POST | `/installments/{id}/refunds` · `/installments/{id}/adjust-schedule` · `/installments/{id}/settle-early` | IMPLEMENTED | 退款、显式调整未付款期次与提前结清 |
+| POST | `/installments/{id}/confirm-schedule` | PLANNED | 创建合同时已写入校验后的计划。后续调整通过 `adjust-schedule` 显式提交 |
+| GET/POST | `/debts` | IMPLEMENTED | 房贷、贷款、保险等合同列表和创建 |
+| GET/PATCH | `/debts/{id}` | IMPLEMENTED | 合同与期次详情、合同资料编辑 |
+| POST | `/debts/{id}/schedule` · `/debts/{id}/payments` | IMPLEMENTED | 录入计划和按期确认付款 |
+| POST | `/debts/{id}/payments/{paymentId}/reverse` · `/debts/{id}/settle-early` | IMPLEMENTED | 付款冲正、提前结清 |
 
 ### `/investments`（S5）
 
@@ -152,21 +160,28 @@
 | GET | `/dashboard/summary` | IMPLEMENTED | 收入/支出/结余/现金净流量/应还负债/投资总收益/净资产；**全部按 household_id 隔离** |
 | GET | `/dashboard/categories` | IMPLEMENTED | 分类支出排行（一级汇总二级） |
 | GET | `/dashboard/projects` | IMPLEMENTED | 项目累计收支 |
+| GET | `/dashboard/credit` | IMPLEMENTED | 按到期日统计账单应还、已还与逾期，并返回实时信用额度 |
 | GET | `/dashboard/net-worth` | IMPLEMENTED（V0.1.2） | 资产构成 / 负债结构 / 投资成本·市值·估值日期 / 净资产，逐项带 `ledger_code` 可下钻；与 `summary` 使用同一统计窗口，`net_worth_minor` 一致 |
-| GET | `/dashboard/cashflow` · `/liabilities` · `/investment-dividends` | PLANNED | 独立口径端点 |
+| GET | `/dashboard/cashflow` · `/dashboard/liabilities` · `/dashboard/investment-return` | PLANNED | 独立报表。现有数据入口为 `/dashboard/summary`、`/dashboard/net-worth`、`/schedule/due-items`、`/investments/positions` 与 `/investments/dividends` |
 
 **三套口径（收支 / 现金流 / 负债到期）不得合并成一个「本月支出」**；当前三套数值均由 `/dashboard/summary` 分别给出。
+
+`/dashboard/credit` 的信用总已用包含所有启用工具。汇总可用额度和使用率只按已配置额度的启用工具计算。没有已配置额度时，两项均返回 null。
 
 ### `/admin`（S7）
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
 | GET | `/admin/audit-logs` | IMPLEMENTED | 当前家庭最近审计事件，`limit` 默认 50，范围 1–100，响应排除事件原始载荷 |
-| GET | `/admin/migrations` · POST `/admin/backup` | PLANNED | 迁移状态与手动触发备份 |
+| GET | `/admin/invitations` · `/admin/join-applications` · `/admin/users` | IMPLEMENTED | 本家庭的有效邀请、待审批申请、账号列表 |
+| DELETE | `/admin/invitations/{id}` | IMPLEMENTED | 撤销邀请及关联的待审批申请 |
+| POST | `/admin/join-applications/{id}` · `/admin/users/{id}/disable` | IMPLEMENTED | 审批加入申请、停用成员账号并撤销会话 |
+| PATCH | `/admin/users/{id}/role` | IMPLEMENTED | 更改启用成员的记账权限 |
+| GET / POST | `/admin/migrations` · `/admin/backup` | PLANNED | 迁移就绪由 `/readyz` 验证，具体版本和备份从部署侧数据库及备份任务核对 |
 
 ## 3. 与 Phase 0 的兼容边界
 
-- `healthz` 仍只报告进程存活；`readyz` 在 V0.1 已是真实 SQLite `quick_check` + 迁移版本校验。
+- `healthz` 报告进程存活。`readyz` 检查数据库连通性或完整性以及迁移版本。
 - `apps/web` 仍只请求相对路径 `/api/v1/*`，不得硬编码主机、证书或数据库地址。
 - Service Worker 继续显式跳过 `/api/`，且对所有 `/api/v1/*` 响应强制 `no-store`。
 - Phase 0 的「无登录、纯虚构 Demo」描述仅适用于 `previews/*` 静态存档，不适用于当前 `apps/web`。
