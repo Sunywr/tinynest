@@ -96,6 +96,10 @@ body.dialog-open{overflow:hidden;}
 
 
 @media (min-width: 841px) {
+  html:has(.website) {
+    scrollbar-gutter: stable both-edges;
+  }
+
   .stage:not(.mobile-stage) .website {
     max-width: 1600px;
     min-height: calc(100dvh - 2 * var(--stage-block-padding));

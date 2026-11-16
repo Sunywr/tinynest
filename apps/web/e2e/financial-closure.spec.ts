@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { chromium, expect, test } from '@playwright/test'
 
 // Real end-to-end closure against a real Go API + real SQLite (started by
 // playwright.config.ts). One continuous family story, no mocks: every number
@@ -415,6 +415,27 @@ test('桌面端主内容滚动时侧栏固定，短屏可单独滚动导航', as
     return el.scrollTop
   })).toBeGreaterThan(0)
   expect(await page.evaluate(() => window.scrollY)).toBe(offset)
+})
+
+test('桌面菜单切换时侧栏边界稳定', async ({ baseURL }) => {
+  const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] })
+  try {
+    const page = await browser.newPage({ baseURL, viewport: { width: 1720, height: 1440 } })
+    await ensureLogin(page)
+    await page.addStyleTag({ content: '.main:has(.quick-entry) { min-height: 200vh }' })
+    const sidebar = page.locator('.sidebar')
+    const home = await sidebar.boundingBox()
+    expect(home).not.toBeNull()
+    await page.getByRole('button', { name: '记账流水' }).click()
+    await expect(page.getByRole('heading', { name: '记账流水' })).toBeVisible()
+    const ledger = await sidebar.boundingBox()
+    expect(ledger).not.toBeNull()
+    expect(ledger!.width).toBe(home!.width)
+    expect(ledger!.x).toBe(home!.x)
+    await expect(page.locator('html')).toHaveCSS('scrollbar-gutter', 'stable both-edges')
+  } finally {
+    await browser.close()
+  }
 })
 
 test('账户选择可按名称搜索并清空筛选', async ({ page }) => {
