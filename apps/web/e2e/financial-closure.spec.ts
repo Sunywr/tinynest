@@ -388,16 +388,33 @@ test('21 首页三套口径与信用总览闭环（自定义跨月区间）', as
   await expect(page.locator('.rankrow', { hasText: 'E2E 工资卡' })).toContainText('¥9,720.00')
 })
 
-test('桌面端长内容随窗口滚动可达', async ({ page }) => {
-  // The app intentionally lets the page grow (overflow visible) so dropdown
-  // menus are never clipped; content scrolls with the window instead of a
-  // dedicated inner container.
+test('桌面端主内容滚动时侧栏固定，短屏可单独滚动导航', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 500 })
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
-  await expect(page.getByRole('heading', { name: '记账流水' })).toBeVisible()
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+  const heading = page.getByRole('heading', { name: '记账流水' })
+  await expect(heading).toBeVisible()
+  const sidebar = page.locator('.sidebar')
+  const initialHeight = await sidebar.evaluate(el => el.getBoundingClientRect().height)
+  expect(initialHeight).toBeLessThan(500)
+
+  const before = await heading.evaluate(el => el.getBoundingClientRect().top)
+  const offset = await page.evaluate(() => {
+    window.scrollTo(0, document.documentElement.scrollHeight)
+    return window.scrollY
+  })
+  expect(offset).toBeGreaterThan(0)
+  expect(await heading.evaluate(el => el.getBoundingClientRect().top)).toBeLessThan(before)
+  const after = await sidebar.evaluate(el => el.getBoundingClientRect().toJSON())
+  expect(after.top).toBeGreaterThanOrEqual(0)
+  expect(after.bottom).toBeLessThanOrEqual(500)
+  expect(after.height).toBe(initialHeight)
+
+  expect(await sidebar.evaluate(el => {
+    el.scrollTop = el.scrollHeight
+    return el.scrollTop
+  })).toBeGreaterThan(0)
+  expect(await page.evaluate(() => window.scrollY)).toBe(offset)
 })
 
 test('账户选择可按名称搜索并清空筛选', async ({ page }) => {

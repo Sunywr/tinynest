@@ -30,7 +30,7 @@
     @media(prefers-reduced-motion: reduce){*{transition:none !important}}
 
 body{background:#f4eee8;}
-.stage{padding:24px 18px;}
+.stage{--stage-block-padding:24px;padding:var(--stage-block-padding) 18px;}
 .website{min-height:calc(100vh - 48px);}
 .api-indicator{font-size:11px;color:var(--muted);white-space:nowrap;}
 @media(max-width:640px){.api-indicator{display:none;} .stage{padding:0;} .website{border:0;border-radius:0;min-height:100dvh;}}
@@ -98,12 +98,21 @@ body.dialog-open{overflow:hidden;}
 @media (min-width: 841px) {
   .stage:not(.mobile-stage) .website {
     max-width: 1600px;
-    min-height: calc(100dvh - 48px);
+    min-height: calc(100dvh - 2 * var(--stage-block-padding));
     height: auto;
     grid-template-rows: auto;
   }
   .stage:not(.mobile-stage) .website > .main,
   .stage:not(.mobile-stage) .website > .sidebar {
     min-height: 0;
+  }
+
+  .stage:not(.mobile-stage) .website > .sidebar {
+    position: sticky;
+    inset-block-start: var(--stage-block-padding);
+    align-self: start;
+    block-size: calc(100dvh - 2 * var(--stage-block-padding) - 2px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
   }
 }
