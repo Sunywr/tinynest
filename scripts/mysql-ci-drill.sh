@@ -52,18 +52,31 @@ fi
 stage='provision test databases'
 mysql_root mysql --protocol=socket --user=root <<'SQL'
 CREATE DATABASE tinynest_drill;
+CREATE DATABASE tinynest_credit;
+CREATE DATABASE tinynest_concurrency;
 CREATE DATABASE tinynest_restore;
 CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';
 GRANT ALL ON tinynest_drill.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_credit.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_concurrency.* TO 'tinynest_drill'@'localhost';
 SQL
 
-stage='run Go ledger tests over the host socket'
+stage='check the host socket'
 test -S "$work/socket/mysqld.sock"
-TINYNEST_TEST_MYSQL_SOCKET="$work/socket/mysqld.sock" \
-TINYNEST_TEST_MYSQL_DATABASE=tinynest_drill \
-TINYNEST_TEST_MYSQL_USER=tinynest_drill \
-TINYNEST_TEST_MYSQL_PASSWORD_FILE="$work/password" \
-go test ./internal/api -run '^TestV01EndToEnd$' -count=1
+run_ledger_test() {
+  local database=$1 test_name=$2
+  stage="run $test_name over the host socket"
+  TINYNEST_TEST_MYSQL_SOCKET="$work/socket/mysqld.sock" \
+  TINYNEST_TEST_MYSQL_DATABASE="$database" \
+  TINYNEST_TEST_MYSQL_USER=tinynest_drill \
+  TINYNEST_TEST_MYSQL_PASSWORD_FILE="$work/password" \
+  go test ./internal/api -run "^$test_name$" -count=1 -parallel=16
+}
+
+# Each test owns a fresh schema and initializes its own household.
+run_ledger_test tinynest_drill TestV01EndToEnd
+run_ledger_test tinynest_credit TestV011_T1_CreditStatementLifecycle
+run_ledger_test tinynest_concurrency TestConcurrentTransactionReplays
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)
@@ -80,4 +93,4 @@ stage='reconcile restored journal'
 balanced=$(mysql_root mysql --protocol=socket --user=root --batch --skip-column-names \
   tinynest_restore -e 'SELECT COUNT(*) > 0 AND SUM(debit_minor) = SUM(credit_minor) FROM journal_lines')
 test "$balanced" = 1
-printf '%s\n' 'MySQL Unix socket, ledger smoke test, restore and journal reconciliation passed.'
+printf '%s\n' 'MySQL Unix socket, ledger, credit, concurrent idempotency, restore and journal reconciliation passed.'

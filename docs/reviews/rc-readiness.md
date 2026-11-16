@@ -8,6 +8,7 @@
 - SQLite 执行 `python scripts/db_drill.py --api-dir apps/api`，启动迁移、重复启动、备份、恢复和前后快照比较通过。恢复库含迁移 1–10，借贷各 105,600 分，API 返回现金 44,500 分、持仓成本 10,100 分。
 - Windows 隔离 MySQL 8.0.46 以合成数据通过 `TestV01EndToEnd`、`TestV011_T1_CreditStatementLifecycle` 与 `TestConcurrentTransactionReplays`。16 个并发同键提交只入账一次。测试进程以临时拨号适配器将连接转到回环 TCP，临时实例与适配器均已清理。
 - MySQL 合成账本一致性导出后恢复到同一隔离实例的空库，耗时 2.85 秒。源库与恢复库的按主键导出 SHA-256 均为 `787a03516c1f73486cf27a45f7c3af7d981438962c9fa20ad62e5a911519e229`。恢复库含迁移 1、2 和 16 条分录，借贷各 3,309,500 分。
+- Linux CI 的 MySQL 演练为上述三项 Go 测试分配独立的临时数据库，以 Unix socket 执行，随后恢复并核对端到端测试库。Go 全量测试与脚本 `bash -n` 已通过。当前 Windows 工作区无 Docker 或 Linux 运行环境，更新后的脚本端到端执行仍待候选 CI。
 - `STAGING_READY` 和 `PRODUCTION_READY` 仍为 `UNVERIFIED`。候选缺少隔离 Linux MySQL 预发布及并发测量、A/B 私网 TLS 现场验收、生产备份隔离恢复与异地副本校验、iPhone Safari 实机验收。生产未部署。
 
 ## 历史候选
