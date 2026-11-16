@@ -65,6 +65,7 @@ export const api = {
   household: () => get<{ name: string; currency: string; timezone: string }>('/household/current'),
   members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
   createMember: (name: string) => post('/household/members', { name }),
+  ensureCurrentMember: () => post<{ id: string; name: string; status: string }>('/household/members/current', {}),
   categories: () => get('/categories'),
   createCategory: (body: any) => post('/categories', body),
   updateCategory: (id: string, body: { name: string; sort: number; active: boolean }) =>

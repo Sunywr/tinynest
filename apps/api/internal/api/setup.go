@@ -36,6 +36,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/household/current", a.handleCurrentHousehold)
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
 	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)
+	a.route(mux, "POST /api/v1/household/members/current", a.handleEnsureCurrentMember)
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)
 	a.route(mux, "POST /api/v1/categories", a.handleCreateCategory)
 	a.route(mux, "PATCH /api/v1/categories/{id}", a.handleUpdateCategory)

@@ -65,6 +65,7 @@ const household = ref<Awaited<ReturnType<typeof api.household>> | null>(null)
 const members = ref<{ id: string; name: string; status: string }[]>([])
 const memberName = ref('')
 const selectedMember = ref('')
+const memberResolving = ref(false)
 const categories = ref<any[]>([])
 const projectName = ref('')
 const projectEdit = ref<{ id: string; name: string; start_on: string; end_on: string; note: string; status: string } | null>(null)
@@ -120,10 +121,25 @@ const txCategoryOptions = computed(() => {
   return base
 })
 const txProjectOptions = computed(() =>
-  projects.value.filter(p => p.status === 'active' || p.id === f.tx.project_id).map(p => ({ id: p.id, name: p.name })))
-const txMemberOptions = computed(() =>
-  members.value.filter(m => m.status === 'active' || m.id === selectedMember.value).map(m => ({ id: m.id, name: m.name })))
+  [{ id: '', name: '不关联' }, ...projects.value.filter(p => p.status === 'active' || p.id === f.tx.project_id).map(p => ({ id: p.id, name: p.name }))])
+const txMemberOptions = computed(() => {
+  const options = members.value.filter(m => m.status === 'active').map(m => ({ id: m.id, name: m.name }))
+  const session = me.value
+  if (session?.member_id && !options.some(member => member.id === session.member_id)) {
+    options.push({ id: session.member_id, name: session.member_name })
+  }
+  return [{ id: '', name: '不关联' }, ...options]
+})
 const txAccountOptions = computed(() => activeAccounts.value.map(a => ({ id: a.id, name: a.name })))
+const txDirections = [
+  { id: 'expense', name: '支出' },
+  { id: 'income', name: '收入' },
+  { id: 'transfer', name: '转账' },
+]
+const txPaymentOptions = [
+  { id: 'cash', name: '现金/银行账户' },
+  { id: 'credit', name: '信用工具' },
+]
 
 // —— 关联项「下拉内快速创建」弹窗 ——
 // 在下拉中选择「创建新XX」→ 弹出临时小窗填写 → 创建成功后回填并回到原表单，原表单内容不重置。
@@ -283,7 +299,7 @@ function clearPrivateState() {
   instDetail.value = null; debtDetail.value = null
   invitations.value = []; applications.value = []; issuedCode.value = ''; inviteDraft.member_id = ''; inviteDraft.member_name = ''; inviteDraft.username = '';
   users.value = [];
-  household.value = null; members.value = []; memberName.value = ''; selectedMember.value = ''
+  household.value = null; members.value = []; memberName.value = ''; selectedMember.value = ''; memberResolving.value = false
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
@@ -514,9 +530,41 @@ watch(transactionAmount, input => {
   input?.focus()
 }, { flush: 'post' })
 function go(v: View) { view.value = v; errorMsg.value = ''; panel.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
-function openPanel(p: string) { panel.value = p; errorMsg.value = '' }
+function openPanel(p: string) {
+  panel.value = p
+  errorMsg.value = ''
+  if (p === 'tx') {
+    setTxDirection('expense')
+    selectedMember.value = me.value?.member_id || ''
+    void resolveCurrentMember()
+  }
+}
 function closePanel() { panel.value = ''; errorMsg.value = '' }
 
+function setTxDirection(direction: string) {
+  f.tx.type = direction
+  if (direction === 'transfer') return
+  const choices = direction === 'income' ? incomeCategories.value : expenseCategories.value
+  if (!choices.some(category => category.id === f.tx.category_id)) f.tx.category_id = ''
+}
+
+async function resolveCurrentMember() {
+  const session = me.value
+  if (!session || session.member_id || memberResolving.value) return
+  memberResolving.value = true
+  try {
+    const member = await api.ensureCurrentMember()
+    if (me.value !== session || member.status !== 'active') return
+    session.member_id = member.id
+    session.member_name = member.name
+    if (!members.value.some(existing => existing.id === member.id)) members.value.push(member)
+    if (panel.value === 'tx') selectedMember.value = member.id
+  } catch {
+    if (me.value === session && panel.value === 'tx') toast('无法预选当前成员，请手动选择')
+  } finally {
+    if (me.value === session) memberResolving.value = false
+  }
+}
 // Soft confirmation before destructive actions (cute in-app modal).
 const confirmState = ref<{
   title: string
@@ -759,6 +807,7 @@ async function addMember() {
 }
 
 function createTx() {
+  if (memberResolving.value) return
   const amount = minor(f.tx.amount)
   if (amount === null || amount <= 0) return toast('请输入有效金额（最多两位小数）')
   if (f.tx.type === 'transfer') {
@@ -1311,11 +1360,12 @@ const metricCards = computed(() => {
           <form v-if="panel === 'tx'" class="panel formpanel" @submit.prevent="createTx">
             <div class="paneltitle"><div><h2>记一笔</h2><span class="subinfo">常用分类与账户会自动记住（仅本机偏好）</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
-            <div class="tabs"><button type="button" v-for="t in ['expense','income','transfer']" :key="t" :class="{ active: f.tx.type === t }" @click="f.tx.type = t">
-              {{ t === 'expense' ? '支出' : t === 'income' ? '收入' : '转账' }}</button></div>
-            <div class="formgrid">
+            <div class="tx-primary-fields">
+              <label>方向<SmartSelect :model-value="f.tx.type" :options="txDirections" @update:model-value="setTxDirection" /></label>
               <label>金额（元）<input ref="transactionAmount" v-model="f.tx.amount" inputmode="decimal" placeholder="0.00" /></label>
               <label>日期<DatePicker v-model="f.tx.occurred_on" /></label>
+            </div>
+            <div class="tx-extra-fields">
               <template v-if="f.tx.type !== 'transfer'">
                 <label>分类
                   <SmartSelect v-model="f.tx.category_id" :options="txCategoryOptions" placeholder="请选择分类"
@@ -1325,7 +1375,7 @@ const metricCards = computed(() => {
                     :allow-create="true" @create="(q) => openCreate('project', q, (id) => f.tx.project_id = id)" /></label>
               </template>
               <template v-if="f.tx.type === 'expense'">
-                <label>支付工具<SearchableSelect><select v-model="f.tx.payment_kind"><option value="cash">现金/银行账户</option><option value="credit">信用工具</option></select></SearchableSelect></label>
+                <label>支付工具<SmartSelect v-model="f.tx.payment_kind" :options="txPaymentOptions" /></label>
                 <label v-if="f.tx.payment_kind === 'credit'">信用工具
                   <SmartSelect v-model="f.tx.credit_instrument_id" :options="creditInstruments.map(c => ({ id: c.id, name: c.name }))" placeholder="请选择信用工具"
                     :allow-create="true" @create="(q) => openCreate('instrument', q, (id) => f.tx.credit_instrument_id = id)" /></label>
@@ -1337,11 +1387,14 @@ const metricCards = computed(() => {
                 <SmartSelect v-model="f.tx.to_account_id" :options="txAccountOptions" placeholder="请选择账户"
                   :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.tx.to_account_id = id)" /></label>
               <label>家庭成员（可选）
-                <SmartSelect v-model="selectedMember" :options="txMemberOptions" placeholder="不关联"
+                <SmartSelect v-model="selectedMember" :options="txMemberOptions" :disabled="memberResolving" placeholder="不关联"
                   :allow-create="true" @create="(q) => openCreate('member', q, (id) => selectedMember = id)" /></label>
-              <label>备注<input v-model="f.tx.note" placeholder="可选" /></label>
+              <details class="tx-note">
+                <summary><span>备注（可选）</span><span class="tx-note-trigger"><span>{{ f.tx.note || '添加备注' }}</span><span aria-hidden="true">▾</span></span></summary>
+                <div class="tx-note-editor"><textarea v-model="f.tx.note" aria-label="备注" rows="3" placeholder="写下这笔流水的备注"></textarea></div>
+              </details>
             </div>
-            <button class="primary" type="submit" :disabled="loading">确认入账</button>
+            <button class="primary" type="submit" :disabled="loading || memberResolving">确认入账</button>
           </form>
           <form v-if="panel === 'refund'" class="panel formpanel" @submit.prevent="submitRefund">
             <div class="paneltitle"><div><h2>退款</h2><span class="subinfo">关联原交易，冲减原支出而非计入收入</span></div>
@@ -1950,9 +2003,75 @@ form label { margin-bottom: 13px; }
 .actions-bar .ghost { padding: 11px 18px; font-size: 15px; }
 .quick-entry { width: auto; align-self: center; white-space: nowrap; }
 .formgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 16px 0; }
-.tabs { display: flex; gap: 7px; }
-.tabs button { border: 1px solid var(--border); background: var(--soft); color: var(--muted); border-radius: 10px; padding: 9px 18px; font-size: 12px; }
-.tabs button.active { background: var(--primary-pale); color: var(--primary-deep); font-weight: 700; border-color: transparent; }
+.tx-primary-fields, .tx-extra-fields { display: grid; gap: 12px; margin-block: 16px; }
+.tx-primary-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+.tx-primary-fields label, .tx-extra-fields label { min-width: 0; margin: 0; }
+.tx-primary-fields label { color: var(--text); font-weight: 750; }
+.tx-primary-fields > label > input,
+.tx-primary-fields :deep(.ss-trigger),
+.tx-primary-fields :deep(.date-field input) {
+  min-height: 58px;
+  border-radius: 16px;
+  background: var(--card);
+  font-size: 20px;
+  font-weight: 750;
+}
+.tx-primary-fields > label > input { font-size: 26px; font-variant-numeric: tabular-nums; }
+.tx-extra-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+.tx-extra-fields :deep(.ss-trigger), .tx-note-trigger {
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--soft);
+  font-size: 14px;
+}
+.tx-extra-fields :deep(.ss-value), .tx-note-trigger span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tx-note { position: relative; min-width: 0; }
+.tx-note summary { display: grid; gap: 6px; list-style: none; color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; }
+.tx-note summary::-webkit-details-marker { display: none; }
+.tx-note-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--text);
+}
+.tx-note[open] .tx-note-trigger span:last-child { rotate: 180deg; }
+.tx-note-editor {
+  position: absolute;
+  inset: calc(100% + 6px) 0 auto;
+  z-index: 59;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 14px 34px #785a4633;
+}
+.tx-note-editor textarea {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+@media (max-width: 680px) {
+  .tx-primary-fields { grid-template-columns: 1fr; }
+}
 .ranklist { margin-top: 15px; display: flex; flex-direction: column; }
 .rankrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
 .rankrow:last-child { border-bottom: 0; }

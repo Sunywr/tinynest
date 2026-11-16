@@ -20,10 +20,15 @@ func TestRegistrationRequiresApproval(t *testing.T) {
 	if status, _ := c.do("POST", path, map[string]bool{"approve": true}); status != 409 {
 		t.Fatalf("replayed approval returned %d", status)
 	}
-	c.mustOK("POST", "/api/v1/auth/session", credentials)
+	session := c.mustOK("POST", "/api/v1/auth/session", credentials)
+	c.csrf = session["csrf_token"].(string)
 	me := c.mustOK("GET", "/api/v1/auth/me", nil)
 	if me["member_name"] != "新成员" || me["member_id"] == "" {
 		t.Fatalf("missing member identity: %v", me)
+	}
+	member := c.mustOK("POST", "/api/v1/household/members/current", nil)
+	if member["id"] != me["member_id"] || member["name"] != "新成员" {
+		t.Fatalf("existing member identity must be reused: %v", member)
 	}
 	var bound string
 	if err := database.QueryRow("SELECT member_id FROM household_user_members WHERE user_id=?", me["user_id"]).Scan(&bound); err != nil || bound != me["member_id"] {

@@ -2,10 +2,47 @@ package api
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"unicode/utf8"
 )
+
+func (a *API) handleEnsureCurrentMember(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	ctx := r.Context()
+	var member householdMember
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		// Lock the authenticated user row before looking up the binding. This
+		// serializes simultaneous first entries even across API processes.
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET id=id WHERE id=? AND household_id=?`, p.UserID, p.HouseholdID); err != nil {
+			return err
+		}
+		err := tx.QueryRowContext(ctx, `
+			SELECT m.id, m.name, m.status FROM household_user_members b
+			JOIN household_members m ON m.id=b.member_id
+			WHERE b.user_id=? AND m.household_id=?`, p.UserID, p.HouseholdID).
+			Scan(&member.ID, &member.Name, &member.Status)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		member = householdMember{ID: newID("mem"), Name: p.Username, Status: "active"}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO household_members(id,household_id,name) VALUES(?,?,?)`,
+			member.ID, p.HouseholdID, member.Name); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO household_user_members(user_id,member_id) VALUES(?,?)`,
+			p.UserID, member.ID); err != nil {
+			return err
+		}
+		return audit(ctx, tx, p, "bind_current_member", "household_member", member.ID, "{}")
+	})
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, member)
+}
 
 type householdMember struct {
 	ID     string `json:"id"`

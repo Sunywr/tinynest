@@ -64,6 +64,7 @@
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出、分类构成与最近 100 条拆分流水 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
 | GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
+| POST | `/household/members/current` | IMPLEMENTED | 返回当前可记账账号绑定的成员档案。尚未绑定的旧账号按用户名创建并绑定自己的档案。重复调用返回同一档案 |
 | GET | `/household/current` | IMPLEMENTED | 当前会话所属家庭的名称、币种和业务时区 |
 | POST | `/household/invitations` | IMPLEMENTED | 为现有或新建成员档案签发邀请 |
 
