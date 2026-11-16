@@ -1,5 +1,12 @@
 # 发布候选复核
 
+## 2026-11-16 生产验收
+
+- 依用户确认，V1.0 之前直接部署到生产并现场验收。本次前后端均从 `190269e` 切换到 `b03f825`，旧版本保留为回滚点。候选四项 [CI](https://github.com/Sunywr/tinynest/actions/runs/43872134745) 通过。
+- 生产 HTTPS、前后端产物校验、MySQL 就绪与受保护接口通过。未登录账本请求返回 401，初始化返回 403。确认代理上游启用 TLS 证书校验，服务配置启用 Secure Cookie。390px Chromium 通过首页、登录弹窗、PWA 离线壳和重连检查，API 响应未进入 Cache Storage。
+- 上线前备份已导入生产 B 机的临时独立 MySQL 8.0.46 进程。实例使用独立数据目录、Unix socket 和网络隔离。导入耗时 2.55 秒，全程 13.55 秒。源与恢复后的数据行摘要一致，迁移为 1、2，分录借贷平衡。临时实例和目录已清理，生产 API 复查就绪。
+- 异地副本校验、授权测试账号的账务操作、iPhone Safari 实机验收仍为 `UNVERIFIED`。
+
 ## 2026-11-16 本地候选
 
 代码基线为 `5f395da`（包含 `b538a3f` 的信用额度修复）。Windows 本地使用 Go 1.27.4 和隔离 SQLite，通过 `go test ./... -count=1`、`go vet ./...`、`go mod tidy -diff`、`go build ./...`、`npm run build`、全部 62 条 Chromium E2E 及品牌哈希检查。两项缺陷均在修复前复现，修复后通过回归。
