@@ -438,6 +438,32 @@ test('桌面菜单切换时侧栏边界稳定', async ({ baseURL }) => {
   }
 })
 
+test('窄屏日历支持闰月、键盘选日及返回日期字段', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
+  const field = page.getByLabel('日期', { exact: true })
+  const trigger = page.getByRole('button', { name: '打开日历' })
+  await field.fill('2028-02-29')
+  await trigger.click()
+  const calendar = page.getByRole('dialog')
+  await expect(calendar.getByRole('heading')).toHaveText('2028 年 2 月')
+  await expect(calendar.getByRole('button', { name: '2028-02-29' })).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(calendar.getByRole('heading')).toHaveText('2028 年 3 月')
+  await expect(calendar.getByRole('button', { name: '2028-03-01' })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(field).toHaveValue('2028-03-01')
+  await expect(trigger).toBeFocused()
+  await trigger.click()
+  await calendar.getByRole('button', { name: '上个月' }).click()
+  await expect(calendar.getByRole('button', { name: '2028-02-29' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(calendar).not.toBeVisible()
+  await expect(field).toHaveValue('2028-03-01')
+})
+
 test('账户选择可按名称搜索并清空筛选', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()

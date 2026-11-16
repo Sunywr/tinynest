@@ -4,6 +4,7 @@ import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiErr
 
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
+import DatePicker from './components/DatePicker.vue'
 
 type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
 const nav: { key: View; label: string; glyph: string }[] = [
@@ -1204,8 +1205,8 @@ const metricCards = computed(() => {
             <div class="day">{{ range.from }} ～ {{ range.to }}</div>
             <button v-if="canWrite" type="button" class="btn-primary quick-entry" @click="quickEntry()">＋ 记一笔</button></section>
           <div class="rangebar">
-            <label>起始 <input type="date" v-model="range.from" /></label>
-            <label>截止 <input type="date" v-model="range.to" /></label>
+            <label>起始 <DatePicker v-model="range.from" /></label>
+            <label>截止 <DatePicker v-model="range.to" /></label>
             <button class="ghost" @click="reloadSummary()">应用周期</button>
           </div>
           <div class="stats metrics">
@@ -1283,8 +1284,8 @@ const metricCards = computed(() => {
           </div>
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>全部流水</h2></div></div>
             <form class="formgrid" @submit.prevent="filterLedger">
-              <label>流水开始日期<input v-model="ledgerFilters.from" type="date" /></label>
-              <label>流水结束日期<input v-model="ledgerFilters.to" type="date" /></label>
+              <label>流水开始日期<DatePicker v-model="ledgerFilters.from" /></label>
+              <label>流水结束日期<DatePicker v-model="ledgerFilters.to" /></label>
               <label>流水类型<SearchableSelect><select v-model="ledgerFilters.type">
                 <option value="">全部</option><option value="expense">支出</option>
                 <option value="income">收入</option><option value="transfer">转账</option>
@@ -1314,7 +1315,7 @@ const metricCards = computed(() => {
               {{ t === 'expense' ? '支出' : t === 'income' ? '收入' : '转账' }}</button></div>
             <div class="formgrid">
               <label>金额（元）<input ref="transactionAmount" v-model="f.tx.amount" inputmode="decimal" placeholder="0.00" /></label>
-              <label>日期<input type="date" v-model="f.tx.occurred_on" /></label>
+              <label>日期<DatePicker v-model="f.tx.occurred_on" /></label>
               <template v-if="f.tx.type !== 'transfer'">
                 <label>分类
                   <SmartSelect v-model="f.tx.category_id" :options="txCategoryOptions" placeholder="请选择分类"
@@ -1369,8 +1370,8 @@ const metricCards = computed(() => {
               <template v-if="projectEdit">
                 <div class="formgrid">
                   <label>项目名称<input v-model.trim="projectEdit.name" required /></label>
-                  <label>开始日期<input v-model="projectEdit.start_on" type="date" /></label>
-                  <label>结束日期<input v-model="projectEdit.end_on" type="date" /></label>
+                  <label>开始日期<DatePicker v-model="projectEdit.start_on" /></label>
+                  <label>结束日期<DatePicker v-model="projectEdit.end_on" /></label>
                   <label>项目说明<input v-model="projectEdit.note" /></label>
                   <label>项目状态<SearchableSelect><select v-model="projectEdit.status">
                     <option value="active">启用</option><option value="archived">归档</option>
@@ -1523,7 +1524,7 @@ const metricCards = computed(() => {
               <label>还款金额<input v-model="f.payment.amount" inputmode="decimal" placeholder="0.00" /></label>
               <label>付款账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.payment.from_account_id = id)"><select v-model="f.payment.from_account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>日期<input type="date" v-model="f.payment.paid_on" /></label>
+              <label>日期<DatePicker v-model="f.payment.paid_on" /></label>
             </div><button class="ghost" type="submit">确认还款</button>
           </form>
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
@@ -1542,9 +1543,9 @@ const metricCards = computed(() => {
             </div>
               <p v-if="!statements.length" class="empty">暂无账单，记一笔信用消费后自动归集</p></div>
             <form v-if="f.statementCycle.id" class="formgrid" @submit.prevent="saveStatementCycle()">
-              <label>周期开始<input v-model="f.statementCycle.cycle_start_on" type="date" required /></label>
-              <label>周期结束<input v-model="f.statementCycle.cycle_end_on" type="date" required /></label>
-              <label>还款日<input v-model="f.statementCycle.due_on" type="date" required /></label>
+              <label>周期开始<DatePicker v-model="f.statementCycle.cycle_start_on" required /></label>
+              <label>周期结束<DatePicker v-model="f.statementCycle.cycle_end_on" required /></label>
+              <label>还款日<DatePicker v-model="f.statementCycle.due_on" required /></label>
               <label>修正原因<input v-model="f.statementCycle.reason" required /></label>
               <button class="primary" type="submit" :disabled="loading">保存账单日期</button>
               <button class="ghost" type="button" @click="f.statementCycle.id = ''">取消</button>
@@ -1589,7 +1590,7 @@ const metricCards = computed(() => {
               <label>类型<SearchableSelect><select v-model="f.debt.kind"><option value="mortgage">房贷</option><option value="loan">其他贷款</option><option value="insurance">保险</option><option value="other">其他周期付款</option></select></SearchableSelect></label>
               <label>名称<input v-model="f.debt.name" placeholder="如：家里房贷" /></label>
               <label>本金（元）<input v-model="f.debt.principal" inputmode="decimal" placeholder="保险填 0" /></label>
-              <label>开始日期<input type="date" v-model="f.debt.start_on" /></label>
+              <label>开始日期<DatePicker v-model="f.debt.start_on" /></label>
               <label>还款日<input type="number" min="1" max="31" v-model.number="f.debt.due_day" /></label>
             </div><button class="primary" type="submit">创建合同</button>
           </form>
@@ -1614,7 +1615,7 @@ const metricCards = computed(() => {
                 <label>渠道<SearchableSelect><select v-model="f.debtPayment.channel"><option value="cash">现金账户</option><option value="credit">信用工具（新增信用负债）</option></select></SearchableSelect></label>
                 <label>账户/工具<SearchableSelect :allow-create="true" @create="(q) => openCreate(f.debtPayment.channel === 'cash' ? 'account' : 'instrument', q, (id) => f.debtPayment.channel_id = id)"><select v-model="f.debtPayment.channel_id"><option value="">请选择</option>
                   <option v-for="a in (f.debtPayment.channel === 'cash' ? activeAccounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-                <label>付款日期<input type="date" v-model="f.debtPayment.paid_on" /></label>
+                <label>付款日期<DatePicker v-model="f.debtPayment.paid_on" /></label>
               </div>
               <button type="button" class="ghost" @click="payDebt()">确认期次付款</button>
               <button type="button" class="ghost" @click="addDebtScheduleItem()">＋追加期次行</button>
@@ -1623,7 +1624,7 @@ const metricCards = computed(() => {
             <template v-if="f.debtSchedule.items.length">
               <div class="formgrid" v-for="(it, idx) in f.debtSchedule.items" :key="idx">
                 <label>期次号<input type="number" min="1" v-model.number="it.installment_no" /></label>
-                <label>到期日<input type="date" v-model="it.due_on" /></label>
+                <label>到期日<DatePicker v-model="it.due_on" /></label>
                 <label>本金（元）<input v-model="it.principal" inputmode="decimal" /></label>
                 <label>利息（元）<input v-model="it.interest" inputmode="decimal" /></label>
                 <label>费用（元）<input v-model="it.fee" inputmode="decimal" /></label>
@@ -1642,7 +1643,7 @@ const metricCards = computed(() => {
               <label>本金（元）<input v-model="f.installment.principal" inputmode="decimal" /></label>
               <label>总手续费（元）<input v-model="f.installment.fee" inputmode="decimal" /></label>
               <label>期数<input type="number" min="1" v-model.number="f.installment.periods" /></label>
-              <label>首期日期<input type="date" v-model="f.installment.first_due_on" /></label>
+              <label>首期日期<DatePicker v-model="f.installment.first_due_on" /></label>
             </div><button class="primary" type="submit">创建合同</button>
           </form>
           <section v-if="panel === 'instPay'" class="panel formpanel">
@@ -1656,7 +1657,7 @@ const metricCards = computed(() => {
               <label>渠道<SearchableSelect><select v-model="f.instPayment.channel"><option value="cash">现金账户</option><option value="credit">信用工具（新增信用负债）</option></select></SearchableSelect></label>
               <label>账户/工具<SearchableSelect :allow-create="true" @create="(q) => openCreate(f.instPayment.channel === 'cash' ? 'account' : 'instrument', q, (id) => f.instPayment.channel_id = id)"><select v-model="f.instPayment.channel_id"><option value="">请选择</option>
                 <option v-for="a in (f.instPayment.channel === 'cash' ? activeAccounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>付款日期<input type="date" v-model="f.instPayment.paid_on" /></label>
+              <label>付款日期<DatePicker v-model="f.instPayment.paid_on" /></label>
             </div>
             <button type="button" class="primary" @click="payInstallment()">确认期次付款</button>
             <template v-if="instDetail">
@@ -1693,7 +1694,7 @@ const metricCards = computed(() => {
               <label>转分期本金（元）<input v-model="f.convert.principal" inputmode="decimal" /></label>
               <label>总手续费（元）<input v-model="f.convert.fee" inputmode="decimal" /></label>
               <label>期数<input type="number" min="1" v-model.number="f.convert.periods" /></label>
-              <label>首期日期<input type="date" v-model="f.convert.first_due_on" /></label>
+              <label>首期日期<DatePicker v-model="f.convert.first_due_on" /></label>
             </div><button class="primary" type="submit">转分期</button>
           </form>
         </template>
@@ -1741,7 +1742,7 @@ const metricCards = computed(() => {
             <div class="formgrid">
               <label>费率适用账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.feeRule.account_id = id)"><select v-model="f.feeRule.account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>生效日期<input type="date" v-model="f.feeRule.effective_from" /></label>
+              <label>生效日期<DatePicker v-model="f.feeRule.effective_from" /></label>
               <label>佣金费率（基点，25 = 0.25%）<input v-model="f.feeRule.commission_bps" inputmode="numeric" /></label>
               <label>最低佣金（元）<input v-model="f.feeRule.commission_min" inputmode="decimal" /></label>
               <label>印花税（基点，仅卖出）<input v-model="f.feeRule.stamp_duty_bps" inputmode="numeric" /></label>
@@ -1768,7 +1769,7 @@ const metricCards = computed(() => {
               <label>费用（元，留空自动计算）<input v-model="f.trade.fee" inputmode="decimal" placeholder="留空按费率规则计费" /></label>
               <label>资金账户<SearchableSelect :allow-create="true" @create="(q) => openCreate('account', q, (id) => f.trade.from_account_id = id)"><select v-model="f.trade.from_account_id"><option value="">请选择</option>
                 <option v-for="a in activeAccounts.filter(a => a.kind !== 'cash')" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
-              <label>日期<input type="date" v-model="f.trade.trade_on" /></label>
+              <label>日期<DatePicker v-model="f.trade.trade_on" /></label>
             </div>
             <button class="primary" type="submit">确认交易</button>
             <button type="button" class="ghost" @click="previewTradeFee()">预览费用</button>
@@ -1796,7 +1797,7 @@ const metricCards = computed(() => {
                 <label>估值资产<SearchableSelect :allow-create="true" @create="(q) => openCreate('asset', q, (id) => f.valuation.asset_id = id)"><select v-model="f.valuation.asset_id"><option value="">请选择</option>
                   <option v-for="a in assets" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
                 <label>市值（元）<input v-model="f.valuation.market_value" inputmode="decimal" /></label>
-                <label>估值日期<input type="date" v-model="f.valuation.valued_on" /></label>
+                <label>估值日期<DatePicker v-model="f.valuation.valued_on" /></label>
               </div><button class="ghost" type="submit">更新估值</button>
             </form>
           </section>
