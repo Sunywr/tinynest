@@ -476,6 +476,7 @@ test('23 投资费率规则与费用预览（真实 API）', async ({ page }) =>
   await assetPanel.getByLabel('投资账户').selectOption({ label: 'E2E 券商账户' })
   await page.getByRole('button', { name: '创建资产' }).click()
   await expect(page.getByText('投资资产已创建')).toBeVisible()
+  await expect(assetPanel).toHaveCount(0)
 
   await page.locator('.actions-bar').getByRole('button', { name: '账户费率规则' }).click()
   const feePanel = page.locator('form.formpanel', { hasText: '账户费率规则' })
@@ -488,8 +489,9 @@ test('23 投资费率规则与费用预览（真实 API）', async ({ page }) =>
   await page.getByRole('button', { name: '新增费率版本' }).click()
   await expect(page.getByText('费率版本已新增（历史快照不变）')).toBeVisible()
   // Success auto-returns to the list; re-open the fee-rule panel to see the version.
+  await expect(feePanel).toHaveCount(0)
   await page.locator('.actions-bar').getByRole('button', { name: '账户费率规则' }).click()
-  await expect(page.locator('form.formpanel', { hasText: '账户费率规则' }).locator('.rankrow').first()).toContainText('v1')
+  await expect(feePanel.locator('.rankrow').first()).toContainText('v1')
 
   await page.locator('.actions-bar').getByRole('button', { name: '买入 / 卖出' }).click()
   const tradePanel = page.locator('form.formpanel', { hasText: '买入 / 卖出' })
@@ -635,6 +637,7 @@ test('31 分红历史/年度汇总、税额未知与估值日期提示', async (
   await expect(page.getByText('分红已入账')).toBeVisible()
 
   // Success auto-returns to the list; re-open the panel for the second dividend.
+  await expect(divPanel).toHaveCount(0)
   await page.locator('.actions-bar').getByRole('button', { name: '分红与估值' }).click()
   const divPanel2 = page.locator('section.panel', { hasText: '分红与手工估值' })
   // A second dividend with an unknown tax must NOT be treated as zero tax.
@@ -644,6 +647,7 @@ test('31 分红历史/年度汇总、税额未知与估值日期提示', async (
   await divPanel2.getByLabel('红利税（元，可留空）').fill('')
   await page.getByRole('button', { name: '记录分红' }).click()
   await expect(page.getByText('分红已入账')).toBeVisible()
+  await expect(divPanel2).toHaveCount(0)
 
   const hist = page.locator('section.panel', { hasText: '分红记录与年度汇总' })
   await expect(hist.locator('.rankrow').first()).toContainText('¥150.00')
@@ -819,9 +823,44 @@ test('37 记账表单内联新建分类：创建后回到原表单且已填金�
   const modal = page.locator('.create-modal')
   await expect(modal.getByRole('heading', { name: '新建分类' })).toBeVisible()
   await expect(modal.getByLabel('名称')).toHaveValue('E2E 内联分类')
+  let releaseFirst!: () => void
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+  let failSecondOnce = true
+  const categoriesPath = '**/api/v1/categories'
+  await page.route(categoriesPath, async route => {
+    if (route.request().method() === 'POST') {
+      const { name } = route.request().postDataJSON()
+      if (name === 'E2E 内联分类') await firstGate
+      if (name === 'E2E 继续新建分类' && failSecondOnce) {
+        failSecondOnce = false
+        await route.fulfill({ status: 503, json: { error: { message: '请重试创建分类' } } })
+        return
+      }
+    }
+    await route.continue()
+  })
+  const firstRequest = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/categories'))
+  await modal.getByRole('button', { name: '创建' }).click()
+  await firstRequest
+  const refresh = page.waitForResponse(response => response.request().method() === 'GET' && response.url().endsWith('/categories'))
+  try {
+    await modal.getByRole('button', { name: '取消' }).click()
+    await catField.locator('.ss-trigger').click()
+    await catField.locator('.ss-search').fill('E2E 继续新建分类')
+    await catField.locator('.ss-create').click()
+  } finally {
+    releaseFirst()
+  }
+  await refresh
+  await expect(form.getByRole('button', { name: '确认入账' })).toBeEnabled()
+  await expect(modal.getByLabel('名称')).toHaveValue('E2E 继续新建分类')
+  await expect(catField.locator('.ss-value')).not.toHaveText('E2E 内联分类')
+  await modal.getByRole('button', { name: '创建' }).click()
+  await expect(page.getByText('请重试创建分类')).toBeVisible()
+  await expect(modal.getByLabel('名称')).toHaveValue('E2E 继续新建分类')
   await modal.getByRole('button', { name: '创建' }).click()
   await expect(modal).toHaveCount(0)
-  await expect(catField.locator('.ss-value')).toHaveText('E2E 内联分类')
+  await expect(catField.locator('.ss-value')).toHaveText('E2E 继续新建分类')
   await expect(form.getByLabel('金额（元）')).toHaveValue('88')
   const accField = form.locator('label').filter({ hasText: '收/付款账户' })
   await accField.locator('.ss-trigger').click()

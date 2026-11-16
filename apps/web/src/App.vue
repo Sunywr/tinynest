@@ -160,7 +160,9 @@ const createModal = reactive({
   loading: false,
 })
 let createDone: ((id: string) => void) | null = null
+let createSession = 0
 function openCreate(entity: CreateEntity, suggestedName: string, onCreated: (id: string) => void, meta: Record<string, any> = {}) {
+  createSession++
   createDone = onCreated
   createModal.entity = entity
   createModal.name = suggestedName
@@ -174,6 +176,11 @@ function openCreate(entity: CreateEntity, suggestedName: string, onCreated: (id:
   createModal.meta = meta
   createModal.loading = false
   createModal.open = true
+}
+function closeCreate() {
+  createSession++
+  createModal.open = false
+  createDone = null
 }
 const createTitle = computed(() => {
   const map: Record<string, string> = { category: '新建分类', project: '新建项目', member: '新建成员', account: '新建账户', instrument: '新建信用工具', asset: '新建投资标的' }
@@ -201,6 +208,7 @@ async function confirmCreate() {
     if (!createModal.assetCode) return toast('请填写资产代码')
     if (!createModal.assetAccountId) return toast('请选择所属投资账户')
   }
+  const session = createSession
   createModal.loading = true
   try {
     let id = ''
@@ -220,13 +228,13 @@ async function confirmCreate() {
       const r: any = await api.createAsset({ name, code: createModal.assetCode, kind: createModal.assetKind, account_id: createModal.assetAccountId }); id = r.id
     }
     await loadAll()
-    createModal.open = false
+    if (session !== createSession) return
     createDone?.(id)
-    createDone = null
+    closeCreate()
   } catch (e: any) {
-    toast(String(e?.message || e))
+    if (session === createSession) toast(String(e?.message || e))
   } finally {
-    createModal.loading = false
+    if (session === createSession) createModal.loading = false
   }
 }
 
@@ -1880,7 +1888,7 @@ const metricCards = computed(() => {
     </Transition>
 
     <Transition name="dialog">
-      <div v-if="createModal.open" class="confirm-overlay" @click.self="createModal.open = false">
+      <div v-if="createModal.open" class="confirm-overlay" @click.self="closeCreate">
         <div class="confirm-card create-modal">
           <div class="confirm-emoji">✨</div>
           <h3 class="confirm-title">{{ createTitle }}</h3>
@@ -1904,7 +1912,7 @@ const metricCards = computed(() => {
             </template>
           </div>
           <div class="confirm-actions">
-            <button type="button" class="ghost" @click="createModal.open = false">取消</button>
+            <button type="button" class="ghost" @click="closeCreate">取消</button>
             <button type="button" class="btn-primary" :disabled="createModal.loading" @click="confirmCreate()">创建</button>
           </div>
         </div>
