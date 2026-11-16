@@ -146,6 +146,25 @@ func TestV011_T1_CreditStatementLifecycle(t *testing.T) {
 	if number(summary["expense_minor"]) != 70_000 {
 		t.Errorf("expense must be 70000 (100000-30000), got %v", summary["expense_minor"])
 	}
+
+	unknown := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"kind": "credit_card", "name": "T1 未配置额度", "cycle_start_day": 1,
+		"cycle_end_day": 31, "due_day": 10, "due_month_offset": 1,
+	})["id"].(string)
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 50_000, "occurred_on": "2026-12-12",
+		"payment_kind": "credit", "credit_instrument_id": unknown,
+		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 50_000}},
+	})
+	limit := c.mustOK("GET", "/api/v1/credit-instruments/"+unknown+"/limit", nil)
+	if number(limit["used_minor"]) != 50_000 || limit["available_minor"] != nil || limit["usage_bps"] != nil {
+		t.Fatalf("instrument with unknown limit = %v", limit)
+	}
+	credit := c.mustOK("GET", "/api/v1/dashboard/credit", nil)["credit"].(map[string]any)
+	if number(credit["used_minor"]) != 50_000 || number(credit["available_minor"]) != 2_000_000 ||
+		number(credit["usage_bps"]) != 0 {
+		t.Fatalf("unknown limit must not consume configured credit: %v", credit)
+	}
 }
 
 // Status must be derived from facts + dates, never a stale cached column.

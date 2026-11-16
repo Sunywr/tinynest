@@ -74,8 +74,7 @@ func (a *API) handleDashboardCredit(w http.ResponseWriter, r *http.Request) {
 		list = append(list, v)
 	}
 	_ = irows.Close()
-	var totalLimit, totalUsed int64
-	limitKnown := false
+	var totalLimit, totalUsed, configuredUsed int64
 	for _, v := range list {
 		bal, err := db.Balance(ctx, a.DB, p.HouseholdID, "2010:"+v.id)
 		if err != nil {
@@ -99,7 +98,7 @@ func (a *API) handleDashboardCredit(w http.ResponseWriter, r *http.Request) {
 			entry["available_minor"] = available
 			entry["usage_bps"] = int64(10000) * used / *v.limit
 			totalLimit += *v.limit
-			limitKnown = true
+			configuredUsed += used
 		} else {
 			entry["limit_minor"] = nil
 			entry["available_minor"] = nil
@@ -108,14 +107,14 @@ func (a *API) handleDashboardCredit(w http.ResponseWriter, r *http.Request) {
 		instruments = append(instruments, entry)
 	}
 	creditSummary := map[string]any{"used_minor": totalUsed, "instruments": instruments}
-	if limitKnown {
-		available := totalLimit - totalUsed
+	if totalLimit > 0 {
+		available := totalLimit - configuredUsed
 		if available < 0 {
 			available = 0
 		}
 		creditSummary["limit_minor"] = totalLimit
 		creditSummary["available_minor"] = available
-		creditSummary["usage_bps"] = int64(10000) * totalUsed / totalLimit
+		creditSummary["usage_bps"] = int64(10000) * configuredUsed / totalLimit
 	} else {
 		creditSummary["limit_minor"] = nil
 		creditSummary["available_minor"] = nil
