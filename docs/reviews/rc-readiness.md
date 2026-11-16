@@ -4,7 +4,10 @@
 
 代码基线为 `5f395da`（包含 `b538a3f` 的信用额度修复）。Windows 本地使用 Go 1.27.4 和隔离 SQLite，通过 `go test ./... -count=1`、`go vet ./...`、`go mod tidy -diff`、`go build ./...`、`npm run build`、全部 62 条 Chromium E2E 及品牌哈希检查。两项缺陷均在修复前复现，修复后通过回归。
 
-- Go race 与候选远端 CI 为 `UNVERIFIED`。本机 MinGW 缺少可运行的依赖，Zig 备选工具链在 ThreadSanitizer 初始化失败。
+- Go race 已通过。在 Windows 当前进程中将 MinGW UCRT 和 Git for Windows 的 `mingw64/bin` 加入 PATH，设置 `CGO_ENABLED=1`，用 Go 1.27.4 运行 `go test -race ./... -count=1`。候选远端 CI 仍为 `UNVERIFIED`。
+- SQLite 执行 `python scripts/db_drill.py --api-dir apps/api`，启动迁移、重复启动、备份、恢复和前后快照比较通过。恢复库含迁移 1–10，借贷各 105,600 分，API 返回现金 44,500 分、持仓成本 10,100 分。
+- Windows 隔离 MySQL 8.0.46 以合成数据通过 `TestV01EndToEnd`、`TestV011_T1_CreditStatementLifecycle` 与 `TestConcurrentTransactionReplays`。16 个并发同键提交只入账一次。测试进程以临时拨号适配器将连接转到回环 TCP，临时实例与适配器均已清理。
+- MySQL 合成账本一致性导出后恢复到同一隔离实例的空库，耗时 2.85 秒。源库与恢复库的按主键导出 SHA-256 均为 `787a03516c1f73486cf27a45f7c3af7d981438962c9fa20ad62e5a911519e229`。恢复库含迁移 1、2 和 16 条分录，借贷各 3,309,500 分。
 - `STAGING_READY` 和 `PRODUCTION_READY` 仍为 `UNVERIFIED`。候选缺少隔离 Linux MySQL 预发布及并发测量、A/B 私网 TLS 现场验收、生产备份隔离恢复与异地副本校验、iPhone Safari 实机验收。生产未部署。
 
 ## 历史候选
