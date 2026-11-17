@@ -45,7 +45,7 @@ func (d *DB) IsMySQL() bool { return d.mysql }
 
 func (d *DB) ExpectedVersions() ([]int, error) {
 	if d.mysql {
-		return []int{1, 2}, nil
+		return []int{1, 2, 3}, nil
 	}
 	return EmbeddedVersions()
 }
@@ -72,7 +72,7 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return nil, err
 	}
-	if version > 2 {
+	if version > 3 {
 		return nil, fmt.Errorf("db: unsupported MySQL schema version %d", version)
 	}
 	applied := []int{}
@@ -98,6 +98,28 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 		}
 		applied = append(applied, next)
 	}
+	if version < 3 {
+		body, err := migrationFS.ReadFile("migrations/" + restoreTransactionsMigration)
+		if err != nil {
+			return applied, err
+		}
+		tx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			return applied, err
+		}
+		defer tx.Rollback()
+		if err := restoreTransactions(ctx, tx, string(body)); err != nil {
+			return applied, fmt.Errorf("%w: restore transactions: %v", ErrMigration, err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, description) VALUES(3,?)", restoreTransactionsMigration); err != nil {
+			return applied, err
+		}
+		if err := tx.Commit(); err != nil {
+			return applied, err
+		}
+		applied = append(applied, 3)
+	}
+
 	return applied, nil
 }
 

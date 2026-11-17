@@ -145,7 +145,12 @@ func (d *DB) Migrate(ctx context.Context) ([]int, error) {
 		if err != nil {
 			return applied, err
 		}
-		if _, err = tx.ExecContext(ctx, string(body)); err != nil {
+		if f.name == restoreTransactionsMigration {
+			err = restoreTransactions(ctx, tx, string(body))
+		} else {
+			_, err = tx.ExecContext(ctx, string(body))
+		}
+		if err != nil {
 			_ = tx.Rollback()
 			return applied, fmt.Errorf("%w: %s: %v", ErrMigration, f.name, err)
 		}

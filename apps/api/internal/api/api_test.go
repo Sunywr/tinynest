@@ -170,11 +170,11 @@ func TestV01EndToEnd(t *testing.T) {
 	expCat, incCat := c.firstCategory("expense"), c.firstCategory("income")
 
 	// --- S2: expense / income / transfer ---
-	tx1 := c.mustOK("POST", "/api/v1/transactions", map[string]any{
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
 		"type": "expense", "amount_minor": 10_000, "occurred_on": "2026-11-12",
 		"payment_kind": "cash", "account_id": cash,
 		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 10_000}},
-	})["id"].(string)
+	})
 	bal = c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)
 	if number(bal["balance_minor"]) != 990_000 {
 		t.Errorf("balance after expense = %v, want 990000", bal["balance_minor"])
@@ -355,18 +355,6 @@ func TestV01EndToEnd(t *testing.T) {
 		t.Error("cashflow must be a distinct view from expense")
 	}
 
-	// --- S2: reversal restores the balance and keeps both entries ---
-	before := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"])
-	c.mustOK("POST", "/api/v1/transactions/"+tx1+"/reverse", map[string]any{})
-	after := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"])
-	if after != before+10_000 {
-		t.Errorf("reversal did not restore balance: before=%d after=%d", before, after)
-	}
-	var reversedCount int
-	_ = database.QueryRow(`SELECT COUNT(*) FROM journal_entries WHERE status='reversed'`).Scan(&reversedCount)
-	if reversedCount != 1 {
-		t.Errorf("original entry should be preserved as reversed, got %d", reversedCount)
-	}
 	c.mustOK("POST", "/api/v1/investments/dividends", map[string]any{
 		"asset_id": asset, "received_on": "2026-11-16",
 		"gross_minor": 1_000, "to_account_id": sec,

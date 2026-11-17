@@ -490,8 +490,12 @@ func TestBusinessDateReversalUsesShanghaiDay(t *testing.T) {
 		t.Fatalf("[FIX-03] create transaction failed: %d %v", tx.Status, tx.Body)
 	}
 	txID, _ := tx.Body["id"].(string)
-	rev := c.call("POST", "/api/v1/transactions/"+txID+"/reverse", map[string]any{}, nil)
-	if rev.Status != 200 {
+	rev := c.call("POST", "/api/v1/transactions/"+txID+"/replace", map[string]any{
+		"type": "expense", "amount_minor": 10000, "occurred_on": "2026-11-12",
+		"payment_kind": "cash", "account_id": accID,
+		"splits": []any{map[string]any{"category_id": "cat_rev", "amount_minor": 10000}},
+	}, nil)
+	if rev.Status != 201 {
 		t.Fatalf("[FIX-03] reverse failed: %d %v", rev.Status, rev.Body)
 	}
 	var occurred string

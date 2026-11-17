@@ -843,7 +843,7 @@ async function openTransactionDraft(id: string, replace: boolean) {
   try {
     const detail = await api.transaction(id)
     if (!authed.value || navigation !== ledgerNavigation) return
-    if (replace && detail.status !== 'posted') return toast('这笔流水已冲正')
+    if (replace && detail.status !== 'posted') return toast('这笔流水不可修改')
     openPanel('tx', true)
     const splits: DraftSplit[] = detail.splits.map((split: any) => ({
       category_id: split.category_id, project_id: split.project_id || '',
@@ -869,14 +869,6 @@ async function openTransactionDraft(id: string, replace: boolean) {
   } finally {
     loading.value = false
   }
-}
-
-function deleteTransaction(id: string) {
-  requestConfirm({
-    title: '删除流水', message: '确认后会冲正该笔流水，原记录保留并标记为已冲正。',
-    confirmText: '删除流水', tone: 'danger',
-    onConfirm: () => { if (!loading.value) void run(() => api.reverseTransaction(id), '流水已冲正') },
-  })
 }
 
 function createTx() {
@@ -1438,13 +1430,12 @@ const metricCards = computed(() => {
             <div class="translist"><div class="transaction ledger-transaction" v-for="t in ledgerTransactions" :key="t.id">
               <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
               <div class="txbody"><div class="txname">{{ t.merchant || t.note || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出') }}</div>
-                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已冲正' : '已入账' }}</div></div>
+                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已更正' : '已入账' }}</div></div>
               <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
               <div class="rowacts" v-if="canWrite">
                 <button v-if="canCopyTransaction(t)" type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, false)">复制</button>
                 <template v-if="t.status === 'posted' && canCopyTransaction(t)">
                   <button type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, true)">修改</button>
-                  <button type="button" class="ghost" :disabled="loading" @click="deleteTransaction(t.id)">删除</button>
                 </template>
                 <button v-if="t.status === 'posted' && t.type === 'expense'" type="button" class="ghost" :disabled="loading" @click="refund(t.id)">退款</button>
               </div>
@@ -1455,7 +1446,7 @@ const metricCards = computed(() => {
           </section>
           <form v-if="panel === 'tx'" class="panel formpanel" @submit.prevent="createTx">
             <div class="paneltitle"><div><h2>{{ transactionDraft?.replaceID ? '修改流水' : transactionDraft ? '复制流水' : '记一笔' }}</h2>
-              <span v-if="transactionDraft?.replaceID" class="subinfo">保存后会冲正原流水并入账更正记录</span>
+              <span v-if="transactionDraft?.replaceID" class="subinfo">保存后会生成更正记录</span>
               <span v-else-if="!transactionDraft" class="subinfo">常用分类与账户会自动记住（仅本机偏好）</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="tx-primary-fields">

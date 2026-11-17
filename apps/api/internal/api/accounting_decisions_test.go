@@ -175,7 +175,7 @@ func TestInvestmentFeeRuleUsesTradeDate(t *testing.T) {
 	}
 }
 
-func TestTransactionReversalAndRefundReplay20Times(t *testing.T) {
+func TestRefundReplay20Times(t *testing.T) {
 	ts, c, database := newTestServer(t)
 	defer database.Close()
 	defer ts.Close()
@@ -189,13 +189,6 @@ func TestTransactionReversalAndRefundReplay20Times(t *testing.T) {
 			"payment_kind": "cash", "account_id": account,
 			"splits": []map[string]any{{"category_id": category, "amount_minor": 1000}},
 		})["id"].(string)
-	}
-	reversePath := "/api/v1/transactions/" + spend() + "/reverse"
-	reversal := c.mustOK("POST", reversePath, nil)
-	for i := 0; i < 20; i++ {
-		if code, _ := c.do("POST", reversePath, nil); code != 400 {
-			t.Fatalf("reversal replay %d returned %d", i+1, code)
-		}
 	}
 	refundTx := spend()
 	refund := map[string]any{
@@ -215,10 +208,6 @@ func TestTransactionReversalAndRefundReplay20Times(t *testing.T) {
 		t.Fatalf("replay changed balance: %v", balance)
 	}
 	var count int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM journal_entries WHERE reversal_of=(
-		SELECT reversal_of FROM journal_entries WHERE id=?)`, reversal["reversal_entry_id"]).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("reversal entries = %d, error = %v", count, err)
-	}
 	if err := database.QueryRow(`SELECT COUNT(*) FROM refunds WHERE transaction_id=?`, refundTx).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("refund records = %d, error = %v", count, err)
 	}

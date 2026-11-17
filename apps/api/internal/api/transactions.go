@@ -19,7 +19,6 @@ func (a *API) registerTransactions(mux *http.ServeMux) {
 	a.route(mux, "POST /api/v1/transactions", a.handleCreateTransaction)
 	a.route(mux, "GET /api/v1/transactions/{id}", a.handleGetTransaction)
 	a.route(mux, "POST /api/v1/transactions/{id}/replace", a.handleCreateTransaction)
-	a.route(mux, "POST /api/v1/transactions/{id}/reverse", a.handleReverseTransaction)
 	a.route(mux, "POST /api/v1/refunds", a.handleCreateRefund)
 	a.route(mux, "GET /api/v1/refunds/by-transaction/{id}", a.handleListRefunds)
 }
@@ -420,20 +419,6 @@ func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
 		"id":           id, "type": typ, "amount_minor": amount, "occurred_on": occurred,
 		"status": status, "entry_id": entryID, "journal_lines": journal,
 	})
-}
-
-func (a *API) handleReverseTransaction(w http.ResponseWriter, r *http.Request) {
-	p, _ := principal(r)
-	id := r.PathValue("id")
-	revID := newID("je")
-	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		return a.reverseTransaction(tx, r, p, id, revID)
-	})
-	if err != nil {
-		writeErr(w, 400, "conflict", err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{"transaction_id": id, "reversal_entry_id": revID, "status": "reversed"})
 }
 
 // reverseTransaction compensates the journal and credit bill in the caller's transaction.
