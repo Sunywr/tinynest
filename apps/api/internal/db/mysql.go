@@ -45,7 +45,7 @@ func (d *DB) IsMySQL() bool { return d.mysql }
 
 func (d *DB) ExpectedVersions() ([]int, error) {
 	if d.mysql {
-		return []int{1, 2, 3, 4}, nil
+		return []int{1, 2, 3, 4, 5}, nil
 	}
 	return EmbeddedVersions()
 }
@@ -72,7 +72,7 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return nil, err
 	}
-	if version > 4 {
+	if version > 5 {
 		return nil, fmt.Errorf("db: unsupported MySQL schema version %d", version)
 	}
 	applied := []int{}
@@ -145,6 +145,29 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 			return applied, err
 		}
 		applied = append(applied, 4)
+	}
+	if version < 5 {
+		const filename = "005_avatar_image.sql"
+		body, err := mysqlFS.ReadFile("mysql/" + filename)
+		if err != nil {
+			return applied, err
+		}
+		var columnType string
+		if err := conn.QueryRowContext(ctx, `
+			SELECT DATA_TYPE FROM information_schema.columns
+			WHERE table_schema=DATABASE() AND table_name='users' AND column_name='avatar'
+		`).Scan(&columnType); err != nil {
+			return applied, err
+		}
+		if columnType != "text" {
+			if _, err := conn.ExecContext(ctx, string(body)); err != nil {
+				return applied, fmt.Errorf("%w: MySQL %s: %v", ErrMigration, filename, err)
+			}
+		}
+		if _, err := conn.ExecContext(ctx, "INSERT INTO schema_migrations(version, description) VALUES(5,?)", filename); err != nil {
+			return applied, err
+		}
+		applied = append(applied, 5)
 	}
 
 	return applied, nil

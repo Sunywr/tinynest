@@ -1,6 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -80,6 +84,24 @@ func TestUserSelfServiceProfileAndPassword(t *testing.T) {
 	me = member.mustOK("GET", "/api/v1/auth/me", nil)
 	if _, ok := me["email"]; ok {
 		t.Fatalf("email not cleared: %v", me)
+	}
+
+	var buffer bytes.Buffer
+	if err := jpeg.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, 64, 65)), nil); err != nil {
+		t.Fatal(err)
+	}
+	invalidImage := avatarJPEGPrefix + base64.StdEncoding.EncodeToString(buffer.Bytes())
+	if status, _ := member.do("PATCH", "/api/v1/auth/me/profile", map[string]any{"avatar": invalidImage}); status != 400 {
+		t.Fatalf("wrong image dimensions returned %d", status)
+	}
+	buffer.Reset()
+	if err := jpeg.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, 64, 64)), nil); err != nil {
+		t.Fatal(err)
+	}
+	avatar := avatarJPEGPrefix + base64.StdEncoding.EncodeToString(buffer.Bytes())
+	member.mustOK("PATCH", "/api/v1/auth/me/profile", map[string]any{"avatar": avatar})
+	if got := member.mustOK("GET", "/api/v1/auth/me", nil)["avatar"]; got != avatar {
+		t.Fatal("avatar image not persisted")
 	}
 
 	// Password change: correct current password required, session survives.

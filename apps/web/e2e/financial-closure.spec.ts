@@ -853,6 +853,7 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
     await expect(member.getByRole('heading', { name: '登录账号' })).toHaveCount(0)
     await member.getByRole('button', { name: '个人资料', exact: true }).click()
     const self = member.getByRole('dialog', { name: '个人资料' })
+    await expect(self.getByLabel('姓名')).toHaveCSS('border-radius', '11px')
     await self.getByLabel('姓名').fill('只读成员新姓名')
     await self.getByLabel('头像（文字或表情）').fill('🐱')
     await self.getByLabel('邮箱').fill('viewer@example.com')
@@ -861,8 +862,35 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
     await expect((await (await member.request.get('/api/v1/auth/me')).json())).toMatchObject({
       member_name: '只读成员新姓名', avatar: '🐱', email: 'viewer@example.com',
     })
+    await member.setViewportSize({ width: 390, height: 740 })
+    await member.getByRole('button', { name: '个人资料', exact: true }).click()
+    const image = await member.evaluate(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 180
+      canvas.height = 120
+      canvas.getContext('2d')?.fillRect(0, 0, 180, 120)
+      return canvas.toDataURL('image/png').split(',')[1]
+    })
+    const upload = self.getByLabel('上传头像图片')
+    const button = self.getByRole('button', { name: '保存资料' })
+    await upload.setInputFiles({ name: 'invalid.png', mimeType: 'image/png', buffer: Buffer.from('invalid image') })
+    await expect(self.getByRole('alert')).toContainText('无法读取图片')
+    await upload.setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: Buffer.from(image, 'base64') })
+    await expect(self.getByAltText('头像预览')).toBeVisible()
+    await button.click()
+    await expect(self).toBeHidden()
+    await member.reload()
+    const avatar = member.getByAltText('我的头像')
+    await expect(avatar).toHaveAttribute('src', /^data:image\/jpeg;base64,/)
+    await expect.poll(() => avatar.evaluate((img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight])).toEqual([64, 64])
+    await member.getByRole('button', { name: '个人资料', exact: true }).click()
+    await self.getByRole('button', { name: '移除图片' }).click()
+    await button.click()
+    await expect(self).toBeHidden()
+    await expect(avatar).toHaveCount(0)
     await member.getByRole('button', { name: '修改密码', exact: true }).click()
     const change = member.getByRole('dialog', { name: '修改密码' })
+    await expect(change.getByLabel('当前密码')).toHaveCSS('border-radius', '11px')
     await change.getByLabel('当前密码').fill(body.password)
     await change.getByLabel('新密码', { exact: true }).fill('viewer-changed-password')
     await change.getByLabel('确认新密码').fill('viewer-changed-password')

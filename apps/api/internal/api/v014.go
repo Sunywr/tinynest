@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image/jpeg"
 	"net/http"
 	"regexp"
 	"strings"
@@ -15,6 +18,24 @@ import (
 )
 
 var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+const avatarJPEGPrefix = "data:image/jpeg;base64,"
+
+func validAvatarJPEG(encoded string) bool {
+	if len(encoded) > 32*1024 {
+		return false
+	}
+	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return false
+	}
+	config, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width != 64 || config.Height != 64 {
+		return false
+	}
+	_, err = jpeg.Decode(bytes.NewReader(data))
+	return err == nil
+}
 
 // errProfileRejected carries a client-facing validation message for profile writes.
 type profileRejected struct{ msg string }
@@ -174,7 +195,11 @@ func (a *API) validateProfile(patch profilePatch) (name, avatar, birthday string
 			return "", "", "", 0, "", "头像格式不正确"
 		}
 		avatar = strings.TrimSpace(s)
-		if utf8.RuneCountInString(avatar) > 8 {
+		if data, isImage := strings.CutPrefix(avatar, avatarJPEGPrefix); isImage {
+			if !validAvatarJPEG(data) {
+				return "", "", "", 0, "", "头像图片须为有效的 64×64 JPEG"
+			}
+		} else if utf8.RuneCountInString(avatar) > 8 {
 			return "", "", "", 0, "", "头像至多 8 个字符"
 		}
 	}

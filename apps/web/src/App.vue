@@ -1611,6 +1611,10 @@ const metricCards = computed(() => {
         <div class="top">
           <span class="crumb">我的小家 / {{ nav.find(n => n.key === view)?.label }}</span>
           <div class="topright">
+            <span v-if="me.avatar" class="avatar">
+              <img v-if="me.avatar.startsWith('data:image/jpeg;base64,')" :src="me.avatar" width="35" height="35" alt="我的头像" />
+              <template v-else>{{ me.avatar }}</template>
+            </span>
             <button class="ghost" @click="profileDialog = { profile: me }">个人资料</button>
             <button class="ghost" @click="profileDialog = { profile: me, passwordOnly: true }">修改密码</button>
             <button class="ghost" @click="logout()">登出</button>
@@ -2587,6 +2591,7 @@ form label { margin-bottom: 13px; }
 .rankrow b { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rankrow small { color: var(--muted); margin-left: 6px; }
 .topright { flex-wrap: wrap; justify-content: flex-end; }
+.topright .avatar { width: auto; min-width: 35px; overflow: hidden; }
 .empty { color: var(--muted); font-size: 12px; text-align: center; padding: 14px 0; }
 .overdue { color: #b4493f; }
 .rowacts { display: flex; gap: 5px; margin-left: 10px; }
