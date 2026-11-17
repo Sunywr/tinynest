@@ -78,7 +78,7 @@ func (a *API) handleInstrumentLimit(w http.ResponseWriter, r *http.Request) {
 	var id, code string
 	var limit *int64
 	if err := a.DB.QueryRowContext(r.Context(),
-		`SELECT id,ledger_code,credit_limit_minor FROM credit_instruments WHERE id=? AND household_id=?`,
+		`SELECT id,ledger_code,credit_limit_minor FROM credit_instruments WHERE id=? AND household_id=? AND status<>'deleted'`,
 		r.PathValue("id"), p.HouseholdID).Scan(&id, &code, &limit); err != nil {
 		writeErr(w, 404, "not_found", "信用工具不存在")
 		return
@@ -188,7 +188,7 @@ func (a *API) handlePatchInstrument(w http.ResponseWriter, r *http.Request) {
 
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT status FROM credit_instruments WHERE id=? AND household_id=?`, id, p.HouseholdID).
+			`SELECT status FROM credit_instruments WHERE id=? AND household_id=? AND status<>'deleted'`, id, p.HouseholdID).
 			Scan(&finalStatus); err != nil {
 			return errors.New("信用工具不存在")
 		}
@@ -199,7 +199,7 @@ func (a *API) handlePatchInstrument(w http.ResponseWriter, r *http.Request) {
 			  cycle_start_day=COALESCE(?,cycle_start_day), cycle_end_day=COALESCE(?,cycle_end_day),
 			  due_day=COALESCE(?,due_day), due_month_offset=COALESCE(?,due_month_offset),
 			  status=COALESCE(?,status), note=COALESCE(?,note)
-			WHERE id=? AND household_id=?`,
+			WHERE id=? AND household_id=? AND status<>'deleted'`,
 			ptrArg(in.Name), ptrArg(in.Issuer), clear, ptrArg(in.CreditLimitMinor),
 			ptrArg(in.CycleStartDay), ptrArg(in.CycleEndDay), ptrArg(in.DueDay), ptrArg(in.DueMonthOffset),
 			ptrArg(in.Status), ptrArg(in.Note), id, p.HouseholdID)

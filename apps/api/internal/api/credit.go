@@ -18,6 +18,7 @@ import (
 func (a *API) registerCredit(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/credit-instruments", a.handleListInstruments)
 	a.route(mux, "POST /api/v1/credit-instruments", a.handleCreateInstrument)
+	a.route(mux, "DELETE /api/v1/credit-instruments/{id}", a.handleDeleteInstrument)
 	a.route(mux, "GET /api/v1/credit-statements", a.handleListStatements)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/payments", a.handleStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/reconcile", a.handleReconcile)
@@ -32,9 +33,11 @@ func (a *API) registerCredit(mux *http.ServeMux) {
 // Items are keyed by (statement, source_type, source_id), so retries never double count.
 func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrumentID, sourceType, sourceID string, amount int64, occurredOn string) error {
 	var startDay, endDay, dueDay, offset int
-	if err := tx.QueryRowContext(r.Context(),
-		`SELECT cycle_start_day,cycle_end_day,due_day,due_month_offset FROM credit_instruments WHERE id=? AND household_id=?`,
-		instrumentID, p.HouseholdID).Scan(&startDay, &endDay, &dueDay, &offset); err != nil {
+	query := `SELECT cycle_start_day,cycle_end_day,due_day,due_month_offset FROM credit_instruments WHERE id=? AND household_id=? AND status<>'deleted'`
+	if a.DB.IsMySQL() {
+		query += " FOR UPDATE"
+	}
+	if err := tx.QueryRowContext(r.Context(), query, instrumentID, p.HouseholdID).Scan(&startDay, &endDay, &dueDay, &offset); err != nil {
 		return fmt.Errorf("信用工具不存在: %w", err)
 	}
 	anchor, err := time.Parse("2006-01-02", occurredOn)
@@ -170,21 +173,22 @@ func (a *API) handleCreateInstrument(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id,kind,name,credit_limit_minor,cycle_start_day,cycle_end_day,due_day,due_month_offset,ledger_code,status
-		 FROM credit_instruments WHERE household_id=? ORDER BY created_at`, p.HouseholdID)
+		`SELECT id,kind,name,issuer,credit_limit_minor,cycle_start_day,cycle_end_day,due_day,due_month_offset,ledger_code,status
+		 FROM credit_instruments WHERE household_id=? AND status<>'deleted' ORDER BY created_at`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
 	type instrumentRow struct {
 		id, kind, name, code, status string
+		issuer                       *string
 		limit                        *int64
 		sd, ed, dd, off              int
 	}
 	var list []instrumentRow
 	for rows.Next() {
 		var v instrumentRow
-		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.limit, &v.sd, &v.ed, &v.dd, &v.off, &v.code, &v.status); err != nil {
+		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.issuer, &v.limit, &v.sd, &v.ed, &v.dd, &v.off, &v.code, &v.status); err != nil {
 			_ = rows.Close()
 			internalErr(w, err)
 			return
@@ -203,7 +207,7 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		row := map[string]any{
-			"id": v.id, "kind": v.kind, "name": v.name, "credit_limit_minor": v.limit,
+			"id": v.id, "kind": v.kind, "name": v.name, "issuer": v.issuer, "credit_limit_minor": v.limit,
 			"cycle_start_day": v.sd, "cycle_end_day": v.ed, "due_day": v.dd, "due_month_offset": v.off,
 			"status": v.status, "outstanding_minor": -bal,
 		}

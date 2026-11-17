@@ -97,6 +97,7 @@ export const api = {
   createRefund: (body: any) => post('/refunds', body),
   refunds: (txId: string) => get(`/refunds/by-transaction/${txId}`),
 
+  deleteCreditInstrument: (id: string) => del(`/credit-instruments/${encodeURIComponent(id)}`),
   creditInstruments: () => get('/credit-instruments'),
   createCreditInstrument: (body: any) => post('/credit-instruments', body),
   patchCreditInstrument: (id: string, body: any) => request(`/credit-instruments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

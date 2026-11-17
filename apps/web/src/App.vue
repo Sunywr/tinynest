@@ -2,6 +2,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError } from './services/api'
 
+import AccountIcon from './components/AccountIcon.vue'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
 import DatePicker from './components/DatePicker.vue'
@@ -1150,6 +1151,15 @@ function settleDebt() {
   if (!reason) return
   return run(() => api.settleDebtEarly(f.debtPayment.contract_id, reason), '已提前结清')
 }
+function deleteCreditInstrument(card: { id: string; name: string }) {
+  requestConfirm({
+    title: '删除信用工具',
+    message: `确定删除「${card.name}」吗？仅未产生账务记录的信用工具可以删除。`,
+    tone: 'danger',
+    confirmText: '删除',
+    onConfirm: () => void run(() => api.deleteCreditInstrument(card.id), '信用工具已删除'),
+  })
+}
 function deactivateInstrument(id: string) {
   requestConfirm({
     title: '停用信用工具',
@@ -1454,7 +1464,7 @@ const metricCards = computed(() => {
               </section>
               <section class="panel"><div class="paneltitle"><div><h2>各账户余额</h2></div></div>
                 <div class="ranklist"><div v-for="a in (summary?.accounts || [])" :key="a.id" class="rankrow">
-                  <span>{{ a.name }}</span><b>{{ formatMinor(a.balance_minor) }}</b></div></div>
+                  <span><AccountIcon :name="a.name" :subtype="accounts.find(account => account.id === a.id)?.subtype" :kind="a.kind" />{{ a.name }}</span><b>{{ formatMinor(a.balance_minor) }}</b></div></div>
               </section>
               <section class="panel"><div class="paneltitle"><div><h2>信用总览</h2><span class="subinfo">按账单到期日 · 额度为实时负债余额</span></div>
                 <button class="switch" @click="go('credit')">管理 →</button></div>
@@ -1669,7 +1679,7 @@ const metricCards = computed(() => {
           </div>
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账户列表</h2></div></div>
             <div class="ranklist"><div v-for="a in accounts" :key="a.id" class="rankrow">
-              <span>{{ a.name }} <small>{{ a.kind }}<template v-if="a.status === 'disabled'"> · 已停用</template></small></span><b>{{ formatMinor(a.balance_minor) }}</b>
+              <span><AccountIcon :name="a.name" :subtype="a.subtype" :kind="a.kind" />{{ a.name }} <small>{{ a.kind }}<template v-if="a.status === 'disabled'"> · 已停用</template></small></span><b>{{ formatMinor(a.balance_minor) }}</b>
               <span class="rowacts">
                 <button type="button" class="ghost" @click="openAccountById(a.id); openPanel('edit')">编辑</button>
                 <button v-if="canWrite" type="button" class="ghost" @click="setAccountStatus(a, a.status === 'disabled' ? 'active' : 'disabled')">{{ a.status === 'disabled' ? '启用' : '停用' }}</button>
@@ -1756,9 +1766,12 @@ const metricCards = computed(() => {
           </form>
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
             <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow">
-              <span>{{ c.name }} <small>{{ c.kind }} · {{ c.status }}</small></span>
+              <span><AccountIcon :name="c.name" :subtype="c.issuer" :kind="c.kind" />{{ c.name }} <small>{{ c.kind }} · {{ c.status }}</small></span>
               <b v-if="creditDash">{{ instrumentUsage(c.id) }}</b>
-              <span class="rowacts" v-if="c.status === 'active'"><button v-if="canWrite" type="button" class="ghost" @click="deactivateInstrument(c.id)">停用</button></span>
+              <span v-if="canWrite" class="rowacts">
+                <button v-if="c.status === 'active'" type="button" class="ghost" @click="deactivateInstrument(c.id)">停用</button>
+                <button type="button" class="ghost" @click="deleteCreditInstrument(c)">删除</button>
+              </span>
             </div>
               <p v-if="!creditInstruments.length" class="empty">还没有信用工具，点上方「新增信用工具」开始吧</p></div>
           </section>

@@ -116,11 +116,12 @@
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| GET/POST | `/credit-instruments` | IMPLEMENTED | 信用卡/花呗/自定义工具 |
+| GET/POST | `/credit-instruments` | IMPLEMENTED | 信用卡、花呗、美团、抖音及自定义工具。列表返回 `issuer` |
 | GET | `/credit-statements` | IMPLEMENTED | 账单列表（自动归集） |
 | POST | `/credit-statements/{id}/payments` | IMPLEMENTED | 部分/全额还款 |
 | POST | `/credit-statements/{id}/reconcile` | IMPLEMENTED | 录入平台账单金额（只记核对值） |
 | PATCH | `/credit-instruments/{id}` | IMPLEMENTED | 周期、额度和启停，记录变更审计 |
+| DELETE | `/credit-instruments/{id}` | IMPLEMENTED | 将未使用工具移出列表与支付选项，重复请求返回成功。已有账单、交易或分录时返回 409 |
 | GET | `/credit-instruments/{id}/limit` | IMPLEMENTED | 实时负债、已用额度、可用额度与使用率（基点）；未配置额度时后两项为 null |
 | GET | `/credit-statements/{id}` | IMPLEMENTED | 账单明细与核对差额 |
 | PATCH | `/credit-statements/{id}/cycle` | IMPLEMENTED | 人工修正单期账单日期，须填写原因 |
