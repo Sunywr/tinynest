@@ -1,5 +1,11 @@
 # 发布候选复核
 
+## 2026-11-17 个人资料与账号管理发布
+
+- A/B 均从 `cba9494` 切换到 `f48523c`。上线前 MySQL 备份作业成功，备份 `tinynest-20261117T132803Z.sql` 的 SHA-256 为 `7e5172bd5adae21680387f20dbe2b3e3deaac6f8a3021f729a73f65b9ac674da`。旧版产物保留为回滚点。旧版要求 MySQL 版本 003，回滚后端时需先停服务、撤回 004 的迁移记录并核对版本序列，保留新增列与资料数据，再切回旧二进制。
+- [候选 CI](https://github.com/Sunywr/tinynest/actions/runs/44092126630) 四项通过，覆盖 Go race、MySQL Unix socket 备份恢复演练和 80 项 Chromium E2E。
+- 生产 MySQL 已应用 004。HTTPS 首页、JavaScript 和 CSS 与发布产物摘要一致，MySQL 就绪检查通过，五个新增路由未登录均返回 401，www 返回 301。授权账号的生产操作、该次备份的异地副本与独立恢复、iPhone Safari 实机验收均为 `UNVERIFIED`。
+
 ## 2026-11-17 早期投资成交更正发布
 
 - A/B 均从 `f09f0c9` 切换至 `cba9494`（合并 `d61988e` 早期投资成交更正），旧版本保留为回滚点。上线前 MySQL 备份服务执行成功（`tinynest-20261117T123946Z.sql`），后端二进制与前端产物的 SHA-256 均与构建机一致（后端 `451f4a0c…`，前端 JS `b0b04874…`）。

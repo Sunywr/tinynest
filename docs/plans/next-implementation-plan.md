@@ -13,7 +13,7 @@
 ## 本轮可直接实施
 
 - [x] **个人资料与账号管理。** SQLite 012 和 MySQL 004 增加头像、生日、发薪日和邮箱。各角色可维护自己的资料和密码，管理员可编辑本家庭成员资料、重置密码或删除登录账号。删除账号保留成员档案和历史账务。API 与页面入口均已接通。
-  - 本地回归覆盖 Go 全量测试、Web 类型检查与构建、80 项 Chromium E2E、SQLite 011 → 012 带数据升级及备份恢复，以及隔离 MySQL 8 的 23 项 TCP 回归与备份恢复。Windows 上的 ThreadSanitizer 无法分配所需地址空间。本候选的 Go race、Linux Unix socket CI 和生产验收仍为 `UNVERIFIED`。
+  - 本地回归覆盖 Go 全量测试、Web 类型检查与构建、80 项 Chromium E2E、SQLite 011 → 012 带数据升级及备份恢复，以及隔离 MySQL 8 的 23 项 TCP 回归与备份恢复。候选 `f48523c` 的 Linux CI 已通过 Go race、MySQL Unix socket 与备份恢复。生产已上线并通过冒烟，见 [发布候选复核](../reviews/rc-readiness.md)。
 
 - [x] **刷新后恢复当前菜单。** 会话有效时从当前浏览器历史记录恢复所选菜单，重新登录从首页开始。
 
