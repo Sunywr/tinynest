@@ -1005,7 +1005,7 @@ test('40 投资表单内联新建投资标的并保留已填成交金额', async
   await expect(tradePanel.getByLabel('成交金额（元）')).toHaveValue('100')
 })
 
-test('流水可从列表复制和修改', async ({ page }) => {
+test('流水可从列表复制、修改和删除', async ({ page }) => {
   await ensureLogin(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('button', { name: '记账流水' }).click()
@@ -1037,9 +1037,12 @@ test('流水可从列表复制和修改', async ({ page }) => {
   await form.locator('.tx-note summary').click()
   await form.getByRole('button', { name: '保存修改' }).click()
   await expect(copy).toContainText('已更正')
-  await expect(rows.getByRole('button', { name: '删除', exact: true })).toHaveCount(0)
 
   const corrected = rows.filter({ hasText: 'E2E 流水更正' })
   await expect(corrected).toContainText('23.45')
+  await corrected.getByRole('button', { name: '删除', exact: true }).click()
+  await page.locator('.confirm-card').getByRole('button', { name: '删除流水' }).click()
+  await expect(corrected).toHaveCount(0)
+  await expect(copy).toContainText('已更正')
   await expect(original).toContainText('已入账')
 })

@@ -871,6 +871,14 @@ async function openTransactionDraft(id: string, replace: boolean) {
   }
 }
 
+function deleteTransaction(id: string) {
+  requestConfirm({
+    title: '删除流水', message: '删除后，这笔流水将从列表移除，相关账户和账单金额会同步更新。',
+    confirmText: '删除流水', tone: 'danger',
+    onConfirm: () => { if (!loading.value) void run(() => api.deleteTransaction(id), '流水已删除') },
+  })
+}
+
 function createTx() {
   if (loading.value || memberResolving.value) return
   const amount = minor(f.tx.amount)
@@ -1436,6 +1444,7 @@ const metricCards = computed(() => {
                 <button v-if="canCopyTransaction(t)" type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, false)">复制</button>
                 <template v-if="t.status === 'posted' && canCopyTransaction(t)">
                   <button type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, true)">修改</button>
+                  <button type="button" class="ghost" :disabled="loading" @click="deleteTransaction(t.id)">删除</button>
                 </template>
                 <button v-if="t.status === 'posted' && t.type === 'expense'" type="button" class="ghost" :disabled="loading" @click="refund(t.id)">退款</button>
               </div>

@@ -90,6 +90,7 @@ export const api = {
   replaceTransaction: (id: string, body: any, key: string) =>
     post(`/transactions/${encodeURIComponent(id)}/replace`, body, { 'Idempotency-Key': key }),
   transaction: (id: string) => get(`/transactions/${id}`),
+  deleteTransaction: (id: string) => del(`/transactions/${encodeURIComponent(id)}`),
   createRefund: (body: any) => post('/refunds', body),
   refunds: (txId: string) => get(`/refunds/by-transaction/${txId}`),
 

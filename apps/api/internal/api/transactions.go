@@ -18,6 +18,7 @@ func (a *API) registerTransactions(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/transactions", a.handleListTransactions)
 	a.route(mux, "POST /api/v1/transactions", a.handleCreateTransaction)
 	a.route(mux, "GET /api/v1/transactions/{id}", a.handleGetTransaction)
+	a.route(mux, "DELETE /api/v1/transactions/{id}", a.handleDeleteTransaction)
 	a.route(mux, "POST /api/v1/transactions/{id}/replace", a.handleCreateTransaction)
 	a.route(mux, "POST /api/v1/refunds", a.handleCreateRefund)
 	a.route(mux, "GET /api/v1/refunds/by-transaction/{id}", a.handleListRefunds)
@@ -106,7 +107,7 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if replaceID != "" {
-			if err := a.reverseTransaction(tx, r, p, replaceID, newID("je")); err != nil {
+			if err := a.reverseTransaction(tx, r, p, replaceID, newID("je"), false); err != nil {
 				return err
 			}
 		}
@@ -247,6 +248,10 @@ func nullableKey(k string) any {
 	return k
 }
 
+const visibleTransaction = ` AND NOT EXISTS (
+	SELECT 1 FROM audit_logs a WHERE a.household_id=transactions.household_id
+	  AND a.entity='transaction' AND a.action='delete_transaction' AND a.entity_id=transactions.id)`
+
 func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	q := r.URL.Query()
@@ -265,7 +270,7 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 		SELECT id,type,amount_minor,occurred_on,account_id,to_account_id,credit_instrument_id,
 		       merchant,note,status,entry_id
 		FROM transactions WHERE household_id=?
-		  AND (?='' OR occurred_on>=?) AND (?='' OR occurred_on<=?) AND (?='' OR type=?)`
+		  AND (?='' OR occurred_on>=?) AND (?='' OR occurred_on<=?) AND (?='' OR type=?)` + visibleTransaction
 	args := []any{p.HouseholdID, from, from, to, to, txType, txType}
 	ctx := r.Context()
 	if cursor := q.Get("cursor"); cursor != "" {
@@ -357,7 +362,7 @@ func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
 	var acc, toAcc, instrument, member, merchant, note *string
 	var currency string
 	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT type,amount_minor,occurred_on,status,entry_id,account_id,to_account_id,credit_instrument_id,member_id,merchant,note,currency FROM transactions WHERE id=? AND household_id=?`,
+		`SELECT type,amount_minor,occurred_on,status,entry_id,account_id,to_account_id,credit_instrument_id,member_id,merchant,note,currency FROM transactions WHERE id=? AND household_id=?`+visibleTransaction,
 		id, p.HouseholdID).Scan(&typ, &amount, &occurred, &status, &entryID, &acc, &toAcc, &instrument, &member, &merchant, &note, &currency)
 	if err != nil {
 		writeErr(w, 404, "not_found", "流水不存在")
@@ -421,15 +426,41 @@ func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+var errTransactionNotPosted = errors.New("只有本家庭已入账流水可以删除或修改")
+
+func (a *API) handleDeleteTransaction(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	id := r.PathValue("id")
+	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		err := a.reverseTransaction(tx, r, p, id, newID("je"), true)
+		if !errors.Is(err, errTransactionNotPosted) {
+			return err
+		}
+		var deleted int
+		return tx.QueryRowContext(r.Context(), `SELECT 1 FROM audit_logs
+			WHERE household_id=? AND entity='transaction' AND action='delete_transaction' AND entity_id=? LIMIT 1`,
+			p.HouseholdID, id).Scan(&deleted)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not_found", "未找到可删除的流水")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // reverseTransaction compensates the journal and credit bill in the caller's transaction.
-func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, revID string) error {
+func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, revID string, deleting bool) error {
 	res, err := tx.ExecContext(r.Context(),
 		`UPDATE transactions SET status='reversed' WHERE id=? AND household_id=? AND status='posted'`, id, p.HouseholdID)
 	if err != nil {
 		return err
 	}
 	if n, err := res.RowsAffected(); err != nil || n != 1 {
-		return errors.New("只有本家庭已入账流水可以冲正")
+		return errTransactionNotPosted
 	}
 	for _, query := range []string{
 		`SELECT id FROM refunds WHERE transaction_id=? AND household_id=? LIMIT 1`,
@@ -458,7 +489,11 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 	if err != nil {
 		return err
 	}
-	rev, err := orig.Reverse(revID, a.businessDate())
+	date, action := a.businessDate(), "reverse_transaction"
+	if deleting {
+		date, action = orig.OccurredOn, "delete_transaction"
+	}
+	rev, err := orig.Reverse(revID, date)
 	if err != nil {
 		return err
 	}
@@ -507,7 +542,7 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 		`UPDATE journal_entries SET status='reversed' WHERE id=? AND household_id=?`, entryID, p.HouseholdID); err != nil {
 		return err
 	}
-	return audit(r.Context(), tx, p, "reverse_transaction", "transaction", id, revID)
+	return audit(r.Context(), tx, p, action, "transaction", id, revID)
 }
 
 func (a *API) handleCreateRefund(w http.ResponseWriter, r *http.Request) {

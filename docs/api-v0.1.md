@@ -84,13 +84,14 @@
 |---|---|---|---|
 | GET/POST | `/transactions` | IMPLEMENTED | 流水筛选与游标分页 / 支出·收入·转账（`splits[]` 合计=总额） |
 | GET | `/transactions/{id}` | IMPLEMENTED | 详情（业务 + 分录影响） |
+| DELETE | `/transactions/{id}` | IMPLEMENTED | 删除普通流水，保留账务审计并撤销原日影响，重复删除返回 204 |
 | POST | `/transactions/{id}/replace` | IMPLEMENTED | 同一事务内冲正原流水并入账更正记录，请求体同新建 |
 | POST | `/refunds` | IMPLEMENTED | 全额/部分退款、超额拒绝 |
 | GET | `/refunds/by-transaction/{id}` | IMPLEMENTED | 累计退款、净支出、剩余可退 |
 
 `GET /transactions` 接受 `from`、`to`（含边界，YYYY-MM-DD）、`type`（expense、income、transfer）及 `limit`（1–200，默认 200）。响应含 `items`、本页条数 `total` 和 `next_cursor`。下一页保持原筛选条件，将 `next_cursor` 传为 `cursor`；值为 `null` 时已到末页。流水按业务日期、创建时间与 ID 降序排列。
 
-流水详情同时返回付款方式、账户、信用工具、成员、商户、备注及 `splits[]`，用于预填复制或修改。复制提交时走新建接口，默认使用上海当日。更正后的原记录仍以 `reversed` 表示，并在界面显示为「已更正」。修改支持 `Idempotency-Key`，重复提交同一流水的同一键会返回已创建的记录。已有退款、合同关联，或原信用账单已还款或已转分期时，修改会拒绝并保留原记录。
+流水详情同时返回付款方式、账户、信用工具、成员、商户、备注及 `splits[]`，用于预填复制或修改。复制提交时走新建接口，默认使用上海当日。更正后的原记录仍以 `reversed` 表示，并在界面显示为「已更正」。修改支持 `Idempotency-Key`，重复提交同一流水的同一键会返回已创建的记录。已有退款、合同关联，或原信用账单已还款或已转分期时，删除和修改会拒绝并保留原记录。
 
 `POST /transactions` 请求示例（信用消费 1000.00，拆两行）：
 

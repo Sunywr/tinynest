@@ -58,6 +58,22 @@ func TestReplaceTransaction(t *testing.T) {
 		t.Fatalf("retired endpoint returned %d", code)
 	}
 	assertBalance(750)
+	deleted := list + "/" + replacement["id"].(string)
+	for i := 0; i < 2; i++ {
+		if code, _ := c.do("DELETE", deleted, nil); code != 204 {
+			t.Fatalf("delete attempt %d returned %d", i+1, code)
+		}
+	}
+	assertBalance(1000)
+	if code, _ := c.do("GET", deleted, nil); code != 404 {
+		t.Fatalf("deleted transaction detail returned %d", code)
+	}
+	items := c.mustOK("GET", list, nil)["items"].([]any)
+	for _, item := range items {
+		if item.(map[string]any)["id"] == replacement["id"] {
+			t.Fatal("deleted transaction still listed")
+		}
+	}
 }
 
 func TestCreditTransactionCorrection(t *testing.T) {
@@ -87,6 +103,11 @@ func TestCreditTransactionCorrection(t *testing.T) {
 			t.Fatalf("cycle %s: due = %d, want %d, error = %v", cycle, got, want, err)
 		}
 	}
+	deletable := c.mustOK("POST", list, body(150, "2026-10-12"))["id"].(string)
+	assertDue("2026-10-01", 150)
+	if code, _ := c.do("DELETE", list+"/"+deletable, nil); code != 204 {
+		t.Fatalf("deleting an unpaid credit transaction returned %d", code)
+	}
 	assertDue("2026-10-01", 0)
 	assertDue("2026-11-01", 75)
 	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{
@@ -101,6 +122,9 @@ func TestCreditTransactionCorrection(t *testing.T) {
 	})
 	if code, _ := c.do("POST", list+"/"+replacement+"/replace", body(50, "2026-11-12")); code != 400 {
 		t.Fatalf("correcting a transaction with a paid statement returned %d", code)
+	}
+	if code, _ := c.do("DELETE", list+"/"+replacement, nil); code != 409 {
+		t.Fatalf("deleting a transaction with a paid statement returned %d", code)
 	}
 	assertDue("2026-11-01", 75)
 	if got := c.mustOK("GET", list+"/"+replacement, nil)["status"]; got != "posted" {
@@ -145,7 +169,7 @@ func TestRestoreStandaloneTransactionReversals(t *testing.T) {
 	r := httptest.NewRequest("POST", endpoint, nil)
 	for _, id := range []string{cashID, creditID} {
 		if err := database.WithTx(r.Context(), func(tx *sql.Tx) error {
-			return a.reverseTransaction(tx, r, principal, id, newID("je"))
+			return a.reverseTransaction(tx, r, principal, id, newID("je"), false)
 		}); err != nil {
 			t.Fatal(err)
 		}
