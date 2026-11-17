@@ -295,7 +295,7 @@ func (a *API) handleListTrades(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.DB.QueryContext(r.Context(),
 		`SELECT t.id,t.asset_id,t.side,t.trade_on,t.quantity_scaled,t.gross_minor,t.fee_minor,t.net_minor,t.realized_pnl_minor,
-		         a.code,a.name,e.status,`+hasLaterInvestmentTrade+`
+		         a.code,a.name,e.status
 		 FROM investment_trades t
 		 JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
 		 JOIN investment_assets a ON a.id=t.asset_id AND a.household_id=t.household_id
@@ -308,9 +308,8 @@ func (a *API) handleListTrades(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id, asset, side, on, code, name, status string
-		var hasLater bool
 		var qty, gross, fee, net, realized int64
-		if err := rows.Scan(&id, &asset, &side, &on, &qty, &gross, &fee, &net, &realized, &code, &name, &status, &hasLater); err != nil {
+		if err := rows.Scan(&id, &asset, &side, &on, &qty, &gross, &fee, &net, &realized, &code, &name, &status); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -318,7 +317,7 @@ func (a *API) handleListTrades(w http.ResponseWriter, r *http.Request) {
 			"id": id, "asset_id": asset, "side": side, "trade_on": on,
 			"quantity_scaled": qty, "gross_minor": gross, "fee_minor": fee,
 			"net_minor": net, "realized_pnl_minor": realized,
-			"code": code, "name": name, "status": status, "can_reverse": status == ledger.StatusPosted && !hasLater,
+			"code": code, "name": name, "status": status, "can_reverse": status == ledger.StatusPosted,
 		})
 	}
 	if err := rows.Err(); err != nil {

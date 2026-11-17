@@ -160,7 +160,7 @@
 |---|---|---|---|
 | GET/POST | `/investments/assets` | IMPLEMENTED | 股票/ETF/理财/自定义资产 |
 | GET/POST | `/investments/trades` | IMPLEMENTED | 买入/卖出（移动加权平均成本）。列表保留冲正状态，`?order=posted` 按入账顺序查看最近 200 笔 |
-| POST | `/investments/trades/{id}/reverse` | IMPLEMENTED | 按原成交日期冲正该资产最后入账且顺序明确的成交，恢复资金、持仓成本与已实现收益。重复提交返回同一冲正分录 |
+| POST | `/investments/trades/{id}/reverse` | IMPLEMENTED | 冲正该资产任一笔已入账成交（按原成交日期生成抵销分录）。撤销早期成交时按入账顺序重放其余成交，重算其后卖出的移动加权成本与已实现收益，并为每笔成本变化的卖出补记联动更正分录（`invest_cost_correction`，backdate 至被更正卖出日）；重放将超卖或入账顺序不明确时返回 409。重复提交返回同一冲正分录 |
 | GET | `/investments/positions` | IMPLEMENTED | 数量/总成本/移动均价/已实现·未实现收益/净分红/参考收益率；口径第 9 项已确认为「总收益 ÷ 累计买入成本」，**不得标为年化** |
 | POST | `/investments/dividends` | IMPLEMENTED | `tax_minor: null` = 未填写（不默认 0） |
 | GET | `/investments/dividends` | IMPLEMENTED | 分红历史与年度汇总，支持 `?asset_id=` / `?from=` / `?to=`。历史含分录状态，汇总仅纳入有效分红，未知税额不按 0 处理 |
