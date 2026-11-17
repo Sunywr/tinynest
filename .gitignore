@@ -19,6 +19,7 @@
 **/.vite/
 *.log
 *.tsbuildinfo
+apps/api/tinynest-api
 .DS_Store
 .idea/
 .vscode/
