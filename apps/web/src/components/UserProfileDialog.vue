@@ -94,7 +94,7 @@ function savePassword() {
 </script>
 
 <template>
-  <dialog ref="dialog" class="profile-dialog" aria-labelledby="profile-heading" @cancel.prevent="!busy && emit('close')">
+  <dialog ref="dialog" class="profile-dialog" aria-labelledby="profile-heading" @cancel.self.prevent="!busy && emit('close')">
     <div class="profile-heading">
       <h2 id="profile-heading">{{ passwordOnly ? (userId ? '重置密码' : '修改密码') : (userId ? '编辑用户资料' : '个人资料') }}</h2>
       <button class="ghost" type="button" :disabled="busy" @click="emit('close')">关闭</button>
@@ -134,6 +134,10 @@ function savePassword() {
 .profile-fields label{color:var(--text);font-size:14px;font-weight:600;}
 .profile-fields input{width:100%;min-width:0;font:inherit;font-size:16px;font-weight:400;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:11px;padding:10px 12px;}
 .profile-fields input:focus-visible{outline:3px solid var(--primary);outline-offset:1px;}
+.profile-fields input[type="file"]{padding:5px;color:var(--muted);font-size:14px;}
+.profile-fields input::file-selector-button{min-height:44px;margin-inline-end:10px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--soft);color:var(--primary-deep);font:inherit;font-weight:600;cursor:pointer;}
+.profile-fields input:enabled::file-selector-button:hover{background:var(--primary-pale);}
+.profile-fields input:disabled::file-selector-button{opacity:.55;cursor:default;}
 .primary,.ghost{min-height:44px;font-size:14px;border-radius:12px;padding:8px 12px;}
 .primary{border:0;background:var(--primary);color:#fff;font-weight:700;}
 .ghost{border:1px solid var(--border);background:var(--soft);color:var(--primary-deep);}
