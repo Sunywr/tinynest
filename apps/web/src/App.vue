@@ -1397,7 +1397,7 @@ async function openTradeHistory() {
 }
 
 function reverseTrade(trade: { id: string; name: string; trade_on: string }) {
-  const reason = window.prompt(`撤销「${trade.name}」于 ${trade.trade_on} 的成交。请填写原因：`)?.trim()
+  const reason = window.prompt(`撤销「${trade.name}」于 ${trade.trade_on} 的成交，其后成交的成本与收益会自动重算。请填写原因：`)?.trim()
   if (!reason) return
   if ([...reason].length > 200) return toast('撤销原因最多 200 个字符')
   return run(() => api.reverseTrade(trade.id, reason), '投资成交已撤销')
@@ -2195,7 +2195,7 @@ const metricCards = computed(() => {
           </div>
           <section v-if="panel === 'tradeHistory'" class="panel">
             <div class="paneltitle">
-              <div><h2>成交记录</h2><span class="subinfo">每项资产可撤销最后入账的一笔成交</span></div>
+              <div><h2>成交记录</h2><span class="subinfo">任一笔成交均可撤销；撤销早期成交后，其后成交的成本与收益会自动重算</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button>
             </div>
             <div v-if="tradeHistory?.length" class="ranklist">

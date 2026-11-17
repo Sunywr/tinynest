@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -14,17 +15,10 @@ import (
 	"tinynest/api/internal/money"
 )
 
-// Cost follows posting order, even for backdated trades. Equal timestamps
-// cannot reliably establish an order for historical rows.
-const hasLaterInvestmentTrade = `EXISTS(
-	SELECT 1 FROM investment_trades newer
-	JOIN journal_entries j ON j.id=newer.entry_id AND j.household_id=newer.household_id
-	WHERE newer.household_id=t.household_id AND newer.asset_id=t.asset_id
-	AND newer.id<>t.id AND newer.created_at>=t.created_at AND j.status='posted'
-)`
-
-var errTradeOrder = errors.New("只能撤销同一资产最后入账且顺序明确的成交")
-var errTradePosition = errors.New("成交快照与当前持仓不一致")
+var (
+	errTradeOrder  = errors.New("同一资产存在入账顺序相同的成交，无法安全重算")
+	errTradeReplay = errors.New("撤销后其后成交将超出持仓，请先撤销靠后的成交")
+)
 
 func (a *API) handleReverseTrade(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
@@ -51,67 +45,107 @@ func (a *API) handleReverseTrade(w http.ResponseWriter, r *http.Request) {
 			if err := a.lockInvestmentAsset(r, tx, p.HouseholdID, assetID); err != nil {
 				return err
 			}
-			var entryID, side, status string
-			var tradeQty, net, costBefore, costAfter, realizedAfter int64
-			var hasLater bool
+			var entryID, status string
 			if err := tx.QueryRowContext(ctx, `
-				SELECT t.entry_id,t.side,e.status,t.quantity_scaled,t.net_minor,
-				       t.position_cost_before_minor,t.position_cost_after_minor,t.realized_pnl_minor,`+hasLaterInvestmentTrade+`
-				FROM investment_trades t JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
+				SELECT t.entry_id, e.status FROM investment_trades t
+				JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
 				WHERE t.household_id=? AND t.asset_id=? AND t.id=?`,
-				p.HouseholdID, assetID, id).Scan(&entryID, &side, &status, &tradeQty, &net,
-				&costBefore, &costAfter, &realizedAfter, &hasLater); err != nil {
+				p.HouseholdID, assetID, id).Scan(&entryID, &status); err != nil {
 				return err
 			}
 			if status == ledger.StatusReversed {
+				// Idempotent replay: report the existing reversal without re-writing.
 				return tx.QueryRowContext(ctx, `
 					SELECT id FROM journal_entries WHERE household_id=? AND reversal_of=?`,
 					p.HouseholdID, entryID).Scan(&reversalID)
-			}
-			if hasLater {
-				return errTradeOrder
-			}
-			var qty, cost, realized int64
-			var subject string
-			if err := tx.QueryRowContext(ctx, `
-				SELECT pos.quantity_scaled,pos.total_cost_minor,pos.realized_pnl_minor,a.ledger_code
-				FROM investment_positions pos JOIN investment_assets a ON a.id=pos.asset_id
-				WHERE a.household_id=? AND a.id=?`, p.HouseholdID, assetID).Scan(&qty, &cost, &realized, &subject); err != nil {
-				return err
 			}
 			original, err := loadEntry(tx, r, entryID)
 			if err != nil {
 				return err
 			}
-			if original.BizID != id || cost != costAfter || realized != realizedAfter ||
-				original.Delta(subject) != money.Minor(costAfter-costBefore) {
-				return errTradePosition
-			}
-			pos := invest.NewPosition(money.QuantityScale)
-			pos.TotalCostMinor, pos.RealizedPnLMinor = money.Minor(costBefore), money.Minor(realized)
-			if side == "buy" {
-				if qty < tradeQty || original.BizType != ledger.BizInvestBuy {
-					return errTradePosition
-				}
-				pos.QtyScaled = qty - tradeQty
-			} else {
-				if original.BizType != ledger.BizInvestSell {
-					return errTradePosition
-				}
-				restoredQty, err := money.Add(money.Minor(qty), money.Minor(tradeQty))
-				if err != nil {
-					return err
-				}
-				pos.QtyScaled = int64(restoredQty)
-				pos.RealizedPnLMinor, err = money.Sub(pos.RealizedPnLMinor, money.Minor(net-(costBefore-costAfter)))
-				if err != nil {
-					return err
-				}
-			}
-			avg, err := pos.AvgCostMinorPerUnit()
+
+			// Reversing ANY posted trade — the last one or an early one — replays the
+			// remaining posted trades in posting order. The replay restates each later
+			// sell's moving weighted cost and realised P&L; a balancing correction
+			// entry per restated sell keeps the journal agreeing with the rebuilt
+			// position, because later trades' cash movements stay historical fact.
+			rows, err := tx.QueryContext(ctx, `
+				SELECT t.id,t.side,t.trade_on,t.created_at,t.quantity_scaled,t.net_minor,
+				       t.position_cost_before_minor-t.position_cost_after_minor
+				FROM investment_trades t
+				JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
+				WHERE t.household_id=? AND t.asset_id=? AND e.status='posted'
+				ORDER BY t.created_at ASC, t.id ASC`, p.HouseholdID, assetID)
 			if err != nil {
 				return err
 			}
+			type tradeSnap struct {
+				id        string
+				side      string
+				tradeOn   string
+				createdAt string
+				qty       int64
+				net       int64
+				carryOut  int64
+			}
+			var trades []tradeSnap
+			for rows.Next() {
+				var tr tradeSnap
+				if err := rows.Scan(&tr.id, &tr.side, &tr.tradeOn, &tr.createdAt, &tr.qty, &tr.net, &tr.carryOut); err != nil {
+					rows.Close()
+					return err
+				}
+				trades = append(trades, tr)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for i := 1; i < len(trades); i++ {
+				if trades[i].createdAt == trades[i-1].createdAt {
+					return errTradeOrder
+				}
+			}
+			pos := invest.NewPosition(money.QuantityScale)
+			type restate struct {
+				tradeID     string
+				tradeOn     string
+				side        string
+				net         int64
+				oldCarryOut int64
+				newCarryOut int64
+				costBefore  int64
+				costAfter   int64
+				realized    int64
+			}
+			var restated []restate
+			for _, tr := range trades {
+				if tr.id == id {
+					continue // the trade being reversed drops out of the replay
+				}
+				before := int64(pos.TotalCostMinor)
+				if tr.side == "buy" {
+					// For a buy, net_minor = gross + fee = capitalised cost.
+					if err := pos.Buy(tr.qty, money.Minor(tr.net)); err != nil {
+						return err
+					}
+				} else {
+					if _, _, err := pos.Sell(tr.qty, money.Minor(tr.net)); err != nil {
+						if errors.Is(err, invest.ErrInsufficientQty) {
+							return errTradeReplay
+						}
+						return err
+					}
+				}
+				restated = append(restated, restate{
+					tradeID: tr.id, tradeOn: tr.tradeOn, side: tr.side, net: tr.net,
+					oldCarryOut: tr.carryOut, newCarryOut: before - int64(pos.TotalCostMinor),
+					costBefore: before, costAfter: int64(pos.TotalCostMinor),
+					realized:   int64(pos.RealizedPnLMinor),
+				})
+			}
+
+			// Reverse the target entry, backdated to its original business date.
 			reversalID = newID("je")
 			reversal, err := original.Reverse(reversalID, original.OccurredOn)
 			if err != nil {
@@ -124,13 +158,81 @@ func (a *API) handleReverseTrade(w http.ResponseWriter, r *http.Request) {
 				p.HouseholdID, entryID); err != nil {
 				return err
 			}
+			var holdSubject string
+			if err := tx.QueryRowContext(ctx,
+				`SELECT ledger_code FROM investment_assets WHERE household_id=? AND id=?`,
+				p.HouseholdID, assetID).Scan(&holdSubject); err != nil {
+				return err
+			}
+
+			// Correction chain: one balancing entry per later sell whose carried cost
+			// moved. Each correction is backdated to the sell it restates and carries
+			// the corrected trade's id as biz_id, so the chain stays queryable.
+			type correction struct {
+				TradeID    string `json:"trade_id"`
+				EntryID    string `json:"correction_entry_id"`
+				DeltaMinor int64  `json:"delta_minor"`
+			}
+			var corrections []correction
+			for _, rs := range restated {
+				if rs.side != "sell" || rs.newCarryOut == rs.oldCarryOut {
+					continue
+				}
+				delta := rs.newCarryOut - rs.oldCarryOut
+				oldRealized := rs.net - rs.oldCarryOut
+				newRealized := rs.net - rs.newCarryOut
+				memo := fmt.Sprintf("撤销成交 %s 联动更正成本结转", id)
+				lines := make([]ledger.Line, 0, 4)
+				if delta > 0 {
+					lines = append(lines, ledger.Line{Account: holdSubject, Credit: money.Minor(delta), Memo: memo})
+				} else {
+					lines = append(lines, ledger.Line{Account: holdSubject, Debit: money.Minor(-delta), Memo: memo})
+				}
+				if oldRealized > 0 {
+					lines = append(lines, ledger.Line{Account: ledger.SubjRealizedGain, Debit: money.Minor(oldRealized), Memo: memo})
+				} else if oldRealized < 0 {
+					lines = append(lines, ledger.Line{Account: ledger.SubjRealizedLoss, Credit: money.Minor(-oldRealized), Memo: memo})
+				}
+				if newRealized > 0 {
+					lines = append(lines, ledger.Line{Account: ledger.SubjRealizedGain, Credit: money.Minor(newRealized), Memo: memo})
+				} else if newRealized < 0 {
+					lines = append(lines, ledger.Line{Account: ledger.SubjRealizedLoss, Debit: money.Minor(-newRealized), Memo: memo})
+				}
+				corrID := newID("je")
+				entry, err := ledger.New(corrID, "invest_cost_correction", rs.tradeID, rs.tradeOn, lines...)
+				if err != nil {
+					return err
+				}
+				if err := db.SaveEntry(ctx, tx, entry, p.HouseholdID, "", p.Username); err != nil {
+					return err
+				}
+				corrections = append(corrections, correction{TradeID: rs.tradeID, EntryID: corrID, DeltaMinor: delta})
+			}
+
+			// Restate every replayed trade's recorded snapshots so the chain stays
+			// contiguous: each trade's cost_before matches the previous cost_after.
+			for _, rs := range restated {
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE investment_trades SET position_cost_before_minor=?,position_cost_after_minor=?,realized_pnl_minor=?
+					WHERE household_id=? AND id=?`,
+					rs.costBefore, rs.costAfter, rs.realized, p.HouseholdID, rs.tradeID); err != nil {
+					return err
+				}
+			}
+
+			avg, err := pos.AvgCostMinorPerUnit()
+			if err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE investment_positions SET quantity_scaled=?,total_cost_minor=?,avg_cost_minor=?,realized_pnl_minor=?
 				WHERE asset_id IN (SELECT id FROM investment_assets WHERE household_id=? AND id=?)`,
-				pos.QtyScaled, pos.TotalCostMinor, avg, pos.RealizedPnLMinor, p.HouseholdID, assetID); err != nil {
+				pos.QtyScaled, int64(pos.TotalCostMinor), int64(avg), int64(pos.RealizedPnLMinor), p.HouseholdID, assetID); err != nil {
 				return err
 			}
-			payload, err := json.Marshal(in)
+			payload, err := json.Marshal(map[string]any{
+				"reason": in.Reason, "reversal_entry_id": reversalID, "corrections": corrections,
+			})
 			if err != nil {
 				return err
 			}
@@ -140,7 +242,7 @@ func (a *API) handleReverseTrade(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeErr(w, 404, "not_found", "投资成交不存在")
-	case errors.Is(err, errTradeOrder), errors.Is(err, errTradePosition):
+	case errors.Is(err, errTradeOrder), errors.Is(err, errTradeReplay):
 		writeErr(w, 409, "trade_not_reversible", err.Error())
 	case err != nil:
 		internalErr(w, err)
