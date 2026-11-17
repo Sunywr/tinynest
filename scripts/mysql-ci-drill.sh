@@ -70,6 +70,10 @@ CREATE DATABASE tinynest_reverse_trade;
 CREATE DATABASE tinynest_archive_statement;
 CREATE DATABASE tinynest_reverse_installment_payment;
 CREATE DATABASE tinynest_reverse_installment_refund;
+CREATE DATABASE tinynest_user_profile;
+CREATE DATABASE tinynest_viewer_profile;
+CREATE DATABASE tinynest_admin_user_profile;
+CREATE DATABASE tinynest_restore_transactions;
 CREATE DATABASE tinynest_restore;
 CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';
 GRANT ALL ON tinynest_drill.* TO 'tinynest_drill'@'localhost';
@@ -91,6 +95,10 @@ GRANT ALL ON tinynest_reverse_trade.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_archive_statement.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_reverse_installment_payment.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_reverse_installment_refund.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_user_profile.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_viewer_profile.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_admin_user_profile.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_restore_transactions.* TO 'tinynest_drill'@'localhost';
 SQL
 
 stage='check the host socket'
@@ -126,6 +134,10 @@ run_ledger_test tinynest_reverse_trade TestReverseLatestInvestmentTrade
 run_ledger_test tinynest_archive_statement TestArchiveSettledCreditStatement
 run_ledger_test tinynest_reverse_installment_payment TestReverseInstallmentPayment
 run_ledger_test tinynest_reverse_installment_refund TestReverseInstallmentRefund
+run_ledger_test tinynest_user_profile TestUserSelfServiceProfileAndPassword
+run_ledger_test tinynest_viewer_profile TestViewerSelfServiceAllowed
+run_ledger_test tinynest_admin_user_profile TestAdminManagesUserProfilesAndDeletion
+run_ledger_test tinynest_restore_transactions TestRestoreStandaloneTransactionReversals
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)

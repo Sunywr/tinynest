@@ -63,6 +63,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerV011(mux)
 	a.registerV012(mux)
 	a.registerV013(mux)
+	a.registerV014(mux)
 }
 
 // --- bootstrap & identity ---------------------------------------------------
@@ -210,10 +211,23 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := a.now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)
-	if _, err := a.DB.ExecContext(r.Context(),
-		`INSERT INTO sessions(id,user_id,token_hash,csrf_token,expires_at) VALUES(?,?,?,?,?)`,
-		newID("sess"), userID, tokenHash, csrfRaw, expires); err != nil {
+	// Recheck credentials at insertion so a reset or deletion during password
+	// verification cannot leave a new session authenticated by the old password.
+	result, err := a.DB.ExecContext(r.Context(),
+		`INSERT INTO sessions(id,user_id,token_hash,csrf_token,expires_at)
+		 SELECT ?,id,?,?,? FROM users WHERE id=? AND password_hash=? AND status='active'`,
+		newID("sess"), tokenHash, csrfRaw, expires, userID, hash)
+	if err != nil {
 		internalErr(w, err)
+		return
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	if count == 0 {
+		writeErr(w, 401, "unauthorized", "用户名或密码错误")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -236,11 +250,31 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]string{
+	var email, avatar, birthday sql.NullString
+	var payday sql.NullInt64
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT email,avatar,birthday,payday FROM users WHERE id=? AND household_id=?`,
+		p.UserID, p.HouseholdID).Scan(&email, &avatar, &birthday, &payday); err != nil {
+		internalErr(w, err)
+		return
+	}
+	out := map[string]any{
 		"member_id": memberID, "member_name": memberName,
 		"user_id": p.UserID, "household_id": p.HouseholdID,
 		"username": p.Username, "csrf_token": p.CSRFToken, "role": p.Role,
-	})
+	}
+	if email.Valid {
+		out["email"] = email.String
+	}
+	if avatar.Valid {
+		out["avatar"] = avatar.String
+	}
+	if birthday.Valid {
+		out["birthday"] = birthday.String
+	}
+	if payday.Valid {
+		out["payday"] = payday.Int64
+	}
+	writeJSON(w, 200, out)
 }
 
 func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {

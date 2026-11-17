@@ -51,7 +51,9 @@
 | POST | `/setup` | IMPLEMENTED | 需 `X-Setup-Token`，仅一次 |
 | POST | `/auth/session` | IMPLEMENTED | 登录、建会话；含失败限流 |
 | DELETE | `/auth/session` | IMPLEMENTED | 登出、撤销会话 |
-| GET | `/auth/me` | IMPLEMENTED | 当前用户、角色、household_id 与 csrf_token；已绑定且启用的成员档案返回 member_id 和 member_name，否则为空 |
+| GET | `/auth/me` | IMPLEMENTED | 当前用户、角色、household_id 与 csrf_token；已绑定且启用的成员档案返回 member_id 和 member_name，否则为空。已设置的 avatar、birthday、payday、email 随响应返回 |
+| PATCH | `/auth/me/profile` | IMPLEMENTED | 更新自己的姓名和可选资料，返回 `status` 和 `updated` 字段列表 |
+| POST | `/auth/me/password` | IMPLEMENTED | 提交 `current_password` 和 `new_password` 修改自己的密码，保留既有会话 |
 | POST | `/auth/register` · `/auth/join` | IMPLEMENTED | 注册登录名、凭邀请码申请加入家庭。申请由家庭管理员审批 |
 
 ### `/household` · `/categories` · `/projects`（S1）
@@ -196,6 +198,9 @@
 | DELETE | `/admin/invitations/{id}` | IMPLEMENTED | 撤销邀请及关联的待审批申请 |
 | POST | `/admin/join-applications/{id}` · `/admin/users/{id}/disable` | IMPLEMENTED | 审批加入申请、停用成员账号并撤销会话 |
 | PATCH | `/admin/users/{id}/role` | IMPLEMENTED | 更改启用成员的记账权限 |
+| PATCH | `/admin/users/{id}/profile` | IMPLEMENTED | 编辑本家庭成员或只读账号资料，返回 `status` 和 `updated` |
+| POST | `/admin/users/{id}/password` | IMPLEMENTED | 提交 `new_password` 并撤销目标账号全部会话 |
+| DELETE | `/admin/users/{id}` | IMPLEMENTED | 删除本家庭成员或只读账号及其会话，保留成员档案、历史账务和审计 |
 | GET / POST | `/admin/migrations` · `/admin/backup` | PLANNED | 迁移就绪由 `/readyz` 验证，具体版本和备份从部署侧数据库及备份任务核对 |
 
 ## 3. 与 Phase 0 的兼容边界
@@ -210,4 +215,6 @@
 
 ### 家庭账号角色
 
-管理员可通过 `PATCH /admin/users/{id}/role` 将本家庭的启用成员设为 `member` 或 `viewer`。角色在每次请求时读取，已有会话随下一次请求采用新权限。只读成员可查看账本并退出登录，账本写入与邀请码写操作返回 403。管理员角色不通过此接口修改。
+管理员可通过 `PATCH /admin/users/{id}/role` 将本家庭的启用成员设为 `member` 或 `viewer`。角色在每次请求时读取，已有会话随下一次请求采用新权限。只读成员可查看账本、更新自己的资料和密码并退出登录。账本写入与邀请码写操作返回 403。账号管理接口仅接受本家庭的 `member` 或 `viewer` 账号 ID，其他目标返回 404。
+
+资料更新仅处理请求中的字段。姓名 `name` 写入已绑定的成员档案，未绑定时创建档案并绑定。用户名固定。头像最多 8 个字符，生日为 `YYYY-MM-DD` 且介于 1900-01-01 与上海业务日之间，发薪日为 1 至 31，邮箱最多 254 字节。可选字段可提交 `null` 清除，清除后响应省略对应字段。管理员账号列表对本家庭返回同样的可选字段。密码长度为 8 至 256 字节。所有资料及密码写入均要求有效会话和 CSRF。

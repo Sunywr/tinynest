@@ -45,7 +45,7 @@ func (d *DB) IsMySQL() bool { return d.mysql }
 
 func (d *DB) ExpectedVersions() ([]int, error) {
 	if d.mysql {
-		return []int{1, 2, 3}, nil
+		return []int{1, 2, 3, 4}, nil
 	}
 	return EmbeddedVersions()
 }
@@ -72,7 +72,7 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return nil, err
 	}
-	if version > 3 {
+	if version > 4 {
 		return nil, fmt.Errorf("db: unsupported MySQL schema version %d", version)
 	}
 	applied := []int{}
@@ -98,7 +98,11 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 		}
 		applied = append(applied, next)
 	}
-	if version < 3 {
+	var restored int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version=3").Scan(&restored); err != nil {
+		return applied, err
+	}
+	if restored == 0 {
 		body, err := migrationFS.ReadFile("migrations/" + restoreTransactionsMigration)
 		if err != nil {
 			return applied, err
@@ -118,6 +122,29 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 			return applied, err
 		}
 		applied = append(applied, 3)
+	}
+	if version < 4 {
+		body, err := mysqlFS.ReadFile("mysql/004_user_profile.sql")
+		if err != nil {
+			return applied, err
+		}
+		// The ALTER is atomic, but its commit precedes the migration record.
+		var installed int
+		if err := conn.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema=DATABASE() AND table_name='users' AND column_name='payday'
+		`).Scan(&installed); err != nil {
+			return applied, err
+		}
+		if installed == 0 {
+			if _, err := conn.ExecContext(ctx, string(body)); err != nil {
+				return applied, fmt.Errorf("%w: MySQL 004_user_profile.sql: %v", ErrMigration, err)
+			}
+		}
+		if _, err := conn.ExecContext(ctx, "INSERT INTO schema_migrations(version, description) VALUES(4,?)", "004_user_profile.sql"); err != nil {
+			return applied, err
+		}
+		applied = append(applied, 4)
 	}
 
 	return applied, nil

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError } from './services/api'
+import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError, type ManagedUser, type UserProfile } from './services/api'
 
 import AccountIcon from './components/AccountIcon.vue'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
 import DatePicker from './components/DatePicker.vue'
+import UserProfileDialog from './components/UserProfileDialog.vue'
 
 type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
 const nav: { key: View; label: string; glyph: string }[] = [
@@ -25,7 +26,8 @@ const apiStatus = ref('检测中')
 const notice = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
-const users = ref<{ id: string; username: string; role: string; status: string }[]>([])
+const users = ref<ManagedUser[]>([])
+const profileDialog = ref<{ profile: UserProfile; userID?: string; passwordOnly?: boolean } | null>(null)
 const joinMode = ref(false)
 const inviteCode = ref('')
 const joinNotice = ref('')
@@ -321,6 +323,7 @@ function clearPrivateState() {
   transactionDraft.value = null
   ledgerNavigation++
   me.value = null
+  profileDialog.value = null
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
   tradeHistory.value = null; tradeHistoryLoading.value = false
@@ -858,10 +861,45 @@ async function decideApplication(id: string, approve: boolean) {
 
 async function refreshUsers() {
   if (me.value?.role !== 'admin') return
+  const session = me.value
   try {
     const result = await api.users()
-    if (me.value?.role === 'admin') users.value = result.items
+    if (me.value === session) users.value = result.items
   } catch (e) { fail(e) }
+}
+
+async function profileSaved(message: string, profileChanged: boolean) {
+  const editor = profileDialog.value
+  const session = me.value
+  if (!editor || !session) return
+  profileDialog.value = null
+  toast(message)
+  if (!profileChanged) return
+  try {
+    const [current, roster] = await Promise.all([
+      editor.userID ? Promise.resolve(null) : api.me(),
+      api.members(),
+      refreshUsers(),
+    ])
+    if (me.value !== session) return
+    members.value = roster.items
+    if (current) {
+      Object.assign(session, { avatar: undefined, birthday: undefined, payday: undefined, email: undefined }, current)
+    }
+  } catch (e) { fail(e) }
+}
+
+function deleteUser(user: ManagedUser) {
+  requestConfirm({
+    title: '删除成员账号',
+    message: `确定删除「${user.username}」？其会话将退出，成员档案和历史账务会保留。`,
+    tone: 'danger',
+    confirmText: '删除账号',
+    onConfirm: () => void run(async () => {
+      await api.deleteUser(user.id)
+      await refreshUsers()
+    }, '成员账号已删除'),
+  })
 }
 
 async function changeUserRole(id: string, role: 'member' | 'viewer') {
@@ -1573,9 +1611,13 @@ const metricCards = computed(() => {
         <div class="top">
           <span class="crumb">我的小家 / {{ nav.find(n => n.key === view)?.label }}</span>
           <div class="topright">
+            <button class="ghost" @click="profileDialog = { profile: me }">个人资料</button>
+            <button class="ghost" @click="profileDialog = { profile: me, passwordOnly: true }">修改密码</button>
             <button class="ghost" @click="logout()">登出</button>
           </div>
         </div>
+        <UserProfileDialog v-if="profileDialog" :profile="profileDialog.profile" :user-id="profileDialog.userID"
+          :password-only="profileDialog.passwordOnly" @close="profileDialog = null" @saved="profileSaved" />
 
         <!-- 首页 -->
         <template v-if="view === 'home'">
@@ -2356,7 +2398,10 @@ const metricCards = computed(() => {
             <div class="paneltitle"><h2>登录账号</h2></div>
             <div class="ranklist">
               <div v-for="user in users" :key="user.id" class="rankrow">
-                <span>{{ user.username }} · {{ user.role === 'admin' ? '管理员' : user.status === 'disabled' ? '已停用' : user.role === 'viewer' ? '只读' : '成员' }}</span>
+                <span>{{ user.member_name || user.username }}<template v-if="user.member_name && user.member_name !== user.username">（{{ user.username }}）</template> · {{ user.role === 'admin' ? '管理员' : user.status === 'disabled' ? '已停用' : user.role === 'viewer' ? '只读' : '成员' }}</span>
+                <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="profileDialog = { profile: user, userID: user.id }">编辑资料</button>
+                <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="profileDialog = { profile: user, userID: user.id, passwordOnly: true }">重置密码</button>
+                <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="deleteUser(user)">删除账号</button>
                 <button v-if="user.role !== 'admin' && user.status === 'active'" class="ghost" :disabled="loading" @click="changeUserRole(user.id, user.role === 'viewer' ? 'member' : 'viewer')">{{ user.role === 'viewer' ? '允许记账' : '设为只读' }}</button>
                 <button v-if="user.role !== 'admin' && user.status === 'active'" class="ghost" :disabled="loading" @click="disableUser(user.id, user.username)">停用</button>
               </div>
@@ -2541,6 +2586,7 @@ form label { margin-bottom: 13px; }
 .rankrow:last-child { border-bottom: 0; }
 .rankrow b { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rankrow small { color: var(--muted); margin-left: 6px; }
+.topright { flex-wrap: wrap; justify-content: flex-end; }
 .empty { color: var(--muted); font-size: 12px; text-align: center; padding: 14px 0; }
 .overdue { color: #b4493f; }
 .rowacts { display: flex; gap: 5px; margin-left: 10px; }

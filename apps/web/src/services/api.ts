@@ -28,7 +28,7 @@ export async function request<T = any>(path: string, init: RequestInit = {}): Pr
   if (!res.ok) {
     // A 401 on a protected endpoint means the session expired mid-flight.
     // Authentication endpoints are excluded so a failed login never triggers it.
-    if (res.status === 401 && !path.startsWith('/auth/')) {
+    if (res.status === 401 && (!path.startsWith('/auth/') || path.startsWith('/auth/me/'))) {
       window.dispatchEvent(new CustomEvent('tinynest:session-expired'))
     }
     throw new ApiError(data?.error?.code || 'http_error', data?.error?.message || `请求失败 (${res.status})`)
@@ -40,6 +40,17 @@ const get = <T = any>(p: string) => request<T>(p)
 const post = <T = any>(p: string, body?: any, headers?: Record<string, string>) => request<T>(p, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body), headers })
 const del = <T = any>(p: string) => request<T>(p, { method: 'DELETE' })
 
+export type UserProfile = {
+  username: string
+  member_name?: string
+  avatar?: string
+  birthday?: string
+  payday?: number
+  email?: string
+}
+export type ManagedUser = UserProfile & { id: string; role: string; status: string }
+type ProfileUpdate = { name?: string; avatar: string | null; birthday: string | null; payday: number | null; email: string | null }
+
 export const api = {
   // There is intentionally NO setup() client: bootstrap is a controlled
   // operator-side call, never reachable from the public browser bundle.
@@ -49,6 +60,8 @@ export const api = {
     return r
   },
   me: () => get('/auth/me'),
+  updateMyProfile: (body: ProfileUpdate) => request('/auth/me/profile', { method: 'PATCH', body: JSON.stringify(body) }),
+  changeMyPassword: (current_password: string, new_password: string) => post('/auth/me/password', { current_password, new_password }),
   logout: () => del('/auth/session'),
 
   register: (body: { username: string; password: string }) => post('/auth/register', body),
@@ -58,7 +71,11 @@ export const api = {
   revokeInvitation: (id: string) => del(`/admin/invitations/${encodeURIComponent(id)}`),
   joinApplications: () => get<{ items: { id: string; username: string; member_name: string }[] }>('/admin/join-applications'),
   decideApplication: (id: string, approve: boolean) => post(`/admin/join-applications/${encodeURIComponent(id)}`, { approve }),
-  users: () => get<{ items: { id: string; username: string; role: string; status: string }[] }>('/admin/users'),
+  users: () => get<{ items: ManagedUser[] }>('/admin/users'),
+  updateUserProfile: (id: string, body: ProfileUpdate) =>
+    request(`/admin/users/${encodeURIComponent(id)}/profile`, { method: 'PATCH', body: JSON.stringify(body) }),
+  resetUserPassword: (id: string, new_password: string) => post(`/admin/users/${encodeURIComponent(id)}/password`, { new_password }),
+  deleteUser: (id: string) => del(`/admin/users/${encodeURIComponent(id)}`),
   updateUserRole: (id: string, role: 'member' | 'viewer') =>
     request(`/admin/users/${encodeURIComponent(id)}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   disableUser: (id: string) => post(`/admin/users/${encodeURIComponent(id)}/disable`),

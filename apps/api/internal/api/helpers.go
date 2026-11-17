@@ -264,7 +264,9 @@ func (a *API) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 	mux.HandleFunc(pattern, a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := principal(r)
 		if p.Role == "viewer" && r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			pattern != "DELETE /api/v1/auth/session" {
+			pattern != "DELETE /api/v1/auth/session" &&
+			pattern != "PATCH /api/v1/auth/me/profile" &&
+			pattern != "POST /api/v1/auth/me/password" {
 			writeErr(w, 403, "forbidden", "只读账号不能修改家庭账本")
 			return
 		}

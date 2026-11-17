@@ -18,21 +18,43 @@ func (a *API) adminRoute(mux *http.ServeMux, pattern string, handler http.Handle
 
 func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	rows, err := a.DB.QueryContext(r.Context(), `SELECT id,username,role,status FROM users
-		WHERE household_id=? ORDER BY username`, p.HouseholdID)
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT u.id,u.username,u.role,u.status,u.email,u.avatar,u.birthday,u.payday,m.name
+		FROM users u
+		LEFT JOIN household_user_members b ON b.user_id=u.id
+		LEFT JOIN household_members m ON m.id=b.member_id AND m.household_id=u.household_id
+		WHERE u.household_id=? ORDER BY u.username`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
 	defer rows.Close()
-	items := []map[string]string{}
+	items := []map[string]any{}
 	for rows.Next() {
 		var id, username, role, status string
-		if err := rows.Scan(&id, &username, &role, &status); err != nil {
+		var email, avatar, birthday, memberName sql.NullString
+		var payday sql.NullInt64
+		if err := rows.Scan(&id, &username, &role, &status, &email, &avatar, &birthday, &payday, &memberName); err != nil {
 			internalErr(w, err)
 			return
 		}
-		items = append(items, map[string]string{"id": id, "username": username, "role": role, "status": status})
+		item := map[string]any{"id": id, "username": username, "role": role, "status": status}
+		if memberName.Valid {
+			item["member_name"] = memberName.String
+		}
+		if email.Valid {
+			item["email"] = email.String
+		}
+		if avatar.Valid {
+			item["avatar"] = avatar.String
+		}
+		if birthday.Valid {
+			item["birthday"] = birthday.String
+		}
+		if payday.Valid {
+			item["payday"] = payday.Int64
+		}
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		internalErr(w, err)

@@ -174,7 +174,7 @@ func TestRestoreStandaloneTransactionReversals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := database.Exec("DELETE FROM schema_migrations WHERE version=(SELECT MAX(version) FROM (SELECT version FROM schema_migrations) v)"); err != nil {
+	if _, err := database.Exec("DELETE FROM schema_migrations WHERE description=?", "011_restore_transactions.sql"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Migrate(r.Context()); err != nil {
