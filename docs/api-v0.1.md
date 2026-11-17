@@ -145,7 +145,7 @@
 | GET | `/installments/{id}` | IMPLEMENTED | 合同与期次计划 |
 | POST | `/installments/{id}/reverse` | IMPLEMENTED | 填写原因，按原入账日冲正无有效付款和退款的分期，取消期次及待付提醒。付款可先逐笔冲正，保留历史。信用账单转分期将本金恢复到原账单。重复提交返回同一冲正分录 |
 | POST | `/installments/{id}/refunds` · `/installments/{id}/adjust-schedule` · `/installments/{id}/settle-early` | IMPLEMENTED | 退款、显式调整未付款期次与提前结清 |
-| POST | `/installments/{id}/refunds/{refundId}/reverse` | IMPLEMENTED | 按原退款日期撤销，恢复原账户或信用账单。撤销后剩余退款不足以覆盖已减免金额时返回 409。重复提交返回同一更正记录 |
+| POST | `/installments/{id}/refunds/{refundId}/reverse` | IMPLEMENTED | 按原退款日期撤销，恢复原账户或信用账单。撤销后剩余退款不足以覆盖已减免金额时，自动按最近减免优先（同期次按本金优先）恢复期次应付并补回待付提醒，后续实付保留；减免来自提前结清或记录与计划不一致时返回 409。重复提交返回同一更正记录 |
 | POST | `/installments/{id}/confirm-schedule` | PLANNED | 创建合同时已写入校验后的计划。后续调整通过 `adjust-schedule` 显式提交 |
 | GET/POST | `/debts` | IMPLEMENTED | 房贷、贷款、保险等合同列表和创建 |
 | GET/PATCH | `/debts/{id}` | IMPLEMENTED | 合同与期次详情、合同资料编辑 |

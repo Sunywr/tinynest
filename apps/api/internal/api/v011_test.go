@@ -1762,11 +1762,28 @@ func TestReverseInstallmentRefund(t *testing.T) {
 	}
 	refund = postRefund(12000)
 	c.mustOK("POST", path+"/adjust-schedule", map[string]any{"reason": "减少一期", "items": []map[string]any{{"installment_no": 2, "action": "cancel"}}})
-	if status, _ := c.do("POST", path+"/refunds/"+refund+"/reverse", reason); status != 409 {
-		t.Fatalf("reversal with dependent schedule change returned %d", status)
+	// Reversing a refund that already relieved schedule obligations restores the
+	// relieved periods (LIFO) instead of refusing: period 2 comes back pending
+	// with its original amount and the due reminder reappears.
+	c.mustOK("POST", path+"/refunds/"+refund+"/reverse", reason)
+	if got := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"]); got != 50000 {
+		t.Fatalf("cash after restored reversal: %d", got)
 	}
-	if got := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"]); got != 62000 {
-		t.Fatalf("rejected reversal changed cash: %d", got)
+	detail = c.mustOK("GET", path, nil)
+	if got := number(conservation(t, detail)["refunded_minor"]); got != 0 {
+		t.Fatalf("restored reversal still counted refund: %d", got)
+	}
+	sched, _ := detail["schedule"].([]any)
+	restored := sched[1].(map[string]any)
+	if restored["status"] != "pending" || number(restored["principal_minor"]) != 10000 || number(restored["total_minor"]) != 10000 {
+		t.Fatalf("cancelled period was not restored: %v", restored)
+	}
+	var reminder int64
+	if err := database.QueryRow(`
+		SELECT d.amount_minor FROM schedule_due_items d
+		JOIN installment_schedule_items s ON s.id=d.source_id
+		WHERE d.source_type='installment' AND d.status='pending' AND s.contract_id=?`, contract["id"].(string)).Scan(&reminder); err != nil || reminder != 10000 {
+		t.Fatalf("restored period reminder = %d, err=%v", reminder, err)
 	}
 	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
 		"kind": "credit_card", "name": "退款信用卡", "cycle_start_day": 1, "cycle_end_day": 31,
