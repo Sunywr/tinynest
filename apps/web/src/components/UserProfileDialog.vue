@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { api, type UserProfile } from '../services/api'
+import { api, today, type UserProfile } from '../services/api'
+import DatePicker from './DatePicker.vue'
 
 const props = defineProps<{ profile: UserProfile; userId?: string; passwordOnly?: boolean }>()
 const emit = defineEmits<{ close: []; saved: [message: string, profileChanged: boolean] }>()
@@ -108,7 +109,7 @@ function savePassword() {
       </div>
       <label v-if="!avatarImage">头像（文字或表情） <input v-model="draft.avatar" :disabled="busy || processingAvatar" /></label>
       <label>上传头像图片 <input type="file" accept="image/*" :disabled="busy || processingAvatar" @change="uploadAvatar" /></label>
-      <label>生日 <input v-model="draft.birthday" type="date" min="1900-01-01" /></label>
+      <label>生日 <DatePicker v-model="draft.birthday" min="1900-01-01" :max="today()" open-on-click /></label>
       <label>每月发薪日 <input v-model="draft.payday" type="number" min="1" max="31" /></label>
       <label>邮箱 <input v-model="draft.email" type="email" maxlength="254" /></label>
       <button class="primary" :disabled="busy || processingAvatar">保存资料</button>
