@@ -1,5 +1,12 @@
 # 发布候选复核
 
+## 2026-11-17 删除与撤销功能发布
+
+- A/B 均从 `3578ae7` 切换至 `6f42b1e`，保留旧版本作为回滚点。上线前 MySQL 备份服务成功，前后端产物通过 SHA-256 校验。
+- [候选 CI](https://github.com/Sunywr/tinynest/actions/runs/44046088382) 四项通过，含 Go race、79 项浏览器端到端回归及 MySQL Unix socket、账务和备份恢复演练。
+- 生产 HTTPS、前端 JavaScript 哈希和 MySQL 就绪检查通过。抽查成员删除、账单归档、分期退款撤销和投资成交撤销的未登录响应均为 401。授权账号的生产账务操作、异地副本与 iPhone Safari 实机仍为 `UNVERIFIED`。
+
+
 ## 2026-11-17 生产发布
 
 - 按用户确认的 V1.0 前放宽规则，A/B 两机均由 `fd43a19` 切换到 `36c84f2`，旧版本继续作为回滚点。上线前生产 MySQL 备份服务执行成功，前后端产物通过 SHA-256 校验。候选 [CI 四项通过](https://github.com/Sunywr/tinynest/actions/runs/44010598288)，含隔离 MySQL 删除与备份恢复回归。
