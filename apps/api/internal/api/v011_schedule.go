@@ -57,14 +57,10 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 	}
 	horizon := a.businessToday().AddDate(0, 0, horizonDays).Format("2006-01-02")
 	runOn := a.businessDate()
-	type found struct {
-		kind, id, due, label string
-		remaining            int64
-	}
-	var founds []found
+	var founds []dueReminder
 	add := func(kind, id, due, label string, remaining int64) {
 		if remaining > 0 {
-			founds = append(founds, found{kind: kind, id: id, due: due, label: label, remaining: remaining})
+			founds = append(founds, dueReminder{kind: kind, id: id, due: due, label: label, remaining: remaining})
 		}
 	}
 	generated := 0
@@ -126,6 +122,39 @@ func (a *API) projectDueItems(ctx context.Context, householdID, trigger string, 
 			insertDue = "INSERT INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label) VALUES(?,?,?,?,?,?,?,'pending',?) ON DUPLICATE KEY UPDATE id=id"
 		}
 		for _, f := range founds {
+			if a.DB.IsMySQL() && f.kind == "credit_statement" {
+				// A settlement or archive can race the earlier snapshot.
+				err := tx.QueryRowContext(ctx, `
+					SELECT due_on,system_due_minor-paid_minor FROM credit_statements
+					WHERE household_id=? AND id=? AND system_due_minor>paid_minor AND due_on<=?
+					FOR SHARE`, householdID, f.id, horizon).Scan(&f.due, &f.remaining)
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+			}
+			if a.DB.IsMySQL() && (f.kind == "debt" || f.kind == "installment") {
+				periodTable, contractTable := "debt_schedule_items", "debt_contracts"
+				if f.kind == "installment" {
+					periodTable, contractTable = "installment_schedule_items", "installment_contracts"
+				}
+				// Recheck the current period under a shared lock. A contract
+				// deletion that raced the snapshot either removes the newly
+				// projected item or cancels the period before this read.
+				err := tx.QueryRowContext(ctx, `
+					SELECT total_minor-paid_minor FROM `+periodTable+`
+					WHERE id=? AND status IN ('pending','partial','overdue')
+					AND contract_id IN (SELECT id FROM `+contractTable+` WHERE household_id=?)
+					FOR SHARE`, f.id, householdID).Scan(&f.remaining)
+				if errors.Is(err, sql.ErrNoRows) || (err == nil && f.remaining <= 0) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+			}
 			bizKey := householdID + ":" + f.kind + ":" + f.id
 			res, err := tx.ExecContext(ctx, insertDue,
 				newID("due"), householdID, f.kind, f.id, bizKey, f.due, f.remaining, f.label)
@@ -299,4 +328,62 @@ func (a *API) handleListScheduleRuns(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, 200, map[string]any{"runs": runs, "total": len(runs)})
+}
+
+type dueReminder struct {
+	kind, id, due, label string
+	remaining            int64
+}
+
+func (a *API) restoreStatementReminder(ctx context.Context, tx *sql.Tx, householdID, statementID string) error {
+	query := `SELECT s.due_on,s.cycle_end_on,s.system_due_minor,s.paid_minor,s.status,
+		(SELECT name FROM credit_instruments WHERE household_id=s.household_id AND id=s.instrument_id)
+		FROM credit_statements s WHERE s.household_id=? AND s.id=?`
+	if a.DB.IsMySQL() {
+		query += " FOR UPDATE"
+	}
+	var due, cycleEnd, stored, name string
+	var systemDue, paid int64
+	if err := tx.QueryRowContext(ctx, query, householdID, statementID).Scan(&due, &cycleEnd, &systemDue, &paid, &stored, &name); err != nil {
+		return err
+	}
+	remaining := systemDue - paid
+	if stored == "archived" && remaining != 0 {
+		status := deriveStatementStatus(cycleEnd, due, a.businessDate(), systemDue, paid)
+		if _, err := tx.ExecContext(ctx, `UPDATE credit_statements SET status=? WHERE household_id=? AND id=?`,
+			status, householdID, statementID); err != nil {
+			return err
+		}
+	}
+	return a.restoreDueReminder(ctx, tx, householdID, dueReminder{
+		kind: "credit_statement", id: statementID, due: due, label: name + " 账单", remaining: remaining,
+	})
+}
+
+func (a *API) restoreDueReminder(ctx context.Context, tx *sql.Tx, householdID string, item dueReminder) error {
+	if item.remaining <= 0 {
+		_, err := tx.ExecContext(ctx, `DELETE FROM schedule_due_items
+			WHERE household_id=? AND source_type=? AND source_id=? AND status='pending'`,
+			householdID, item.kind, item.id)
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE schedule_due_items SET amount_minor=?,status='pending',due_on=?
+		WHERE household_id=? AND source_type=? AND source_id=? AND status IN ('pending','confirmed')`,
+		item.remaining, item.due, householdID, item.kind, item.id); err != nil {
+		return err
+	}
+	if item.due > a.businessToday().AddDate(0, 0, 30).Format("2006-01-02") {
+		return nil
+	}
+	insert := `INSERT INTO schedule_due_items(id,household_id,source_type,source_id,biz_key,due_on,amount_minor,status,source_label)
+		VALUES(?,?,?,?,?,?,?,'pending',?)`
+	if a.DB.IsMySQL() {
+		insert += " ON DUPLICATE KEY UPDATE id=id"
+	} else {
+		insert += " ON CONFLICT(biz_key) DO NOTHING"
+	}
+	_, err := tx.ExecContext(ctx, insert, newID("due"), householdID, item.kind, item.id, householdID+":"+item.kind+":"+item.id,
+		item.due, item.remaining, item.label)
+	return err
 }

@@ -106,6 +106,12 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if in.MemberID != nil {
+			status, err := a.lockMember(r, tx, p.HouseholdID, *in.MemberID)
+			if err != nil || status != "active" {
+				return errors.New("家庭成员不存在或已停用")
+			}
+		}
 		if replaceID != "" {
 			if err := a.reverseTransaction(tx, r, p, replaceID, newID("je"), false); err != nil {
 				return err
@@ -114,15 +120,6 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		var entry *ledger.Entry
 		var err error
 		var splits []splitInput
-
-		if in.MemberID != nil {
-			var id string
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT id FROM household_members WHERE id=? AND household_id=? AND status='active'`,
-				*in.MemberID, p.HouseholdID).Scan(&id); err != nil {
-				return errors.New("家庭成员不存在或已停用")
-			}
-		}
 
 		switch in.Type {
 		case "transfer":
@@ -463,7 +460,7 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 		return errTransactionNotPosted
 	}
 	for _, query := range []string{
-		`SELECT id FROM refunds WHERE transaction_id=? AND household_id=? LIMIT 1`,
+		`SELECT r.id ` + refundJournalJoin + ` WHERE r.transaction_id=? AND r.household_id=? AND e.status='posted' LIMIT 1`,
 		`SELECT id FROM installment_contracts WHERE source_transaction_id=? AND household_id=? LIMIT 1`,
 	} {
 		if a.DB.IsMySQL() {
@@ -520,8 +517,11 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 		result, err := tx.ExecContext(r.Context(), `
 				UPDATE credit_statements SET system_due_minor=system_due_minor-?
 				WHERE id=? AND household_id=? AND paid_minor=0 AND system_due_minor>=?
-				AND NOT EXISTS (SELECT 1 FROM credit_statement_items
-					WHERE statement_id=? AND source_type='installment_conversion')`,
+				AND NOT EXISTS (SELECT 1 FROM credit_statement_items i
+					WHERE i.statement_id=? AND i.source_type='installment_conversion'
+					AND NOT EXISTS (SELECT 1 FROM credit_statement_items rev
+						WHERE rev.statement_id=i.statement_id AND rev.source_id=i.source_id
+						AND rev.source_type='installment_conversion_reversal'))`,
 			amount, statementID, p.HouseholdID, amount, statementID)
 		if err != nil {
 			return err
@@ -534,7 +534,7 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 				VALUES(?,'reversal',?,?,?)`, statementID, revID, -amount, rev.OccurredOn); err != nil {
 			return err
 		}
-		if err := refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, statementID); err != nil {
+		if err := a.refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, statementID); err != nil {
 			return err
 		}
 	}
@@ -598,7 +598,8 @@ func (a *API) handleCreateRefund(w http.ResponseWriter, r *http.Request) {
 		}
 		var already int64
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT COALESCE(SUM(amount_minor),0) FROM refunds WHERE split_id=?`, splitID).Scan(&already); err != nil {
+			`SELECT COALESCE(SUM(r.amount_minor),0) `+refundJournalJoin+`
+			 WHERE r.split_id=? AND r.household_id=? AND e.status='posted'`, splitID, p.HouseholdID).Scan(&already); err != nil {
 			return err
 		}
 		if _, err := ledger.ValidateRefund(money.Minor(splitAmount), money.Minor(already), amount); err != nil {
@@ -659,10 +660,11 @@ func (a *API) handleListRefunds(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", "原交易不存在")
 		return
 	}
-	var refunded int64
-	_ = a.DB.QueryRowContext(r.Context(),
-		`SELECT COALESCE(SUM(amount_minor),0) FROM refunds WHERE transaction_id=? AND household_id=?`,
-		id, p.HouseholdID).Scan(&refunded)
+	refunded, err := refundTotalForTransaction(r.Context(), a.DB, p.HouseholdID, id)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"transaction_id": id, "original_minor": total,
 		"refunded_minor": refunded, "net_expense_minor": total - refunded,

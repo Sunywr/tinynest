@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"tinynest/api/internal/db"
 	"tinynest/api/internal/invest"
@@ -18,9 +19,12 @@ func (a *API) registerInvestments(mux *http.ServeMux) {
 	a.route(mux, "POST /api/v1/investments/assets", a.handleCreateAsset)
 	a.route(mux, "GET /api/v1/investments/trades", a.handleListTrades)
 	a.route(mux, "POST /api/v1/investments/trades", a.handleCreateTrade)
+	a.route(mux, "POST /api/v1/investments/trades/{id}/reverse", a.handleReverseTrade)
 	a.route(mux, "GET /api/v1/investments/positions", a.handleListPositions)
 	a.route(mux, "POST /api/v1/investments/dividends", a.handleCreateDividend)
+	a.route(mux, "POST /api/v1/investments/dividends/{id}/reverse", a.handleReverseDividend)
 	a.route(mux, "POST /api/v1/investments/valuations", a.handleCreateValuation)
+	a.route(mux, "DELETE /api/v1/investments/valuations/{asset_id}/{valued_on}", a.handleDeleteValuation)
 }
 
 func (a *API) handleCreateAsset(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +148,9 @@ func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
 	}
 	tradeID, entryID := newID("trade"), newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if err := a.lockInvestmentAsset(r, tx, p.HouseholdID, in.AssetID); err != nil {
+			return errors.New("投资资产不存在")
+		}
 		var holdSubject, cashSubject, assetAccount string
 		if err := tx.QueryRowContext(r.Context(),
 			`SELECT ledger_code,account_id FROM investment_assets WHERE id=? AND household_id=?`,
@@ -237,15 +244,33 @@ func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		// The asset is locked. Keep posting order strict even when two
+		// writes share the same clock tick or the system clock moves back.
+		var latest *string
+		if err := tx.QueryRowContext(r.Context(), `
+			SELECT MAX(created_at) FROM investment_trades WHERE household_id=? AND asset_id=?`,
+			p.HouseholdID, in.AssetID).Scan(&latest); err != nil {
+			return err
+		}
+		postedAt := a.now().UTC().Truncate(time.Millisecond)
+		if latest != nil {
+			last, err := time.Parse(time.RFC3339Nano, *latest)
+			if err != nil {
+				return err
+			}
+			if !postedAt.After(last) {
+				postedAt = last.Truncate(time.Millisecond).Add(time.Millisecond)
+			}
+		}
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO investment_trades(id,household_id,asset_id,side,trade_on,quantity_scaled,price_scaled,
 			  gross_minor,computed_fee_minor,fee_minor,fee_rule_id,fee_rule_snapshot_json,net_minor,
-			  from_account_id,position_cost_before_minor,position_cost_after_minor,realized_pnl_minor,note,entry_id,idempotency_key)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			  from_account_id,position_cost_before_minor,position_cost_after_minor,realized_pnl_minor,note,entry_id,idempotency_key,created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			tradeID, p.HouseholdID, in.AssetID, in.Side, in.TradeOn, in.QuantityScaled, priceScaled, in.GrossMinor,
 			int64(computed), int64(fee), nullableKey(ruleID), snapshot, netValue,
 			in.FromAccountID, int64(costBefore), int64(costAfter), realized, in.Note, entryID,
-			nullableKey(idempotencyKey(r))); err != nil {
+			nullableKey(idempotencyKey(r)), postedAt.Format("2006-01-02T15:04:05.000Z")); err != nil {
 			return err
 		}
 		avg, _ := pos.AvgCostMinorPerUnit()
@@ -264,9 +289,17 @@ func (a *API) handleCreateTrade(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleListTrades(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
+	order := "t.trade_on DESC,t.created_at DESC,t.id DESC"
+	if r.URL.Query().Get("order") == "posted" {
+		order = "t.created_at DESC,t.id DESC"
+	}
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id,asset_id,side,trade_on,quantity_scaled,gross_minor,fee_minor,net_minor,realized_pnl_minor
-		 FROM investment_trades WHERE household_id=? ORDER BY trade_on DESC LIMIT 200`, p.HouseholdID)
+		`SELECT t.id,t.asset_id,t.side,t.trade_on,t.quantity_scaled,t.gross_minor,t.fee_minor,t.net_minor,t.realized_pnl_minor,
+		         a.code,a.name,e.status,`+hasLaterInvestmentTrade+`
+		 FROM investment_trades t
+		 JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
+		 JOIN investment_assets a ON a.id=t.asset_id AND a.household_id=t.household_id
+		 WHERE t.household_id=? ORDER BY `+order+` LIMIT 200`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -274,9 +307,10 @@ func (a *API) handleListTrades(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, asset, side, on string
+		var id, asset, side, on, code, name, status string
+		var hasLater bool
 		var qty, gross, fee, net, realized int64
-		if err := rows.Scan(&id, &asset, &side, &on, &qty, &gross, &fee, &net, &realized); err != nil {
+		if err := rows.Scan(&id, &asset, &side, &on, &qty, &gross, &fee, &net, &realized, &code, &name, &status, &hasLater); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -284,7 +318,12 @@ func (a *API) handleListTrades(w http.ResponseWriter, r *http.Request) {
 			"id": id, "asset_id": asset, "side": side, "trade_on": on,
 			"quantity_scaled": qty, "gross_minor": gross, "fee_minor": fee,
 			"net_minor": net, "realized_pnl_minor": realized,
+			"code": code, "name": name, "status": status, "can_reverse": status == ledger.StatusPosted && !hasLater,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		internalErr(w, err)
+		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
 }
@@ -293,13 +332,19 @@ func (a *API) handleListPositions(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT p.asset_id,a.code,a.name,p.quantity_scaled,p.total_cost_minor,p.avg_cost_minor,
-		       p.realized_pnl_minor,p.net_dividend_minor,p.last_valued_on,
+		       p.realized_pnl_minor,p.net_dividend_minor,v.valued_on,
 	       EXISTS(SELECT 1 FROM investment_dividends d
-	              WHERE d.household_id=a.household_id AND d.asset_id=p.asset_id AND d.tax_minor IS NULL),
-		       (SELECT market_value_minor FROM investment_valuations v WHERE v.asset_id=p.asset_id ORDER BY v.valued_on DESC LIMIT 1),
+		              JOIN journal_entries e ON e.id=d.entry_id AND e.household_id=d.household_id
+		              WHERE d.household_id=a.household_id AND d.asset_id=p.asset_id AND d.tax_minor IS NULL
+		                    AND e.status='posted'),
+		       v.market_value_minor,
 	       (SELECT COALESCE(SUM(t.gross_minor+t.fee_minor),0) FROM investment_trades t
-	        WHERE t.asset_id=p.asset_id AND t.household_id=a.household_id AND t.side='buy')
+	        JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
+		        WHERE t.asset_id=p.asset_id AND t.household_id=a.household_id AND t.side='buy' AND e.status='posted')
 		FROM investment_positions p JOIN investment_assets a ON a.id=p.asset_id
+		LEFT JOIN investment_valuations v ON v.id=(
+			SELECT v2.id FROM investment_valuations v2 WHERE v2.asset_id=a.id ORDER BY v2.valued_on DESC LIMIT 1
+		)
 		WHERE a.household_id=? ORDER BY a.code`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
@@ -434,13 +479,10 @@ func (a *API) handleCreateValuation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
-	var n int
-	if err := a.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM investment_assets WHERE id=? AND household_id=?`, in.AssetID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-		writeErr(w, 404, "not_found", "投资资产不存在")
-		return
-	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if err := a.lockInvestmentAsset(r, tx, p.HouseholdID, in.AssetID); err != nil {
+			return err
+		}
 		upsert := "INSERT INTO investment_valuations(asset_id,valued_on,price_scaled,market_value_minor,note) VALUES(?,?,?,?,?) "
 		if a.DB.IsMySQL() {
 			upsert += "AS incoming ON DUPLICATE KEY UPDATE price_scaled=incoming.price_scaled, market_value_minor=incoming.market_value_minor,note=incoming.note"
@@ -450,13 +492,75 @@ func (a *API) handleCreateValuation(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.ExecContext(r.Context(), upsert, in.AssetID, in.ValuedOn, in.PriceScaled, in.MarketValueMinor, in.Note); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(r.Context(),
-			`UPDATE investment_positions SET last_valued_on=? WHERE asset_id=?`, in.ValuedOn, in.AssetID)
-		return err
+		return refreshValuationDate(r, tx, p.HouseholdID, in.AssetID)
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, 404, "not_found", "投资资产不存在")
+		return
+	}
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 201, map[string]any{"asset_id": in.AssetID, "valued_on": in.ValuedOn, "market_value_minor": in.MarketValueMinor})
+}
+
+func (a *API) lockInvestmentAsset(r *http.Request, tx *sql.Tx, householdID, assetID string) error {
+	query := `SELECT id FROM investment_assets WHERE household_id=? AND id=?`
+	if a.DB.IsMySQL() {
+		query += " FOR UPDATE"
+	}
+	var id string
+	return tx.QueryRowContext(r.Context(), query, householdID, assetID).Scan(&id)
+}
+
+func refreshValuationDate(r *http.Request, tx *sql.Tx, householdID, assetID string) error {
+	_, err := tx.ExecContext(r.Context(), `
+		UPDATE investment_positions SET last_valued_on=(
+			SELECT MAX(valued_on) FROM investment_valuations WHERE asset_id=?
+		) WHERE asset_id IN (SELECT id FROM investment_assets WHERE household_id=? AND id=?)`,
+		assetID, householdID, assetID)
+	return err
+}
+
+func (a *API) handleDeleteValuation(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	ctx := r.Context()
+	assetID, date := r.PathValue("asset_id"), r.PathValue("valued_on")
+	if !validDate(date) {
+		writeErr(w, 400, "invalid_request", "估值日期不正确")
+		return
+	}
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := a.lockInvestmentAsset(r, tx, p.HouseholdID, assetID); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM investment_valuations WHERE valued_on=?
+			AND asset_id IN (SELECT id FROM investment_assets WHERE household_id=? AND id=?)`,
+			date, p.HouseholdID, assetID)
+		if err != nil {
+			return err
+		}
+		deleted, err := result.RowsAffected()
+		if err != nil || deleted == 0 {
+			return err
+		}
+		if err := refreshValuationDate(r, tx, p.HouseholdID, assetID); err != nil {
+			return err
+		}
+		payload, err := json.Marshal(map[string]string{"valued_on": date})
+		if err != nil {
+			return err
+		}
+		return audit(ctx, tx, p, "delete_valuation", "investment_asset", assetID, string(payload))
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		writeErr(w, 404, "not_found", "投资资产不存在")
+	case err != nil:
+		internalErr(w, err)
+	default:
+		writeJSON(w, 200, map[string]string{"asset_id": assetID, "valued_on": date})
+	}
 }

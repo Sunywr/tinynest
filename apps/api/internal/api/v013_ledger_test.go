@@ -187,3 +187,115 @@ func TestV013_ValuationWithPastDate(t *testing.T) {
 		t.Errorf("reference_return_bps must be present after valuation: %v", pos)
 	}
 }
+
+func TestDeleteInvestmentValuation(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	broker, asset := v012BrokerAndAsset(t, c)
+	v012Buy(t, c, asset, broker, "2026-11-14", 100*1_000_000, 100_000, 500, true)
+	const valuations = "/api/v1/investments/valuations"
+	const netWorth = "/api/v1/dashboard/net-worth"
+	baseline := number(c.mustOK("GET", netWorth, nil)["net_worth_minor"])
+	c.mustOK("POST", valuations, map[string]any{"asset_id": asset, "valued_on": "2026-11-16", "market_value_minor": 150_000})
+	c.mustOK("POST", valuations, map[string]any{"asset_id": asset, "valued_on": "2026-11-15", "market_value_minor": 120_000})
+	path := valuations + "/" + asset + "/"
+	pos := v012Rows(t, c.mustOK("GET", "/api/v1/investments/positions", nil))[0]
+	if pos["last_valued_on"] != "2026-11-16" || number(pos["market_value_minor"]) != 150_000 {
+		t.Fatalf("backfilled valuation replaced the latest date: %v", pos)
+	}
+	c.mustOK("DELETE", path+"2026-11-16", nil)
+	c.mustOK("DELETE", path+"2026-11-16", nil)
+	pos = v012Rows(t, c.mustOK("GET", "/api/v1/investments/positions", nil))[0]
+	if pos["last_valued_on"] != "2026-11-15" || number(pos["market_value_minor"]) != 120_000 || number(pos["total_cost_minor"]) != 100_500 {
+		t.Fatalf("unexpected fallback position: %v", pos)
+	}
+	worth := c.mustOK("GET", netWorth, nil)
+	if number(worth["net_worth_minor"]) != baseline || number(worth["net_worth_at_market_minor"]) != baseline+19_500 {
+		t.Fatalf("unexpected fallback net worth: %v", worth)
+	}
+	c.mustOK("DELETE", path+"2026-11-15", nil)
+	pos = v012Rows(t, c.mustOK("GET", "/api/v1/investments/positions", nil))[0]
+	if pos["last_valued_on"] != nil || pos["market_value_minor"] != nil || number(pos["total_cost_minor"]) != 100_500 {
+		t.Fatalf("deleting final valuation changed position: %v", pos)
+	}
+	worth = c.mustOK("GET", netWorth, nil)
+	if number(worth["net_worth_minor"]) != baseline || number(worth["net_worth_at_market_minor"]) != baseline {
+		t.Fatalf("unvalued position did not retain cost in net worth: %v", worth)
+	}
+	if status, _ := c.do("DELETE", valuations+"/unknown/2026-11-15", nil); status != 404 {
+		t.Fatalf("unknown asset returned %d", status)
+	}
+}
+
+func TestReverseInvestmentDividend(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	broker, asset := v012BrokerAndAsset(t, c)
+	const base = "/api/v1/investments/dividends"
+	before := c.mustOK("GET", "/api/v1/accounts/"+broker+"/balance", nil)
+	paid := c.mustOK("POST", base, map[string]any{"asset_id": asset, "to_account_id": broker, "received_on": "2026-11-12", "gross_minor": 1000, "tax_minor": 100})
+	path := base + "/" + paid["id"].(string) + "/reverse"
+	body := map[string]string{"reason": "误录分红"}
+	first := c.mustOK("POST", path, body)
+	replay := c.mustOK("POST", path, body)
+	if first["reversal_entry_id"] == nil || replay["reversal_entry_id"] != first["reversal_entry_id"] {
+		t.Fatalf("duplicate reversal: %v %v", first, replay)
+	}
+	history := c.mustOK("GET", base, nil)
+	item := v012Rows(t, history)[0]
+	if item["status"] != "reversed" || number(history["summary"].(map[string]any)["total_net_minor"]) != 0 {
+		t.Fatalf("reversed dividend remained in summary: %v", history)
+	}
+	summary := c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-11-12&to=2026-11-12", nil)
+	if number(summary["cashflow_minor"]) != 0 || number(summary["investment_dividend_minor"]) != 0 {
+		t.Fatalf("reversed dividend remained in the original reporting period: %v", summary)
+	}
+	if after := c.mustOK("GET", "/api/v1/accounts/"+broker+"/balance", nil); after["balance_minor"] != before["balance_minor"] {
+		t.Fatalf("cash was not restored: %v %v", before, after)
+	}
+	pos := v012Rows(t, c.mustOK("GET", "/api/v1/investments/positions", nil))[0]
+	if number(pos["net_dividend_minor"]) != 0 {
+		t.Fatalf("position dividend was not restored: %v", pos)
+	}
+}
+
+func TestReverseLatestInvestmentTrade(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	broker, asset := v012BrokerAndAsset(t, c)
+	const base = "/api/v1/investments/trades"
+	trade := func(side, date string, qty, gross, fee int64) string {
+		return c.mustOK("POST", base, map[string]any{"asset_id": asset, "side": side, "trade_on": date, "quantity_scaled": qty, "gross_minor": gross, "fee_minor": fee, "from_account_id": broker})["id"].(string)
+	}
+	buy := trade("buy", "2026-11-14", 10*1_000_000, 10000, 500)
+	sell := trade("sell", "2026-11-13", 4*1_000_000, 6400, 100)
+	c.mustOK("POST", "/api/v1/investments/dividends", map[string]any{
+		"asset_id": asset, "to_account_id": broker, "received_on": "2026-11-14", "gross_minor": 100,
+	})
+	reason := map[string]string{"reason": "成交误录"}
+	if status, _ := c.do("POST", base+"/"+buy+"/reverse", reason); status != 409 {
+		t.Fatalf("older trade returned %d", status)
+	}
+	path := base + "/" + sell + "/reverse"
+	first := c.mustOK("POST", path, reason)
+	replay := c.mustOK("POST", path, reason)
+	if first["reversal_entry_id"] == nil || first["reversal_entry_id"] != replay["reversal_entry_id"] {
+		t.Fatalf("non-idempotent trade reversal: %v / %v", first, replay)
+	}
+	position := v012Rows(t, c.mustOK("GET", "/api/v1/investments/positions", nil))[0]
+	if number(position["quantity_scaled"]) != 10*1_000_000 || number(position["total_cost_minor"]) != 10500 ||
+		number(position["realized_pnl_minor"]) != 0 || number(position["net_dividend_minor"]) != 100 {
+		t.Fatalf("wrong position after reversing sale: %v", position)
+	}
+	c.mustOK("POST", base+"/"+buy+"/reverse", reason)
+	position = v012Rows(t, c.mustOK("GET", "/api/v1/investments/positions", nil))[0]
+	if number(position["quantity_scaled"]) != 0 || number(position["total_cost_minor"]) != 0 {
+		t.Fatalf("wrong position after reversing buy: %v", position)
+	}
+	if balance := c.mustOK("GET", "/api/v1/accounts/"+broker+"/balance", nil); number(balance["balance_minor"]) != 1_000_100 {
+		t.Fatalf("cash not restored: %v", balance)
+	}
+}

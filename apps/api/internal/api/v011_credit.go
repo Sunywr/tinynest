@@ -253,6 +253,7 @@ func (a *API) statementDetail(ctx context.Context, q db.Queryer, householdID, st
 		"status":                deriveStatementStatus(end, due, a.businessDate(), sysDue, paid),
 		"derived_status":        deriveStatementStatus(end, due, a.businessDate(), sysDue, paid),
 		"stored_status":         stored,
+		"archived":              stored == "archived" && sysDue == paid,
 	}
 	if platform != nil {
 		out["reconcile_diff_minor"] = sysDue - *platform
@@ -279,6 +280,11 @@ func (a *API) statementDetail(ctx context.Context, q db.Queryer, householdID, st
 		return nil, err
 	}
 	out["items"] = items
+	payments, err := listStatementPayments(ctx, q, householdID, stmtID)
+	if err != nil {
+		return nil, err
+	}
+	out["payments"] = payments
 	var adjCount int
 	if err := q.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM credit_statement_adjustments WHERE statement_id=? AND household_id=?`,
@@ -287,6 +293,37 @@ func (a *API) statementDetail(ctx context.Context, q db.Queryer, householdID, st
 	}
 	out["adjustment_count"] = adjCount
 	return out, nil
+}
+
+type creditPaymentHistoryRow struct {
+	ID          string  `json:"id"`
+	PaidOn      string  `json:"paid_on"`
+	AmountMinor int64   `json:"amount_minor"`
+	AccountName *string `json:"account_name"`
+	Status      string  `json:"status"`
+}
+
+func listStatementPayments(ctx context.Context, q db.Queryer, householdID, statementID string) ([]creditPaymentHistoryRow, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT p.id,p.paid_on,p.amount_minor,a.name,e.status
+		FROM credit_payments p
+		JOIN journal_entries e ON e.id=p.entry_id AND e.household_id=p.household_id
+		LEFT JOIN accounts a ON a.id=p.from_account_id AND a.household_id=p.household_id
+		WHERE p.household_id=? AND p.statement_id=? ORDER BY p.paid_on DESC,p.id DESC`,
+		householdID, statementID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []creditPaymentHistoryRow{}
+	for rows.Next() {
+		var row creditPaymentHistoryRow
+		if err := rows.Scan(&row.ID, &row.PaidOn, &row.AmountMinor, &row.AccountName, &row.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, row)
+	}
+	return items, rows.Err()
 }
 
 func (a *API) handleGetStatement(w http.ResponseWriter, r *http.Request) {

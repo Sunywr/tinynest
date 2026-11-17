@@ -2,9 +2,13 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"tinynest/api/internal/db"
 	"tinynest/api/internal/ledger"
@@ -15,6 +19,8 @@ func (a *API) registerV011Debt(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/debts", a.handleListDebts)
 	a.route(mux, "POST /api/v1/debts", a.handleCreateDebt)
 	a.route(mux, "GET /api/v1/debts/{id}", a.handleGetDebt)
+	a.route(mux, "DELETE /api/v1/debts/{id}", a.handleDeleteDebt)
+	a.route(mux, "POST /api/v1/debts/{id}/reverse", a.handleReverseDebtOpening)
 	a.route(mux, "PATCH /api/v1/debts/{id}", a.handlePatchDebt)
 	a.route(mux, "POST /api/v1/debts/{id}/schedule", a.handleDebtSchedule)
 	a.route(mux, "POST /api/v1/debts/{id}/payments", a.handleDebtPayment)
@@ -109,6 +115,12 @@ func (a *API) handleCreateDebt(w http.ResponseWriter, r *http.Request) {
 		ledgerCodeArg = code
 	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if in.MemberID != nil {
+			status, err := a.lockMember(r, tx, p.HouseholdID, *in.MemberID)
+			if err != nil || status != "active" {
+				return errors.New("家庭成员不存在或已停用")
+			}
+		}
 		if in.DefaultChannelID != nil {
 			if channel == "cash" {
 				if _, err := a.validateAccount(tx, r, p.HouseholdID, *in.DefaultChannelID); err != nil {
@@ -167,9 +179,12 @@ func (a *API) handleListDebts(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT c.id,c.kind,c.name,c.principal_minor,c.remaining_principal_minor,
 		       c.start_on,c.end_on,c.due_day,c.cycle,c.default_channel,c.status,c.ledger_code,c.note,
-		       COUNT(s.id),COALESCE(SUM(s.paid_minor),0),COALESCE(SUM(s.total_minor),0)
+		       COUNT(s.id),COALESCE(SUM(s.paid_minor),0),
+		       COALESCE(SUM(CASE WHEN c.status<>'cancelled' THEN s.total_minor ELSE 0 END),0),
+		       EXISTS(SELECT 1 FROM debt_payments pay JOIN debt_schedule_items ds ON ds.id=pay.schedule_item_id
+		              WHERE ds.contract_id=c.id), `+debtHasEffectivePayments+`
 		FROM debt_contracts c LEFT JOIN debt_schedule_items s ON s.contract_id=c.id
-		WHERE c.household_id=? GROUP BY c.id ORDER BY c.created_at DESC`, p.HouseholdID)
+		WHERE c.household_id=? AND c.status<>'deleted' GROUP BY c.id ORDER BY c.created_at DESC`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -179,13 +194,14 @@ func (a *API) handleListDebts(w http.ResponseWriter, r *http.Request) {
 		end, code, note                               *string
 		principal, remaining, paid, total             int64
 		dueDay, periods                               int
+		hasPaymentHistory, hasEffectivePayments       bool
 	}
 	var list []row
 	for rows.Next() {
 		var v row
 		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.principal, &v.remaining,
 			&v.start, &v.end, &v.dueDay, &v.cycle, &v.channel, &v.status, &v.code, &v.note,
-			&v.periods, &v.paid, &v.total); err != nil {
+			&v.periods, &v.paid, &v.total, &v.hasPaymentHistory, &v.hasEffectivePayments); err != nil {
 			_ = rows.Close()
 			internalErr(w, err)
 			return
@@ -205,7 +221,8 @@ func (a *API) handleListDebts(w http.ResponseWriter, r *http.Request) {
 			"cycle": v.cycle, "default_channel": v.channel, "status": v.status,
 			"ledger_code": v.code, "note": v.note,
 			"periods": v.periods, "paid_minor": v.paid, "total_minor": v.total,
-			"remaining_minor": v.total - v.paid,
+			"remaining_minor": v.total - v.paid, "has_payment_history": v.hasPaymentHistory || v.paid != 0,
+			"can_reverse_opening": v.principal > 0 && v.status != "cancelled" && !v.hasEffectivePayments,
 		}
 		if v.code != nil {
 			bal, err := db.Balance(r.Context(), a.DB, p.HouseholdID, *v.code)
@@ -230,7 +247,7 @@ func (a *API) handleGetDebt(w http.ResponseWriter, r *http.Request) {
 	if err := a.DB.QueryRowContext(r.Context(), `
 		SELECT kind,name,principal_minor,remaining_principal_minor,start_on,end_on,due_day,
 		       cycle,default_channel,status,ledger_code,note
-		FROM debt_contracts WHERE id=? AND household_id=?`, id, p.HouseholdID).
+		FROM debt_contracts WHERE id=? AND household_id=? AND status<>'deleted'`, id, p.HouseholdID).
 		Scan(&kind, &name, &principal, &remaining, &start, &end, &dueDay,
 			&cycle, &channel, &status, &code, &note); err != nil {
 		writeErr(w, 404, "not_found", "负债合同不存在")
@@ -270,12 +287,16 @@ func (a *API) handleGetDebt(w http.ResponseWriter, r *http.Request) {
 			internalErr(w, err)
 			return
 		}
+		remaining := total - paid
+		derived := derivePeriodStatus(due, a.businessDate(), total, paid)
+		if status == "cancelled" {
+			remaining, derived = 0, "cancelled"
+		}
 		schedule = append(schedule, map[string]any{
 			"id": sid, "installment_no": no, "due_on": due,
 			"principal_minor": pv, "interest_minor": iv, "fee_minor": fv,
 			"total_minor": total, "paid_minor": paid,
-			"remaining_minor": total - paid, "status": st,
-			"derived_status": derivePeriodStatus(due, a.businessDate(), total, paid),
+			"remaining_minor": remaining, "status": st, "derived_status": derived,
 		})
 	}
 	if err := schedRows.Close(); err != nil {
@@ -356,11 +377,11 @@ func (a *API) handlePatchDebt(w http.ResponseWriter, r *http.Request) {
 	}
 	finalStatus := "active"
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT status FROM debt_contracts WHERE id=? AND household_id=?`, id, p.HouseholdID).
-			Scan(&finalStatus); err != nil {
+		status, _, err := a.lockDebtContract(r, tx, p.HouseholdID, id)
+		if err != nil || status == "deleted" || status == "cancelled" {
 			return errors.New("负债合同不存在")
 		}
+		finalStatus = status
 		res, err := tx.ExecContext(r.Context(), `
 			UPDATE debt_contracts SET
 			  name=COALESCE(?,name), note=COALESCE(?,note), end_on=COALESCE(?,end_on),
@@ -389,7 +410,7 @@ func (a *API) handlePatchDebt(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"id": id, "status": finalStatus,
-		"note": "本金、期次计划与已入账分录均不可编辑；纠错请走冲正",
+		"note": "已记下的本金和每期付款计划不能直接改，录错时可撤销原记录",
 	})
 }
 
@@ -437,8 +458,11 @@ func (a *API) handleDebtSchedule(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var kind, status string
 		var principal int64
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT kind,status,principal_minor FROM debt_contracts WHERE id=? AND household_id=?`,
+		query := `SELECT kind,status,principal_minor FROM debt_contracts WHERE id=? AND household_id=?`
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		if err := tx.QueryRowContext(r.Context(), query,
 			id, p.HouseholdID).Scan(&kind, &status, &principal); err != nil {
 			return errors.New("负债合同不存在")
 		}
@@ -531,6 +555,10 @@ func (a *API) handleDebtPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	payID, entryID := newID("dpay"), newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		contractStatus, _, err := a.lockDebtContract(r, tx, p.HouseholdID, contractID)
+		if err != nil || contractStatus == "deleted" || contractStatus == "cancelled" {
+			return errors.New("负债合同不存在")
+		}
 		var itemID, dueOn, status, kind string
 		var plP, plI, plF, total, paid int64
 		if err := tx.QueryRowContext(r.Context(), `
@@ -629,83 +657,106 @@ func (a *API) handleDebtPayment(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleReverseDebtPayment(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
+	ctx := r.Context()
 	contractID, paymentID := r.PathValue("id"), r.PathValue("paymentId")
 	var in struct {
 		Reason string `json:"reason"`
 	}
-	_ = decode(r, &in)
-	revID := newID("je")
-	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var entryID, paidOn, channel, channelID, itemID, dueOn, kind string
-		var amount, pv, iv, fv, total, paid int64
-		var reversed int
-		if err := tx.QueryRowContext(r.Context(), `
-			SELECT p.entry_id,p.paid_on,p.channel,p.channel_id,p.amount_minor,
-			       p.principal_minor,p.interest_minor,p.fee_minor,p.reversed,
-			       p.schedule_item_id,s.due_on,s.total_minor,s.paid_minor,c.kind
+	if err := decode(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, 400, "invalid_request", "请求格式不正确")
+		return
+	}
+	in.Reason = strings.TrimSpace(in.Reason)
+	if utf8.RuneCountInString(in.Reason) > 200 {
+		writeErr(w, 400, "invalid_request", "撤销原因最多 200 个字符")
+		return
+	}
+	var revID string
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		status, _, err := a.lockDebtContract(r, tx, p.HouseholdID, contractID)
+		if err != nil {
+			return err
+		}
+		var entryID, channel, channelID, itemID, dueOn, periodStatus, name string
+		var amount, principal, total, paid int64
+		var number, reversed int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT p.entry_id,p.channel,p.channel_id,p.amount_minor,p.principal_minor,p.reversed,
+			       s.id,s.due_on,s.total_minor,s.paid_minor,s.status,s.installment_no,c.name
 			FROM debt_payments p
 			JOIN debt_schedule_items s ON s.id=p.schedule_item_id
 			JOIN debt_contracts c ON c.id=s.contract_id
 			WHERE p.id=? AND c.id=? AND c.household_id=?`,
 			paymentID, contractID, p.HouseholdID).
-			Scan(&entryID, &paidOn, &channel, &channelID, &amount,
-				&pv, &iv, &fv, &reversed, &itemID, &dueOn, &total, &paid, &kind); err != nil {
-			return errors.New("付款记录不存在")
+			Scan(&entryID, &channel, &channelID, &amount, &principal, &reversed,
+				&itemID, &dueOn, &total, &paid, &periodStatus, &number, &name); err != nil {
+			return err
 		}
 		if reversed == 1 {
-			return errors.New("该付款已冲正")
+			return tx.QueryRowContext(ctx, `SELECT id FROM journal_entries WHERE household_id=? AND reversal_of=?`,
+				p.HouseholdID, entryID).Scan(&revID)
+		}
+		if status == "cancelled" || status == "deleted" || periodStatus == "cancelled" || amount <= 0 || paid < amount || total < paid {
+			return errInstallmentPaymentConflict
 		}
 		orig, err := loadEntry(tx, r, entryID)
 		if err != nil {
 			return err
 		}
-		rev, err := orig.Reverse(revID, a.businessDate())
+		if orig.BizID != paymentID {
+			return errInstallmentPaymentConflict
+		}
+		revID = newID("je")
+		rev, err := orig.Reverse(revID, orig.OccurredOn)
 		if err != nil {
 			return err
 		}
-		if err := db.SaveEntry(r.Context(), tx, rev, p.HouseholdID, "", p.Username); err != nil {
+		if err := db.SaveEntry(ctx, tx, rev, p.HouseholdID, "", p.Username); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE journal_entries SET status='reversed' WHERE id=?`, entryID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE debt_payments SET reversed=1 WHERE id=?`, paymentID); err != nil {
-			return err
-		}
-		newPaid := paid - amount
-		if newPaid < 0 {
-			newPaid = 0
-		}
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE debt_schedule_items SET paid_minor=?, status=? WHERE id=?`,
-			newPaid, derivePeriodStatus(dueOn, a.businessDate(), total, newPaid), itemID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE debt_contracts SET remaining_principal_minor=remaining_principal_minor+? WHERE id=?`,
-			pv, contractID); err != nil {
-			return err
-		}
-		// Reverse the credit-statement effect too, in the SAME cycle as the
-		// original payment so the bill stays reconcilable with the journal.
 		if channel == "credit" {
-			if err := a.assignStatement(r, tx, p, channelID, "debt_payment_reversal", revID,
-				-amount, paidOn); err != nil {
+			if err := a.reversePeriodCreditCharge(r, tx, p.HouseholdID, channelID, "debt_payment", paymentID, revID, amount); err != nil {
 				return err
 			}
 		}
-		return audit(r.Context(), tx, p, "reverse_debt_payment", "debt_payment", paymentID, in.Reason)
+		if _, err := tx.ExecContext(ctx, `UPDATE journal_entries SET status='reversed' WHERE household_id=? AND id=?`,
+			p.HouseholdID, entryID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE debt_payments SET reversed=1 WHERE id=? AND schedule_item_id=?`,
+			paymentID, itemID); err != nil {
+			return err
+		}
+		newPaid := paid - amount
+		if _, err := tx.ExecContext(ctx, `UPDATE debt_schedule_items SET paid_minor=?,status=? WHERE id=? AND contract_id=?`,
+			newPaid, derivePeriodStatus(dueOn, a.businessDate(), total, newPaid), itemID, contractID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE debt_contracts SET remaining_principal_minor=remaining_principal_minor+? WHERE household_id=? AND id=?`,
+			principal, p.HouseholdID, contractID); err != nil {
+			return err
+		}
+		if err := a.restoreDueReminder(ctx, tx, p.HouseholdID, dueReminder{
+			kind: "debt", id: itemID, due: dueOn, label: name + " 第" + itoa(number) + "期", remaining: total - newPaid,
+		}); err != nil {
+			return err
+		}
+		payload, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		return audit(ctx, tx, p, "reverse_debt_payment", "debt_payment", paymentID, string(payload))
 	})
-	if err != nil {
-		writeErr(w, 400, "conflict", err.Error())
-		return
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		writeErr(w, 404, "not_found", "合同或付款记录不存在")
+	case errors.Is(err, errInstallmentPaymentConflict), errors.Is(err, errInstallmentPaymentRepaid):
+		writeErr(w, 409, "debt_payment_conflict", err.Error())
+	case err != nil:
+		internalErr(w, err)
+	default:
+		writeJSON(w, 200, map[string]string{"payment_id": paymentID, "status": "reversed", "reversal_entry_id": revID})
 	}
-	writeJSON(w, 200, map[string]any{
-		"payment_id": paymentID, "status": "reversed", "reversal_entry_id": revID,
-		"note": "原分录与冲正分录均保留；期次与剩余本金已按冲正回滚",
-	})
 }
 
 func (a *API) handleSettleEarlyDebt(w http.ResponseWriter, r *http.Request) {
@@ -720,9 +771,8 @@ func (a *API) handleSettleEarlyDebt(w http.ResponseWriter, r *http.Request) {
 	}
 	cancelled := 0
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM debt_contracts WHERE id=? AND household_id=?`, id, p.HouseholdID).Scan(&n); err != nil || n == 0 {
+		status, _, err := a.lockDebtContract(r, tx, p.HouseholdID, id)
+		if err != nil || status == "deleted" || status == "cancelled" {
 			return errors.New("负债合同不存在")
 		}
 		// Paid / partially-paid periods are NEVER silently deleted.

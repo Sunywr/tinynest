@@ -58,6 +58,18 @@ CREATE DATABASE tinynest_mixed_load;
 CREATE DATABASE tinynest_current_member;
 CREATE DATABASE tinynest_delete_account;
 CREATE DATABASE tinynest_delete_classification;
+CREATE DATABASE tinynest_delete_member;
+CREATE DATABASE tinynest_delete_valuation;
+CREATE DATABASE tinynest_delete_debt;
+CREATE DATABASE tinynest_reverse_dividend;
+CREATE DATABASE tinynest_reverse_installment;
+CREATE DATABASE tinynest_reverse_debt;
+CREATE DATABASE tinynest_reverse_conversion;
+CREATE DATABASE tinynest_reverse_credit_payment;
+CREATE DATABASE tinynest_reverse_trade;
+CREATE DATABASE tinynest_archive_statement;
+CREATE DATABASE tinynest_reverse_installment_payment;
+CREATE DATABASE tinynest_reverse_installment_refund;
 CREATE DATABASE tinynest_restore;
 CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';
 GRANT ALL ON tinynest_drill.* TO 'tinynest_drill'@'localhost';
@@ -67,6 +79,18 @@ GRANT ALL ON tinynest_mixed_load.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_current_member.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_delete_account.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_delete_classification.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_delete_member.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_delete_valuation.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_delete_debt.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_dividend.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_installment.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_debt.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_conversion.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_credit_payment.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_trade.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_archive_statement.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_installment_payment.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_reverse_installment_refund.* TO 'tinynest_drill'@'localhost';
 SQL
 
 stage='check the host socket'
@@ -90,6 +114,18 @@ run_ledger_test tinynest_mixed_load TestMixedLedgerLoad -v
 run_ledger_test tinynest_current_member TestCurrentHouseholdMember
 run_ledger_test tinynest_delete_account TestDeleteAccountRetainsLedger
 run_ledger_test tinynest_delete_classification TestDeleteProjectAndCategoryRetainsHistory
+run_ledger_test tinynest_delete_member TestDeleteUnusedHouseholdMember
+run_ledger_test tinynest_delete_valuation TestDeleteInvestmentValuation
+run_ledger_test tinynest_delete_debt TestDeleteUnusedDebt
+run_ledger_test tinynest_reverse_dividend TestReverseInvestmentDividend
+run_ledger_test tinynest_reverse_installment TestReverseUnpaidInstallment
+run_ledger_test tinynest_reverse_debt TestReverseUnpaidDebtOpening
+run_ledger_test tinynest_reverse_conversion TestV011_InstallmentConvertFromCreditKeepsSinglePrincipal
+run_ledger_test tinynest_reverse_credit_payment TestReverseCreditStatementPayment
+run_ledger_test tinynest_reverse_trade TestReverseLatestInvestmentTrade
+run_ledger_test tinynest_archive_statement TestArchiveSettledCreditStatement
+run_ledger_test tinynest_reverse_installment_payment TestReverseInstallmentPayment
+run_ledger_test tinynest_reverse_installment_refund TestReverseInstallmentRefund
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)

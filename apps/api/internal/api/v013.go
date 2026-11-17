@@ -38,8 +38,9 @@ func (a *API) handleListDividends(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT d.id, d.asset_id, a.code, a.name, d.received_on, d.gross_minor,
-		       d.tax_minor, d.net_minor, acc.name, d.to_account_id, d.entry_id
+		       d.tax_minor, d.net_minor, acc.name, d.to_account_id, d.entry_id, e.status
 		FROM investment_dividends d
+		JOIN journal_entries e ON e.id=d.entry_id AND e.household_id=d.household_id
 		JOIN investment_assets a ON a.id = d.asset_id AND a.household_id = ?
 		LEFT JOIN accounts acc ON acc.id = d.to_account_id AND acc.household_id = ?
 		WHERE d.household_id = ?`
@@ -70,28 +71,36 @@ func (a *API) handleListDividends(w http.ResponseWriter, r *http.Request) {
 	unknownCount := int64(0)
 	years := map[string]*dividendYear{}
 	for rows.Next() {
-		var id, aid, code, name, receivedOn, toAccountID, entryID string
+		var id, aid, code, name, receivedOn, toAccountID, entryID, status string
 		var gross, net int64
 		var tax sql.NullInt64
 		var accountName sql.NullString
 		if err := rows.Scan(&id, &aid, &code, &name, &receivedOn, &gross, &tax, &net,
-			&accountName, &toAccountID, &entryID); err != nil {
+			&accountName, &toAccountID, &entryID, &status); err != nil {
 			internalErr(w, err)
 			return
 		}
-		var taxValue any
-		var taxMinor int64
+
+		var taxValue, accountValue any
 		if tax.Valid {
-			taxValue, taxMinor = tax.Int64, tax.Int64
-			totalTax += tax.Int64
-		} else {
-			taxValue = nil // unknown, never coerced to zero
-			unknownCount++
-			unknownGross += gross
+			taxValue = tax.Int64
+		}
+		if accountName.Valid {
+			accountValue = accountName.String
+		}
+		items = append(items, map[string]any{
+			"id": id, "asset_id": aid, "code": code, "name": name,
+			"received_on": receivedOn, "gross_minor": gross, "tax_minor": taxValue,
+			"net_minor": net, "tax_unknown": !tax.Valid, "status": status,
+			"to_account_id": toAccountID, "to_account_name": accountValue,
+			"entry_id": entryID,
+		})
+		if status != "posted" {
+			continue
 		}
 		totalGross += gross
 		totalNet += net
-
+		totalTax += tax.Int64
 		year := receivedOn
 		if len(year) >= 4 {
 			year = year[:4]
@@ -102,25 +111,15 @@ func (a *API) handleListDividends(w http.ResponseWriter, r *http.Request) {
 			years[year] = bucket
 		}
 		bucket.gross += gross
-		bucket.tax += taxMinor
 		bucket.net += net
+		bucket.tax += tax.Int64
 		bucket.count++
 		if !tax.Valid {
+			unknownCount++
+			unknownGross += gross
 			bucket.unknown++
 			bucket.unknownGross += gross
 		}
-
-		var accountValue any
-		if accountName.Valid {
-			accountValue = accountName.String
-		}
-		items = append(items, map[string]any{
-			"id": id, "asset_id": aid, "code": code, "name": name,
-			"received_on": receivedOn, "gross_minor": gross, "tax_minor": taxValue,
-			"net_minor": net, "tax_unknown": !tax.Valid,
-			"to_account_id": toAccountID, "to_account_name": accountValue,
-			"entry_id": entryID,
-		})
 	}
 	if err := rows.Err(); err != nil {
 		internalErr(w, err)

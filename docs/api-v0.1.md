@@ -66,6 +66,7 @@
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
 | DELETE | `/projects/{id}` | IMPLEMENTED | 从管理列表和记账选项移除，保留历史关联和项目汇总。重复删除返回 200 |
 | GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
+| DELETE | `/household/members/{id}` | IMPLEMENTED | 删除未关联档案并记录审计，重复删除成功；有关联登录、邀请历史或账务记录时返回 409 |
 | POST | `/household/members/current` | IMPLEMENTED | 返回当前可记账账号绑定的成员档案。尚未绑定的旧账号按用户名创建并绑定自己的档案。重复调用返回同一档案 |
 | GET | `/household/current` | IMPLEMENTED | 当前会话所属家庭的名称、币种和业务时区 |
 | POST | `/household/invitations` | IMPLEMENTED | 为现有或新建成员档案签发邀请 |
@@ -119,6 +120,8 @@
 | GET/POST | `/credit-instruments` | IMPLEMENTED | 信用卡、花呗、美团、抖音及自定义工具。列表返回 `issuer` |
 | GET | `/credit-statements` | IMPLEMENTED | 账单列表（自动归集） |
 | POST | `/credit-statements/{id}/payments` | IMPLEMENTED | 部分/全额还款 |
+| POST | `/credit-statements/{id}/payments/{paymentId}/reverse` | IMPLEMENTED | 填写原因，按原还款日冲正误录还款，恢复付款账户余额、信用负债与账单待付提醒。重复提交返回同一冲正分录；账单详情保留原还款记录及状态 |
+| PATCH | `/credit-statements/{id}/archive` | IMPLEMENTED | `{"archived":true}` 将未还金额恰为零的账单移出普通列表，保留明细与还款。传 `false` 恢复。通过 `GET /credit-statements?archived=true` 查看归档；账单余额再次变化时自动恢复 |
 | POST | `/credit-statements/{id}/reconcile` | IMPLEMENTED | 录入平台账单金额（只记核对值） |
 | PATCH | `/credit-instruments/{id}` | IMPLEMENTED | 周期、额度和启停，记录变更审计 |
 | DELETE | `/credit-instruments/{id}` | IMPLEMENTED | 将未使用工具移出列表与支付选项，重复请求返回成功。已有账单、交易或分录时返回 409 |
@@ -134,28 +137,36 @@
 |---|---|---|---|
 | GET/POST | `/installments` | IMPLEMENTED | 合同；校验期次本金/费用合计 |
 | POST | `/installments/{id}/payments` | IMPLEMENTED | 确认实付（`channel=cash\|credit`） |
+| POST | `/installments/{id}/payments/{paymentId}/reverse` | IMPLEMENTED | 填写原因，按原付款日冲正并恢复期次应付及提醒。信用渠道回写原账单，原账单未还额不足时返回 409。重复提交返回同一冲正分录 |
 | POST | `/installments/convert-from-credit` | IMPLEMENTED（V0.1.1） | 指定 `credit_instrument_id` 与 `statement_id`，同一事务重分类本金、冲减原账单及已有待办。仅当该工具恰有一张未还账单时可省略 `statement_id` |
 | GET | `/schedule/due-items` | IMPLEMENTED | 待支付事项（只读，业务日时钟） |
 | POST | `/schedule/generate` | IMPLEMENTED | 手动幂等生成未来 30 天待办 |
 | GET | `/schedule/runs` | IMPLEMENTED | 当前家庭最近 50 次投影记录，含成功及可持久化的失败 |
 | GET | `/installments/{id}` | IMPLEMENTED | 合同与期次计划 |
+| POST | `/installments/{id}/reverse` | IMPLEMENTED | 填写原因，按原入账日冲正无有效付款和退款的分期，取消期次及待付提醒。付款可先逐笔冲正，保留历史。信用账单转分期将本金恢复到原账单。重复提交返回同一冲正分录 |
 | POST | `/installments/{id}/refunds` · `/installments/{id}/adjust-schedule` · `/installments/{id}/settle-early` | IMPLEMENTED | 退款、显式调整未付款期次与提前结清 |
+| POST | `/installments/{id}/refunds/{refundId}/reverse` | IMPLEMENTED | 按原退款日期撤销，恢复原账户或信用账单。撤销后剩余退款不足以覆盖已减免金额时返回 409。重复提交返回同一更正记录 |
 | POST | `/installments/{id}/confirm-schedule` | PLANNED | 创建合同时已写入校验后的计划。后续调整通过 `adjust-schedule` 显式提交 |
 | GET/POST | `/debts` | IMPLEMENTED | 房贷、贷款、保险等合同列表和创建 |
 | GET/PATCH | `/debts/{id}` | IMPLEMENTED | 合同与期次详情、合同资料编辑 |
+| DELETE | `/debts/{id}` | IMPLEMENTED | 删除零本金且无付款历史的合同，取消期次并移除待支付提醒。重复删除成功，有入账本金或付款历史返回 409 |
+| POST | `/debts/{id}/reverse` | IMPLEMENTED | 填写原因，按原日期撤销合同起始本金，保留合同与记账历史并取消待付款。所有付款已按原日撤销时也可操作。旧版跨日处理的付款须单独核对。重复提交返回同一纠正记录 |
 | POST | `/debts/{id}/schedule` · `/debts/{id}/payments` | IMPLEMENTED | 录入计划和按期确认付款 |
-| POST | `/debts/{id}/payments/{paymentId}/reverse` · `/debts/{id}/settle-early` | IMPLEMENTED | 付款冲正、提前结清 |
+| POST | `/debts/{id}/payments/{paymentId}/reverse` · `/debts/{id}/settle-early` | IMPLEMENTED | 按原付款日撤销误录付款，恢复每期金额、待付款和原信用账单，或提前结清 |
 
 ### `/investments`（S5）
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
 | GET/POST | `/investments/assets` | IMPLEMENTED | 股票/ETF/理财/自定义资产 |
-| GET/POST | `/investments/trades` | IMPLEMENTED | 买入/卖出（移动加权平均成本） |
+| GET/POST | `/investments/trades` | IMPLEMENTED | 买入/卖出（移动加权平均成本）。列表保留冲正状态，`?order=posted` 按入账顺序查看最近 200 笔 |
+| POST | `/investments/trades/{id}/reverse` | IMPLEMENTED | 按原成交日期冲正该资产最后入账且顺序明确的成交，恢复资金、持仓成本与已实现收益。重复提交返回同一冲正分录 |
 | GET | `/investments/positions` | IMPLEMENTED | 数量/总成本/移动均价/已实现·未实现收益/净分红/参考收益率；口径第 9 项已确认为「总收益 ÷ 累计买入成本」，**不得标为年化** |
 | POST | `/investments/dividends` | IMPLEMENTED | `tax_minor: null` = 未填写（不默认 0） |
-| GET | `/investments/dividends` | IMPLEMENTED（V0.1.3 预检） | 分红历史与年度汇总；支持 `?asset_id=` / `?from=` / `?to=`；返回逐笔 `tax_unknown`、`entry_id` 与 `by_year`；SQL 层 `household_id` 隔离，未知税额不按 0 处理 |
+| GET | `/investments/dividends` | IMPLEMENTED | 分红历史与年度汇总，支持 `?asset_id=` / `?from=` / `?to=`。历史含分录状态，汇总仅纳入有效分红，未知税额不按 0 处理 |
+| POST | `/investments/dividends/{id}/reverse` | IMPLEMENTED | 填写冲正原因，按原到账日期生成抵销分录并更新持仓净分红。重复提交返回同一冲正分录 |
 | POST | `/investments/valuations` | IMPLEMENTED | 手工录入估值，估值日期显式展示 |
+| DELETE | `/investments/valuations/{asset_id}/{valued_on}` | IMPLEMENTED | 按资产和日期删除手工估值，更新最新估值日期并记录审计。对同家庭资产的同日重复删除返回成功 |
 | POST | `/investments/fee-rules` | IMPLEMENTED | 按投资账户追加版本。交易按成交日选择已生效版本并保存快照 |
 | GET | `/investments/fee-rules` | IMPLEMENTED（V0.1.2） | 本家庭费率规则列表，支持 `?account_id=`；返回版本、生效日、各项 bps 与最低佣金；SQL 层 `household_id` 隔离 |
 | POST | `/investments/fee-rules/preview` | IMPLEMENTED（V0.1.2） | 纯计算、零写入的费用预览；与真实交易共用 `computeTradeFee`，返回佣金/印花税/过户费/合计及适用规则版本 |

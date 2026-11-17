@@ -36,6 +36,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/household/current", a.handleCurrentHousehold)
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
 	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)
+	a.route(mux, "DELETE /api/v1/household/members/{id}", a.handleDeleteMember)
 	a.route(mux, "POST /api/v1/household/members/current", a.handleEnsureCurrentMember)
 	a.route(mux, "GET /api/v1/categories", a.handleListCategories)
 	a.route(mux, "POST /api/v1/categories", a.handleCreateCategory)
@@ -460,8 +461,8 @@ func (a *API) handleProjectSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,t.id,t.occurred_on,c.id,c.name,t.type,s.amount_minor,
-		       COALESCE((SELECT SUM(r.amount_minor) FROM refunds r
-		                WHERE r.household_id=t.household_id AND r.split_id=s.id),0)
+		       COALESCE((SELECT SUM(r.amount_minor) `+refundJournalJoin+`
+		                WHERE r.household_id=t.household_id AND r.split_id=s.id AND e.status='posted'),0)
 		FROM transaction_splits s JOIN transactions t ON t.id=s.transaction_id
 		JOIN categories c ON c.id=s.category_id AND c.household_id=t.household_id
 		WHERE s.project_id=? AND t.household_id=? AND t.status='posted'
@@ -600,7 +601,7 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	id := newID("acc")
 	code := ledgerCodeFor(in.Kind, id)
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		if err := validateAccountOwner(r, tx, p.HouseholdID, in.OwnerMemberID); err != nil {
+		if err := a.validateAccountOwner(r, tx, p.HouseholdID, in.OwnerMemberID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(),

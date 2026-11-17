@@ -550,9 +550,9 @@ func TestV011_DebtPartialPaymentReversalAndIdempotency(t *testing.T) {
 	if first["status"] != "partial" || number(first["remaining_minor"]) != 80_000 {
 		t.Errorf("period state after reversal = %v", first)
 	}
-	code, _ := c.do("POST", "/api/v1/debts/"+loan+"/payments/"+p1["id"].(string)+"/reverse", map[string]any{})
-	if code == 200 || code == 201 {
-		t.Fatal("double reversal must be rejected")
+	replay := c.mustOK("POST", "/api/v1/debts/"+loan+"/payments/"+p1["id"].(string)+"/reverse", map[string]any{})
+	if replay["reversal_entry_id"] != rev["reversal_entry_id"] {
+		t.Fatalf("repeat withdrawal created a new record: %v", replay)
 	}
 }
 
@@ -828,7 +828,7 @@ func TestV011_InstallmentConvertFromCreditKeepsSinglePrincipal(t *testing.T) {
 		"kind": "credit_card", "name": "转分期卡", "cycle_start_day": 1,
 		"cycle_end_day": 31, "due_day": 10, "due_month_offset": 1,
 	})["id"].(string)
-	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+	purchase := c.mustOK("POST", "/api/v1/transactions", map[string]any{
 		"type": "expense", "amount_minor": 100_000, "occurred_on": "2026-11-12",
 		"payment_kind": "credit", "credit_instrument_id": ci,
 		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 100_000}},
@@ -896,6 +896,54 @@ func TestV011_InstallmentConvertFromCreditKeepsSinglePrincipal(t *testing.T) {
 	})
 	if code == 200 || code == 201 {
 		t.Fatal("conversion exceeding outstanding balance must be refused")
+	}
+	reason := map[string]string{"reason": "误转分期"}
+	reversePath := "/api/v1/installments/" + instID + "/reverse"
+	reversed := c.mustOK("POST", reversePath, reason)
+	if retry := c.mustOK("POST", reversePath, reason); reversed["reversal_entry_id"] == nil || retry["reversal_entry_id"] != reversed["reversal_entry_id"] {
+		t.Fatalf("conversion reversal was not idempotent: %v / %v", reversed, retry)
+	}
+	c.mustOK("POST", "/api/v1/installments/"+first["id"].(string)+"/reverse", reason)
+	bill = c.mustOK("GET", "/api/v1/credit-statements/"+stmtID, nil)
+	if number(bill["remaining_minor"]) != 100_000 || number(bill["paid_minor"]) != 0 {
+		t.Fatalf("original bill was not restored: %v", bill)
+	}
+	if err := database.QueryRow(`SELECT amount_minor FROM schedule_due_items WHERE source_id=? AND status='pending'`, stmtID).Scan(&projected); err != nil || projected != 100_000 {
+		t.Fatalf("restored bill reminder = %d, err=%v", projected, err)
+	}
+	if got := subjectMinor(t, database, "2010:"+ci); got != -100_000 {
+		t.Fatalf("credit liability after reversal = %d", got)
+	}
+	if got := subjectMinor(t, database, "2020:"+instID); got != 0 {
+		t.Fatalf("installment liability after reversal = %d", got)
+	}
+	sum = c.mustOK("GET", "/api/v1/dashboard/summary?from=2026-11-01&to=2026-11-30", nil)
+	if number(sum["expense_minor"]) != 100_000 {
+		t.Fatalf("conversion reversal changed the original expense: %v", sum)
+	}
+	if status, result := c.do("DELETE", "/api/v1/transactions/"+purchase["id"].(string), nil); status != 204 {
+		t.Fatalf("fully reversed conversions still block correcting the source transaction: %d %v", status, result)
+	}
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 100_000, "occurred_on": "2026-11-12",
+		"payment_kind": "credit", "credit_instrument_id": ci,
+		"splits": []any{map[string]any{"category_id": expCat, "amount_minor": 100_000}},
+	})
+	withPayment := c.mustOK("POST", convertPath, partial)["id"].(string)
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"name": "账单付款账户", "kind": "cash", "opening_balance_minor": 100_000,
+	})["id"]
+	c.mustOK("POST", "/api/v1/credit-statements/"+stmtID+"/payments", map[string]any{
+		"amount_minor": 60_000, "paid_on": "2026-12-01", "from_account_id": cash,
+	})
+	c.mustOK("POST", "/api/v1/installments/"+withPayment+"/reverse", reason)
+	bill = c.mustOK("GET", "/api/v1/credit-statements/"+stmtID, nil)
+	if number(bill["remaining_minor"]) != 40_000 || number(bill["paid_minor"]) != 60_000 {
+		t.Fatalf("conversion reversal changed a prior statement payment: %v", bill)
+	}
+	if err := database.QueryRow(`SELECT amount_minor FROM schedule_due_items WHERE source_id=? AND status='pending'`, stmtID).Scan(&projected); err != nil || projected != 40_000 {
+		t.Fatalf("paid bill reminder was not reopened correctly: %d, err=%v", projected, err)
 	}
 }
 
@@ -1351,5 +1399,386 @@ func TestLegacyInstallmentSplitRecoveredBeforeSettlement(t *testing.T) {
 	}
 	if got := subjectMinor(t, database, "5110"); got != 3_000 {
 		t.Errorf("fees after settlement = %d, want 3000", got)
+	}
+}
+
+func TestDeleteUnusedDebt(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	const base = "/api/v1/debts"
+	debt := makeDebt(t, c, "insurance", 0, "2026-11-10")
+	path := base + "/" + debt
+	period := map[string]any{"installment_no": 1, "due_on": "2026-11-10", "fee_minor": 1200}
+	makeDebtSchedule(t, c, debt, period)
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	if items := c.mustOK("GET", "/api/v1/schedule/due-items", nil)["items"].([]any); len(items) != 1 {
+		t.Fatalf("expected pending obligation: %v", items)
+	}
+	c.mustOK("DELETE", path, nil)
+	c.mustOK("DELETE", path, nil)
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	for _, endpoint := range []string{base, "/api/v1/schedule/due-items"} {
+		if items := c.mustOK("GET", endpoint, nil)["items"].([]any); len(items) != 0 {
+			t.Fatalf("deleted contract remains in %s: %v", endpoint, items)
+		}
+	}
+	if status, _ := c.do("PATCH", path, map[string]string{"status": "active"}); status < 400 {
+		t.Fatalf("deleted contract reactivated: %d", status)
+	}
+	loan := makeDebt(t, c, "loan", 5000, "2026-11-10")
+	if status, _ := c.do("DELETE", base+"/"+loan, nil); status != 409 {
+		t.Fatalf("funded debt returned %d", status)
+	}
+	paid := makeDebt(t, c, "insurance", 0, "2026-11-10")
+	makeDebtSchedule(t, c, paid, period)
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "保费扣款", "opening_balance_minor": 5000,
+	})["id"]
+	payment := c.mustOK("POST", base+"/"+paid+"/payments", map[string]any{
+		"installment_no": 1, "amount_minor": 1200, "paid_on": "2026-11-10",
+		"channel": "cash", "channel_id": cash, "principal_minor": 0, "interest_minor": 0, "fee_minor": 1200,
+	})["id"].(string)
+	if status, _ := c.do("DELETE", base+"/"+paid, nil); status != 409 {
+		t.Fatalf("paid contract returned %d", status)
+	}
+	c.mustOK("POST", base+"/"+paid+"/payments/"+payment+"/reverse", map[string]string{"reason": "测试冲正"})
+	if status, _ := c.do("DELETE", base+"/"+paid, nil); status != 409 {
+		t.Fatalf("reversed payment history returned %d", status)
+	}
+}
+
+func TestReverseUnpaidInstallment(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	const base = "/api/v1/installments"
+	create := func() map[string]any {
+		return c.mustOK("POST", base, map[string]any{
+			"name": "误建分期", "category_id": c.firstCategory("expense"), "principal_minor": 30000,
+			"total_fee_minor": 900, "periods": 3, "first_due_on": "2026-11-14",
+		})
+	}
+	contract := create()
+	id := contract["id"].(string)
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	const dash = "/api/v1/dashboard/summary?from=2026-11-14&to=2026-11-14"
+	before := c.mustOK("GET", dash, nil)
+	body := map[string]string{"reason": "重复录入"}
+	path := base + "/" + id + "/reverse"
+	result := c.mustOK("POST", path, body)
+	retry := c.mustOK("POST", path, body)
+	if result["reversal_entry_id"] == nil || retry["reversal_entry_id"] != result["reversal_entry_id"] {
+		t.Fatalf("reversal was not idempotent: %v, %v", result, retry)
+	}
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	if items := c.mustOK("GET", "/api/v1/schedule/due-items", nil)["items"].([]any); len(items) != 0 {
+		t.Fatalf("pending installment reminders survived: %v", items)
+	}
+	detail := c.mustOK("GET", base+"/"+id, nil)
+	if detail["status"] != "cancelled" {
+		t.Fatalf("unexpected contract status: %v", detail)
+	}
+	after := c.mustOK("GET", dash, nil)
+	if number(before["expense_minor"]) != 30000 || number(after["expense_minor"]) != 0 || number(after["net_worth_minor"]) != 0 {
+		t.Fatalf("installment expense did not reverse: %v -> %v", before, after)
+	}
+	tx := c.mustOK("GET", "/api/v1/transactions/"+contract["source_transaction_id"].(string), nil)
+	if tx["status"] != "reversed" {
+		t.Fatalf("source transaction not marked reversed: %v", tx)
+	}
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "分期付款账户", "opening_balance_minor": 80000,
+	})["id"]
+	payment := map[string]any{
+		"installment_no": 1, "amount_minor": 10300, "paid_on": "2026-11-14",
+		"channel": "cash", "channel_id": cash,
+	}
+	if status, _ := c.do("POST", base+"/"+id+"/payments", payment); status != 400 {
+		t.Fatalf("cancelled installment accepted payment: %d", status)
+	}
+	paidID := create()["id"].(string)
+	c.mustOK("POST", base+"/"+paidID+"/payments", payment)
+	if status, _ := c.do("POST", base+"/"+paidID+"/reverse", body); status != 409 {
+		t.Fatalf("paid installment returned %d", status)
+	}
+	refundedID := create()["id"].(string)
+	c.mustOK("POST", base+"/"+refundedID+"/refunds", map[string]any{
+		"amount_minor": 1000, "refund_on": "2026-11-14", "destination_type": "cash", "destination_id": cash,
+	})
+	if status, _ := c.do("POST", base+"/"+refundedID+"/reverse", body); status != 409 {
+		t.Fatalf("refunded installment returned %d", status)
+	}
+}
+
+func TestReverseUnpaidDebtOpening(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	debt := makeDebt(t, c, "loan", 30000, "2026-11-14")
+	path := "/api/v1/debts/" + debt
+	makeDebtSchedule(t, c, debt, map[string]any{"installment_no": 1, "due_on": "2026-11-14", "principal_minor": 30000})
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	body := map[string]string{"reason": "期初本金误录"}
+	first := c.mustOK("POST", path+"/reverse", body)
+	replay := c.mustOK("POST", path+"/reverse", body)
+	if first["reversal_entry_id"] == nil || first["reversal_entry_id"] != replay["reversal_entry_id"] {
+		t.Fatalf("opening reversal not idempotent: %v / %v", first, replay)
+	}
+	if got := subjectMinor(t, database, "2030:"+debt); got != 0 {
+		t.Fatalf("liability after reversal: %d", got)
+	}
+	if got := subjectMinor(t, database, "3010"); got != 0 {
+		t.Fatalf("opening equity after reversal: %d", got)
+	}
+	detail := c.mustOK("GET", path, nil)
+	if detail["status"] != "cancelled" || number(detail["remaining_principal_minor"]) != 0 {
+		t.Fatalf("unexpected contract: %v", detail)
+	}
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	if items := c.mustOK("GET", "/api/v1/schedule/due-items", nil)["items"].([]any); len(items) != 0 {
+		t.Fatalf("pending reminders survived: %v", items)
+	}
+	if status, _ := c.do("PATCH", path, map[string]string{"status": "active"}); status < 400 {
+		t.Fatalf("cancelled debt reactivated: %d", status)
+	}
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"name": "还款账户", "kind": "cash", "opening_balance_minor": 50000,
+	})["id"]
+	payment := map[string]any{
+		"installment_no": 1, "amount_minor": 10000, "paid_on": "2026-11-14", "channel": "cash",
+		"channel_id": cash, "principal_minor": 10000, "interest_minor": 0, "fee_minor": 0,
+	}
+	if status, _ := c.do("POST", path+"/payments", payment); status != 400 {
+		t.Fatalf("cancelled debt accepted a payment: %d", status)
+	}
+	paid := makeDebt(t, c, "loan", 30000, "2026-11-14")
+	paidPath := "/api/v1/debts/" + paid
+	makeDebtSchedule(t, c, paid, map[string]any{"installment_no": 1, "due_on": "2026-11-14", "principal_minor": 30000})
+	paymentID := c.mustOK("POST", paidPath+"/payments", payment)["id"].(string)
+	if status, _ := c.do("POST", paidPath+"/reverse", body); status != 409 {
+		t.Fatalf("partially paid debt returned %d", status)
+	}
+	paymentPath := paidPath + "/payments/" + paymentID + "/reverse"
+	undo := c.mustOK("POST", paymentPath, body)
+	if replay := c.mustOK("POST", paymentPath, body); undo["reversal_entry_id"] == nil || replay["reversal_entry_id"] != undo["reversal_entry_id"] {
+		t.Fatalf("repeated payment withdrawal returned %v / %v", undo, replay)
+	}
+	if got := subjectMinor(t, database, "2030:"+paid); got != -30000 {
+		t.Fatalf("withdrawal did not restore the loan balance: %d", got)
+	}
+	c.mustOK("POST", paidPath+"/reverse", body)
+	if got := subjectMinor(t, database, "2030:"+paid); got != 0 {
+		t.Fatalf("opening liability not removed after all payments were undone: %d", got)
+	}
+	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"kind": "credit_card", "name": "负债付款信用卡", "cycle_start_day": 1,
+		"cycle_end_day": 31, "due_day": 10, "due_month_offset": 1,
+	})["id"].(string)
+	creditDebt := makeDebt(t, c, "loan", 30000, "2026-11-14")
+	creditPath := "/api/v1/debts/" + creditDebt
+	makeDebtSchedule(t, c, creditDebt, map[string]any{"installment_no": 1, "due_on": "2026-11-14", "principal_minor": 30000})
+	payment["channel"], payment["channel_id"] = "credit", card
+	creditPaymentID := c.mustOK("POST", creditPath+"/payments", payment)["id"].(string)
+	oldBill := findRow(t, c.mustOK("GET", "/api/v1/credit-statements", nil), "instrument_id", card)
+	c.mustOK("POST", creditPath+"/payments/"+creditPaymentID+"/reverse", body)
+	bill := c.mustOK("GET", "/api/v1/credit-statements/"+oldBill["id"].(string), nil)
+	if number(bill["system_due_minor"]) != 0 || subjectMinor(t, database, "2010:"+card) != 0 {
+		t.Fatalf("undoing a fixed-debt credit payment did not restore the original card bill: %v", bill)
+	}
+}
+
+func TestReverseCreditStatementPayment(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{"kind": "cash", "name": "还款现金", "opening_balance_minor": 50000})["id"].(string)
+	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{"kind": "credit_card", "name": "信用卡", "cycle_start_day": 1, "cycle_end_day": 31, "due_day": 10, "due_month_offset": 1})["id"].(string)
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{"type": "expense", "amount_minor": 20000, "occurred_on": "2026-11-12", "payment_kind": "credit", "credit_instrument_id": card, "splits": []map[string]any{{"category_id": c.firstCategory("expense"), "amount_minor": 20000}}})
+	statement := findRow(t, c.mustOK("GET", "/api/v1/credit-statements", nil), "instrument_id", card)
+	base := "/api/v1/credit-statements/" + statement["id"].(string)
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	pay := c.mustOK("POST", base+"/payments", map[string]any{"amount_minor": 20000, "paid_on": "2026-11-14", "from_account_id": cash})["id"].(string)
+	path := base + "/payments/" + pay + "/reverse"
+	reason := map[string]string{"reason": "误录还款"}
+	first := c.mustOK("POST", path, reason)
+	again := c.mustOK("POST", path, reason)
+	if first["reversal_entry_id"] == nil || first["reversal_entry_id"] != again["reversal_entry_id"] {
+		t.Fatalf("non-idempotent reversal: %v %v", first, again)
+	}
+	detail := c.mustOK("GET", base, nil)
+	if number(detail["paid_minor"]) != 0 || number(detail["system_due_minor"]) != 20000 {
+		t.Fatalf("wrong statement after reversal: %v", detail)
+	}
+	items := detail["payments"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["status"] != "reversed" {
+		t.Fatalf("payment history not retained: %v", items)
+	}
+	if got := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"]); got != 50000 {
+		t.Fatalf("cash balance after reversal: %d", got)
+	}
+	if got := subjectMinor(t, database, "2010:"+card); got != -20000 {
+		t.Fatalf("credit balance after reversal: %d", got)
+	}
+	var pending int64
+	if err := database.QueryRow(`SELECT amount_minor FROM schedule_due_items WHERE source_id=? AND status='pending'`, statement["id"]).Scan(&pending); err != nil || pending != 20000 {
+		t.Fatalf("pending amount %d, err %v", pending, err)
+	}
+}
+
+func TestArchiveSettledCreditStatement(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{"kind": "credit_card", "name": "信用卡", "cycle_start_day": 1, "cycle_end_day": 31, "due_day": 10, "due_month_offset": 1})["id"].(string)
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{"kind": "cash", "name": "还款现金", "opening_balance_minor": 50000})["id"].(string)
+	spend := func(amount int64) {
+		c.mustOK("POST", "/api/v1/transactions", map[string]any{"type": "expense", "amount_minor": amount, "occurred_on": "2026-11-12", "payment_kind": "credit", "credit_instrument_id": card, "splits": []map[string]any{{"category_id": c.firstCategory("expense"), "amount_minor": amount}}})
+	}
+	spend(20000)
+	const base = "/api/v1/credit-statements"
+	id := findRow(t, c.mustOK("GET", base, nil), "instrument_id", card)["id"].(string)
+	path := base + "/" + id
+	archive := map[string]bool{"archived": true}
+	if status, _ := c.do("PATCH", path+"/archive", archive); status != 409 {
+		t.Fatalf("unpaid statement archive returned %d", status)
+	}
+	c.mustOK("POST", path+"/payments", map[string]any{"amount_minor": 20000, "paid_on": "2026-11-14", "from_account_id": cash})
+	c.mustOK("PATCH", path+"/archive", archive)
+	c.mustOK("PATCH", path+"/archive", archive)
+	if got := number(c.mustOK("GET", base, nil)["total"]); got != 0 {
+		t.Fatalf("archived statement still listed: %d", got)
+	}
+	archived := findRow(t, c.mustOK("GET", base+"?archived=true", nil), "id", id)
+	if archived["archived"] != true || archived["status"] != "paid" {
+		t.Fatalf("archive changed accounting status: %v", archived)
+	}
+	detail := c.mustOK("GET", path, nil)
+	if len(detail["payments"].([]any)) != 1 || len(detail["items"].([]any)) != 1 || number(detail["paid_minor"]) != 20000 {
+		t.Fatalf("archive lost history: %v", detail)
+	}
+	c.mustOK("PATCH", path+"/archive", map[string]bool{"archived": false})
+	findRow(t, c.mustOK("GET", base, nil), "id", id)
+	c.mustOK("PATCH", path+"/archive", archive)
+	spend(1000)
+	reopened := findRow(t, c.mustOK("GET", base, nil), "id", id)
+	if reopened["archived"] != false || number(reopened["remaining_minor"]) != 1000 {
+		t.Fatalf("late posting failed to reopen the same statement: %v", reopened)
+	}
+	if got := number(c.mustOK("GET", base+"?archived=true", nil)["total"]); got != 0 {
+		t.Fatalf("reopened statement still archived: %d", got)
+	}
+	var pending int64
+	if err := database.QueryRow(`SELECT amount_minor FROM schedule_due_items WHERE source_id=? AND status='pending'`, id).Scan(&pending); err != nil || pending != 1000 {
+		t.Fatalf("reopened bill did not restore its reminder: %d, err=%v", pending, err)
+	}
+}
+
+func TestReverseInstallmentPayment(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{"kind": "cash", "name": "还款现金", "opening_balance_minor": 50000})["id"].(string)
+	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{"kind": "credit_card", "name": "信用卡", "cycle_start_day": 1, "cycle_end_day": 31, "due_day": 10, "due_month_offset": 1})["id"].(string)
+	id := c.mustOK("POST", "/api/v1/installments", map[string]any{"name": "测试分期", "category_id": c.firstCategory("expense"), "principal_minor": 20000, "total_fee_minor": 1000, "periods": 1, "first_due_on": "2026-11-14"})["id"].(string)
+	path := "/api/v1/installments/" + id
+	c.mustOK("POST", "/api/v1/schedule/generate", map[string]any{})
+	pay := func(channel, channelID string) string {
+		return c.mustOK("POST", path+"/payments", map[string]any{"installment_no": 1, "amount_minor": 10500, "paid_on": "2026-11-14", "channel": channel, "channel_id": channelID})["id"].(string)
+	}
+	cashPayment := pay("cash", cash)
+	cardPayment := pay("credit", card)
+	reason := map[string]string{"reason": "误录付款"}
+	reverse := func(payment string) string { return path + "/payments/" + payment + "/reverse" }
+	first := c.mustOK("POST", reverse(cashPayment), reason)
+	if retry := c.mustOK("POST", reverse(cashPayment), reason); first["reversal_entry_id"] == nil || retry["reversal_entry_id"] != first["reversal_entry_id"] {
+		t.Fatalf("non-idempotent reversal: %v %v", first, retry)
+	}
+	detail := c.mustOK("GET", path, nil)
+	if got := number(conservation(t, detail)["remaining_minor"]); got != 10500 {
+		t.Fatalf("pending amount after partial withdrawal: %d", got)
+	}
+	var reminder int64
+	if err := database.QueryRow(`
+		SELECT d.amount_minor FROM schedule_due_items d
+		JOIN installment_schedule_items s ON s.id=d.source_id
+		WHERE d.source_type='installment' AND d.status='pending' AND s.contract_id=?`, id).Scan(&reminder); err != nil || reminder != 10500 {
+		t.Fatalf("installment reminder after reversal = %d, err=%v", reminder, err)
+	}
+	statement := findRow(t, c.mustOK("GET", "/api/v1/credit-statements", nil), "instrument_id", card)
+	bill := "/api/v1/credit-statements/" + statement["id"].(string)
+	repaid := c.mustOK("POST", bill+"/payments", map[string]any{"amount_minor": 10500, "paid_on": "2026-11-15", "from_account_id": cash})["id"].(string)
+	if status, _ := c.do("POST", reverse(cardPayment), reason); status != 409 {
+		t.Fatalf("repaid credit installment reversal returned %d", status)
+	}
+	c.mustOK("POST", bill+"/payments/"+repaid+"/reverse", reason)
+	c.mustOK("POST", reverse(cardPayment), reason)
+	if row := c.mustOK("GET", bill, nil); number(row["remaining_minor"]) != 0 {
+		t.Fatalf("original credit statement was not restored: %v", row)
+	}
+	if got := subjectMinor(t, database, "2020:"+id); got != -20000 {
+		t.Fatalf("original installment liability after payment reversals: %d", got)
+	}
+	c.mustOK("POST", path+"/reverse", reason)
+	c.mustOK("POST", reverse(cardPayment), reason)
+	if got := subjectMinor(t, database, "2020:"+id); got != 0 {
+		t.Fatalf("cancelled installment liability: %d", got)
+	}
+	if balance := c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil); number(balance["balance_minor"]) != 50000 {
+		t.Fatalf("cash not restored: %v", balance)
+	}
+}
+
+func TestReverseInstallmentRefund(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{"kind": "cash", "name": "退款账户", "opening_balance_minor": 50000})["id"].(string)
+	contract := c.mustOK("POST", "/api/v1/installments", map[string]any{"name": "测试分期", "category_id": c.firstCategory("expense"), "principal_minor": 20000, "total_fee_minor": 0, "periods": 2, "first_due_on": "2026-11-14"})
+	path := "/api/v1/installments/" + contract["id"].(string)
+	postRefund := func(amount int64) string {
+		return c.mustOK("POST", path+"/refunds", map[string]any{"amount_minor": amount, "refund_on": "2026-11-14", "destination_type": "cash", "destination_id": cash})["id"].(string)
+	}
+	refund := postRefund(12000)
+	target := path + "/refunds/" + refund + "/reverse"
+	reason := map[string]string{"reason": "误录退款"}
+	first := c.mustOK("POST", target, reason)
+	if retry := c.mustOK("POST", target, reason); first["reversal_entry_id"] == nil || retry["reversal_entry_id"] != first["reversal_entry_id"] {
+		t.Fatalf("repeat reversal: %v / %v", first, retry)
+	}
+	if got := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"]); got != 50000 {
+		t.Fatalf("cash after refund reversal: %d", got)
+	}
+	detail := c.mustOK("GET", path, nil)
+	if got := number(conservation(t, detail)["refunded_minor"]); got != 0 {
+		t.Fatalf("reversed refund still counted: %d", got)
+	}
+	if refunds := detail["refunds"].([]any); len(refunds) != 1 || refunds[0].(map[string]any)["status"] != "reversed" {
+		t.Fatalf("original refund missing from history: %v", refunds)
+	}
+	summary := c.mustOK("GET", "/api/v1/refunds/by-transaction/"+contract["source_transaction_id"].(string), nil)
+	if number(summary["remaining_refundable_minor"]) != 20000 {
+		t.Fatalf("refund allowance was not restored: %v", summary)
+	}
+	refund = postRefund(12000)
+	c.mustOK("POST", path+"/adjust-schedule", map[string]any{"reason": "减少一期", "items": []map[string]any{{"installment_no": 2, "action": "cancel"}}})
+	if status, _ := c.do("POST", path+"/refunds/"+refund+"/reverse", reason); status != 409 {
+		t.Fatalf("reversal with dependent schedule change returned %d", status)
+	}
+	if got := number(c.mustOK("GET", "/api/v1/accounts/"+cash+"/balance", nil)["balance_minor"]); got != 62000 {
+		t.Fatalf("rejected reversal changed cash: %d", got)
+	}
+	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"kind": "credit_card", "name": "退款信用卡", "cycle_start_day": 1, "cycle_end_day": 31,
+		"due_day": 10, "due_month_offset": 1,
+	})["id"].(string)
+	creditRefund := c.mustOK("POST", path+"/refunds", map[string]any{
+		"amount_minor": 8000, "refund_on": "2026-11-14", "destination_type": "credit", "destination_id": card,
+	})["id"].(string)
+	stmt := findRow(t, c.mustOK("GET", "/api/v1/credit-statements", nil), "instrument_id", card)
+	c.mustOK("POST", path+"/refunds/"+creditRefund+"/reverse", reason)
+	bill := c.mustOK("GET", "/api/v1/credit-statements/"+stmt["id"].(string), nil)
+	if number(bill["system_due_minor"]) != 0 || subjectMinor(t, database, "2010:"+card) != 0 {
+		t.Fatalf("original credit bill not restored: %v", bill)
 	}
 }

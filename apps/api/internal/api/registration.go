@@ -101,6 +101,13 @@ func (a *API) handleIssueInvite(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		status, err := a.lockMember(r, tx, p.HouseholdID, in.MemberID)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "active") {
+			return unavailable
+		}
+		if err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `INSERT INTO household_invites(token_hash,household_id,member_id,target_username,expires_at)
 			SELECT ?,m.household_id,m.id,NULLIF(?,''),? FROM household_members m
 			WHERE m.id=? AND m.household_id=? AND m.status='active'

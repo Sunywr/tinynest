@@ -15,7 +15,10 @@ import (
 
 func (a *API) registerV011Installment(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/installments/{id}", a.handleGetInstallment)
+	a.route(mux, "POST /api/v1/installments/{id}/reverse", a.handleReverseInstallment)
+	a.route(mux, "POST /api/v1/installments/{id}/payments/{paymentId}/reverse", a.handleReverseInstallmentPayment)
 	a.route(mux, "POST /api/v1/installments/{id}/refunds", a.handleInstallmentRefund)
+	a.route(mux, "POST /api/v1/installments/{id}/refunds/{refundId}/reverse", a.handleReverseInstallmentRefund)
 	a.route(mux, "POST /api/v1/installments/{id}/adjust-schedule", a.handleAdjustInstallmentSchedule)
 	a.route(mux, "POST /api/v1/installments/{id}/settle-early", a.handleSettleEarlyInstallment)
 	a.route(mux, "POST /api/v1/installments/convert-from-credit", a.handleConvertFromCredit)
@@ -114,10 +117,18 @@ func (a *API) handleGetInstallment(w http.ResponseWriter, r *http.Request) {
 	_ = payRows.Close()
 
 	var refunded, adjustmentCount int64
+	refunds := []installmentRefundHistoryRow{}
 	if sourceTx != nil {
-		_ = a.DB.QueryRowContext(r.Context(),
-			`SELECT COALESCE(SUM(amount_minor),0) FROM refunds WHERE transaction_id=? AND household_id=?`,
-			*sourceTx, p.HouseholdID).Scan(&refunded)
+		refunds, err = listInstallmentRefunds(r.Context(), a.DB, p.HouseholdID, *sourceTx)
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		for _, refund := range refunds {
+			if refund.Status == ledger.StatusPosted {
+				refunded += refund.AmountMinor
+			}
+		}
 	}
 	_ = a.DB.QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM installment_adjustments WHERE contract_id=? AND household_id=?`,
@@ -128,7 +139,7 @@ func (a *API) handleGetInstallment(w http.ResponseWriter, r *http.Request) {
 		"principal_minor": principal, "total_fee_minor": fee, "periods": periods,
 		"first_due_on": firstDue, "ledger_code": code, "note": note,
 		"source_transaction_id": sourceTx,
-		"schedule":              schedule, "payments": payments,
+		"schedule":              schedule, "payments": payments, "refunds": refunds,
 		"conservation": map[string]any{
 			"scheduled_principal_minor": scheduledPrincipal,
 			"scheduled_fee_minor":       scheduledFee,
@@ -181,19 +192,20 @@ func (a *API) handleInstallmentRefund(w http.ResponseWriter, r *http.Request) {
 	var refunded int64
 	affected := []map[string]any{}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var sourceTx sql.NullString
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT source_transaction_id FROM installment_contracts WHERE id=? AND household_id=?`,
-			contractID, p.HouseholdID).Scan(&sourceTx); err != nil {
-			return errors.New("分期合同不存在")
+		status, sourceTx, lockErr := a.lockInstallment(r, tx, p.HouseholdID, contractID)
+		if lockErr != nil || status == "cancelled" {
+			return errors.New("分期合同不存在或已撤销")
 		}
 		if !sourceTx.Valid {
 			return errors.New("该合同没有关联原始消费，不能按消费退款")
 		}
 		var original int64
 		var txType, txStatus string
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT amount_minor,type,status FROM transactions WHERE id=? AND household_id=?`,
+		query := `SELECT amount_minor,type,status FROM transactions WHERE id=? AND household_id=?`
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		if err := tx.QueryRowContext(r.Context(), query,
 			sourceTx.String, p.HouseholdID).Scan(&original, &txType, &txStatus); err != nil {
 			return errors.New("原交易不存在")
 		}
@@ -218,7 +230,8 @@ func (a *API) handleInstallmentRefund(w http.ResponseWriter, r *http.Request) {
 		}
 		var already int64
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT COALESCE(SUM(amount_minor),0) FROM refunds WHERE split_id=?`, splitID).Scan(&already); err != nil {
+			`SELECT COALESCE(SUM(r.amount_minor),0) `+refundJournalJoin+`
+			 WHERE r.split_id=? AND r.household_id=? AND e.status='posted'`, splitID, p.HouseholdID).Scan(&already); err != nil {
 			return err
 		}
 		if _, err := ledger.ValidateRefund(money.Minor(splitAmount), money.Minor(already), amount); err != nil {
@@ -310,6 +323,9 @@ func (a *API) handleAdjustInstallmentSchedule(w http.ResponseWriter, r *http.Req
 	}
 	var reduced, refunded int64
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if err := a.requireUncancelledInstallment(r, tx, p.HouseholdID, contractID); err != nil {
+			return err
+		}
 		var principal, fee int64
 		var sourceTx sql.NullString
 		if err := tx.QueryRowContext(r.Context(),
@@ -318,9 +334,9 @@ func (a *API) handleAdjustInstallmentSchedule(w http.ResponseWriter, r *http.Req
 			return errors.New("分期合同不存在")
 		}
 		if sourceTx.Valid {
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT COALESCE(SUM(amount_minor),0) FROM refunds WHERE transaction_id=? AND household_id=?`,
-				sourceTx.String, p.HouseholdID).Scan(&refunded); err != nil {
+			var err error
+			refunded, err = refundTotalForTransaction(r.Context(), tx, p.HouseholdID, sourceTx.String)
+			if err != nil {
 				return err
 			}
 		}
@@ -422,11 +438,8 @@ func (a *API) handleSettleEarlyInstallment(w http.ResponseWriter, r *http.Reques
 	}
 	cancelled := 0
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM installment_contracts WHERE id=? AND household_id=?`,
-			id, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-			return errors.New("分期合同不存在")
+		if err := a.requireUncancelledInstallment(r, tx, p.HouseholdID, id); err != nil {
+			return err
 		}
 		res, err := tx.ExecContext(r.Context(), `
 			UPDATE installment_schedule_items SET status='cancelled'
@@ -602,6 +615,6 @@ func (a *API) handleConvertFromCredit(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 201, map[string]any{
 		"id": contractID, "entry_id": entryID, "status": "active",
-		"note": "仅重分类负债：信用负债减少、分期负债增加，消费只确认一次",
+		"note": "转出的本金改由分期偿还，原消费仍只记录一次",
 	})
 }

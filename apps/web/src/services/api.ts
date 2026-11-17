@@ -65,6 +65,7 @@ export const api = {
   household: () => get<{ name: string; currency: string; timezone: string }>('/household/current'),
   members: () => get<{ items: { id: string; name: string; status: string }[] }>('/household/members'),
   createMember: (name: string) => post('/household/members', { name }),
+  deleteMember: (id: string) => del(`/household/members/${encodeURIComponent(id)}`),
   ensureCurrentMember: () => post<{ id: string; name: string; status: string }>('/household/members/current', {}),
   categories: () => get('/categories'),
   createCategory: (body: any) => post('/categories', body),
@@ -102,15 +103,29 @@ export const api = {
   createCreditInstrument: (body: any) => post('/credit-instruments', body),
   patchCreditInstrument: (id: string, body: any) => request(`/credit-instruments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   statements: (params = '') => get(`/credit-statements${params}`),
-  creditStatement: (id: string) => get(`/credit-statements/${id}`),
+  setStatementArchived: (id: string, archived: boolean) =>
+    request(`/credit-statements/${encodeURIComponent(id)}/archive`, {
+      method: 'PATCH', body: JSON.stringify({ archived }),
+    }),
+  creditStatement: (id: string) => get<{ payments: {
+    id: string; paid_on: string; amount_minor: number; account_name: string | null; status: string
+  }[] }>(`/credit-statements/${encodeURIComponent(id)}`),
   adjustStatementCycle: (id: string, body: any) => request(`/credit-statements/${id}/cycle`, { method: 'PATCH', body: JSON.stringify(body) }),
   payStatement: (id: string, body: any) => post(`/credit-statements/${id}/payments`, body),
+  reverseStatementPayment: (statementId: string, paymentId: string, reason: string) =>
+    post(`/credit-statements/${encodeURIComponent(statementId)}/payments/${encodeURIComponent(paymentId)}/reverse`, { reason }),
   reconcile: (id: string, platform_amount_minor: number) =>
     post(`/credit-statements/${id}/reconcile`, { platform_amount_minor }),
 
   installments: () => get('/installments'),
+  reverseInstallment: (id: string, reason: string) =>
+    post(`/installments/${encodeURIComponent(id)}/reverse`, { reason }),
   createInstallment: (body: any) => post('/installments', body),
   installment: (id: string) => get(`/installments/${id}`),
+  reverseInstallmentRefund: (contractId: string, refundId: string, reason: string) =>
+    post(`/installments/${encodeURIComponent(contractId)}/refunds/${encodeURIComponent(refundId)}/reverse`, { reason }),
+  reverseInstallmentPayment: (contractId: string, paymentId: string, reason: string) =>
+    post(`/installments/${encodeURIComponent(contractId)}/payments/${encodeURIComponent(paymentId)}/reverse`, { reason }),
   payInstallment: (id: string, body: any) => post(`/installments/${id}/payments`, body),
   installmentRefund: (id: string, body: any) => post(`/installments/${id}/refunds`, body),
   adjustInstallmentSchedule: (id: string, body: any) => post(`/installments/${id}/adjust-schedule`, body),
@@ -129,15 +144,27 @@ export const api = {
   reverseDebtPayment: (id: string, paymentId: string, reason: string) =>
     post(`/debts/${id}/payments/${paymentId}/reverse`, { reason }),
   settleDebtEarly: (id: string, reason: string) => post(`/debts/${id}/settle-early`, { reason }),
+  deleteDebt: (id: string) => del(`/debts/${encodeURIComponent(id)}`),
+  reverseDebtOpening: (id: string, reason: string) =>
+    post(`/debts/${encodeURIComponent(id)}/reverse`, { reason }),
 
   assets: () => get('/investments/assets'),
   createAsset: (body: any) => post('/investments/assets', body),
-  trades: () => get('/investments/trades'),
+  trades: () => get<{ items: {
+    id: string; code: string; name: string; side: string; trade_on: string; gross_minor: number;
+    fee_minor: number; status: string; can_reverse: boolean
+  }[] }>('/investments/trades?order=posted'),
   createTrade: (body: any) => post('/investments/trades', body),
+  reverseTrade: (id: string, reason: string) =>
+    post(`/investments/trades/${encodeURIComponent(id)}/reverse`, { reason }),
   positions: () => get('/investments/positions'),
   createDividend: (body: any) => post('/investments/dividends', body),
   dividends: (params = '') => get(`/investments/dividends${params}`),
+  reverseDividend: (id: string, reason: string) =>
+    post(`/investments/dividends/${encodeURIComponent(id)}/reverse`, { reason }),
   createValuation: (body: any) => post('/investments/valuations', body),
+  deleteValuation: (assetId: string, date: string) =>
+    del(`/investments/valuations/${encodeURIComponent(assetId)}/${encodeURIComponent(date)}`),
   feeRules: (accountId = '') => get(`/investments/fee-rules${accountId ? `?account_id=${accountId}` : ''}`),
   createFeeRule: (body: any) => post('/investments/fee-rules', body),
   previewFee: (body: any) => post('/investments/fee-rules/preview', body),

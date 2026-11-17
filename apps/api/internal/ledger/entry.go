@@ -99,7 +99,7 @@ func (e *Entry) Reverse(newID, occurredOn string) (*Entry, error) {
 	}
 	lines := make([]Line, len(e.Lines))
 	for i, l := range e.Lines {
-		lines[i] = Line{Account: l.Account, Debit: l.Credit, Credit: l.Debit, Memo: "冲正"}
+		lines[i] = Line{Account: l.Account, Debit: l.Credit, Credit: l.Debit, Memo: "撤销原记录"}
 	}
 	r, err := New(newID, "reversal", e.BizID, occurredOn, lines...)
 	if err != nil {

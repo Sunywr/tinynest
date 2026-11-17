@@ -20,7 +20,9 @@ func (a *API) registerCredit(mux *http.ServeMux) {
 	a.route(mux, "POST /api/v1/credit-instruments", a.handleCreateInstrument)
 	a.route(mux, "DELETE /api/v1/credit-instruments/{id}", a.handleDeleteInstrument)
 	a.route(mux, "GET /api/v1/credit-statements", a.handleListStatements)
+	a.route(mux, "PATCH /api/v1/credit-statements/{id}/archive", a.handleArchiveStatement)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/payments", a.handleStatementPayment)
+	a.route(mux, "POST /api/v1/credit-statements/{id}/payments/{paymentId}/reverse", a.handleReverseStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/reconcile", a.handleReconcile)
 	a.route(mux, "GET /api/v1/installments", a.handleListInstallments)
 	a.route(mux, "POST /api/v1/installments", a.handleCreateInstallment)
@@ -88,16 +90,20 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 	if err != nil {
 		return err
 	}
-	return refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, stmtID)
+	return a.refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, stmtID)
 }
 
 // A posted bill change updates an existing reminder without altering confirmed history.
-func refreshPendingStatementAmount(ctx context.Context, tx *sql.Tx, householdID, statementID string) error {
+func (a *API) refreshPendingStatementAmount(ctx context.Context, tx *sql.Tx, householdID, statementID string) error {
 	var remaining int64
+	var status string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT system_due_minor-paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
-		statementID, householdID).Scan(&remaining); err != nil {
+		SELECT system_due_minor-paid_minor,status FROM credit_statements WHERE id=? AND household_id=?`,
+		statementID, householdID).Scan(&remaining, &status); err != nil {
 		return err
+	}
+	if status == "archived" && remaining != 0 {
+		return a.restoreStatementReminder(ctx, tx, householdID, statementID)
 	}
 	const pending = ` WHERE household_id=? AND source_type='credit_statement' AND source_id=? AND status='pending'`
 	if remaining <= 0 {
@@ -229,11 +235,16 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, to := q.Get("from"), q.Get("to")
 	status := q.Get("status")
+	const archived = "(s.status='archived' AND s.system_due_minor=s.paid_minor)"
+	filter := " AND NOT " + archived
+	if q.Get("archived") == "true" {
+		filter = " AND " + archived
+	}
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,s.instrument_id,i.name,s.cycle_start_on,s.cycle_end_on,s.due_on,
 		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status
 		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id
-		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)
+		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)`+filter+`
 		ORDER BY s.cycle_start_on DESC`, p.HouseholdID, from, from, to, to)
 	if err != nil {
 		internalErr(w, err)
@@ -258,6 +269,7 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			"system_due_minor": sysDue, "paid_minor": paid,
 			"remaining_minor": sysDue - paid,
 			"status":          derived, "derived_status": derived, "stored_status": stored,
+			"archived":              stored == "archived" && sysDue == paid,
 			"platform_amount_minor": platform,
 		}
 		if platform != nil {
@@ -483,9 +495,11 @@ func (a *API) handleListInstallments(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT c.id,c.name,c.principal_minor,c.total_fee_minor,c.periods,c.status,
-		       COUNT(i.id),COALESCE(SUM(i.paid_minor),0)
+		       COUNT(i.id),COALESCE(SUM(i.paid_minor),0),c.source_transaction_id,
+		       EXISTS(SELECT 1 `+refundJournalJoin+` WHERE r.household_id=c.household_id AND r.transaction_id=c.source_transaction_id AND e.status='posted'),
+		       EXISTS(SELECT 1 FROM journal_entries e WHERE e.household_id=c.household_id AND e.biz_id=c.id AND e.biz_type=?)
 		FROM installment_contracts c LEFT JOIN installment_schedule_items i ON i.contract_id=c.id
-		WHERE c.household_id=? GROUP BY c.id ORDER BY c.created_at DESC`, p.HouseholdID)
+		WHERE c.household_id=? GROUP BY c.id ORDER BY c.created_at DESC`, ledger.BizConvertInstall, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -496,14 +510,21 @@ func (a *API) handleListInstallments(w http.ResponseWriter, r *http.Request) {
 		var id, name, status string
 		var principal, fee, paid int64
 		var periods, count int
-		if err := rows.Scan(&id, &name, &principal, &fee, &periods, &status, &count, &paid); err != nil {
+		var source sql.NullString
+		var refunded, converted bool
+		if err := rows.Scan(&id, &name, &principal, &fee, &periods, &status, &count, &paid, &source, &refunded, &converted); err != nil {
 			internalErr(w, err)
 			return
+		}
+		remaining := principal + fee - paid
+		if status == "cancelled" {
+			remaining = 0
 		}
 		items = append(items, map[string]any{
 			"id": id, "name": name, "principal_minor": principal, "total_fee_minor": fee,
 			"periods": periods, "status": status, "schedule_items": count, "paid_minor": paid,
-			"remaining_minor": principal + fee - paid,
+			"remaining_minor": remaining, "from_credit": converted,
+			"can_reverse": (source.Valid || converted) && paid == 0 && !refunded && status != "cancelled",
 		})
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
@@ -550,6 +571,9 @@ func (a *API) handleInstallmentPayment(w http.ResponseWriter, r *http.Request) {
 	payID, entryID := newID("ipay"), newID("je")
 	var splitPrincipal, splitFee int64
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if err := a.requireUncancelledInstallment(r, tx, p.HouseholdID, contractID); err != nil {
+			return err
+		}
 		var itemID, dueOn, status string
 		var pv, fv, total, paid, usedP, usedF int64
 		if err := tx.QueryRowContext(r.Context(), `

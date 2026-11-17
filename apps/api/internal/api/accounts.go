@@ -11,14 +11,12 @@ import (
 
 var errInvalidAccountOwner = errors.New("归属成员不存在或已停用")
 
-func validateAccountOwner(r *http.Request, tx *sql.Tx, householdID string, owner *string) error {
+func (a *API) validateAccountOwner(r *http.Request, tx *sql.Tx, householdID string, owner *string) error {
 	if owner == nil || *owner == "" {
 		return nil
 	}
-	var id string
-	err := tx.QueryRowContext(r.Context(), `SELECT id FROM household_members
-		WHERE id=? AND household_id=? AND status='active'`, *owner, householdID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
+	status, err := a.lockMember(r, tx, householdID, *owner)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "active") {
 		return errInvalidAccountOwner
 	}
 	return err
@@ -110,15 +108,15 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if err := a.validateAccountOwner(r, tx, p.HouseholdID, in.Owner); err != nil {
+			return err
+		}
 		var code string
 		query := `SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status<>'deleted'`
 		if a.DB.IsMySQL() {
 			query += " FOR UPDATE"
 		}
 		if err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&code); err != nil {
-			return err
-		}
-		if err := validateAccountOwner(r, tx, p.HouseholdID, in.Owner); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `UPDATE accounts SET
