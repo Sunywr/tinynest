@@ -1,5 +1,12 @@
 # 发布候选复核
 
+## 2026-11-17 退款减免恢复发布
+
+- A/B 均从 `6f42b1e` 切换至 `f09f0c9`（含 `36cb771` 退款减免恢复），旧版本保留为回滚点。上线前 MySQL 备份服务成功，后端二进制与前端产物的 SHA-256 均与构建机一致。
+- [候选 CI](https://github.com/Sunywr/tinynest/actions/runs?q=branch%3Afeature%2Frefund-reversal-restore) 四项通过，含 Go race、MySQL Unix socket、账务与备份恢复演练及 79 项浏览器端到端回归。
+- 生产冒烟：HTTPS 落地页 200（www 跳转到主域），经 A→B 私网 TLS 的健康检查返回 ok，新前端资源可取，未登录 `/api/v1/accounts` 为 401。
+- 授权账号的生产账务操作（含一笔带减免的退款撤销）、异地副本与 iPhone Safari 实机仍为 `UNVERIFIED`。
+
 ## 2026-11-17 删除与撤销功能发布
 
 - A/B 均从 `3578ae7` 切换至 `6f42b1e`，保留旧版本作为回滚点。上线前 MySQL 备份服务成功，前后端产物通过 SHA-256 校验。
