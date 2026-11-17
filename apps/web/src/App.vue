@@ -1175,7 +1175,7 @@ function instAdjustReduce(no: number, principal: number, fee: number) {
   }), '期次已调整（已审计）')
 }
 function reverseInstallmentRefund(contractId: string, refundId: string) {
-  const reason = window.prompt('要撤销这笔退款吗？退款金额会从原到账账户扣回，或加回原信用账单。请填写原因：')?.trim()
+  const reason = window.prompt('要撤销这笔退款吗？退款金额会从原到账账户扣回，或加回原信用账单；已用于减免期次的退款会同时恢复对应期次的应付金额（先恢复最近减免，本金优先）。请填写原因：')?.trim()
   if (!reason) return
   if ([...reason].length > 200) return toast('撤销原因最多 200 个字符')
   return run(() => api.reverseInstallmentRefund(contractId, refundId, reason), '退款已撤销')
