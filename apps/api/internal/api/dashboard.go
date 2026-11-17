@@ -99,7 +99,7 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 
 	accounts := []map[string]any{}
 	rows, err := a.DB.QueryContext(ctx,
-		`SELECT id,name,ledger_code FROM accounts WHERE household_id=? ORDER BY created_at`, p.HouseholdID)
+		`SELECT id,name,ledger_code FROM accounts WHERE household_id=? AND status<>'deleted' ORDER BY created_at`, p.HouseholdID)
 	if err == nil {
 		type acc struct{ id, name, code string }
 		var list []acc

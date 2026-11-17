@@ -60,9 +60,11 @@
 |---|---|---|---|
 | GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（两级，level<=2） |
 | PATCH | `/categories/{id}` | IMPLEMENTED | 传入任一字段：`name`（非空）、`sort`（整数）、`active`（布尔值）；仅更新本家庭分类。停用后不可用于新流水，历史关联保留 |
+| DELETE | `/categories/{id}` | IMPLEMENTED | 从管理列表和记账选项移除，保留历史关联。有子分类时返回 409，重复删除返回 200 |
 | GET/POST | `/projects` | IMPLEMENTED | 项目列表 / 新建 |
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出、分类构成与最近 100 条拆分流水 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
+| DELETE | `/projects/{id}` | IMPLEMENTED | 从管理列表和记账选项移除，保留历史关联和项目汇总。重复删除返回 200 |
 | GET/POST | `/household/members` | IMPLEMENTED | 本家庭成员列表与新增；`name` 为 1 至 100 个字符，成员档案不创建登录账号 |
 | POST | `/household/members/current` | IMPLEMENTED | 返回当前可记账账号绑定的成员档案。尚未绑定的旧账号按用户名创建并绑定自己的档案。重复调用返回同一档案 |
 | GET | `/household/current` | IMPLEMENTED | 当前会话所属家庭的名称、币种和业务时区 |
@@ -75,6 +77,7 @@
 | GET/POST | `/accounts` | IMPLEMENTED | 现金/证券/理财账户；创建可带 `opening_balance_minor` |
 | GET | `/accounts/{id}/balance` | IMPLEMENTED | 由分录重建余额 |
 | GET/PATCH | `/accounts/{id}` | IMPLEMENTED | 账户详情与资料编辑（名称、子类型、归属成员、备注、启用状态），余额由分录计算 |
+| DELETE | `/accounts/{id}` | IMPLEMENTED | 移出家庭账户列表、首页账户列表和记账选项。保留分录、余额与报表影响，重复删除返回相同状态 |
 | GET | `/ledger/accounts` | PLANNED | 完整科目表。现有账户、账户分录和净资产接口支持已公开的账户与科目下钻 |
 | GET | `/accounts/{id}/journal` | IMPLEMENTED | 本家庭账户最近 100 笔分录净变动，含期初余额和冲正 |
 

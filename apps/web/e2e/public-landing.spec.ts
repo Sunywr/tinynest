@@ -321,3 +321,19 @@ test('L18 本机 LCP/CLS 可复现测量（记录样本，不冒充生产验收�
   expect(perf.lcp).toBeGreaterThan(0)
   expect(perf.cls).toBeGreaterThanOrEqual(0)
 })
+
+test('刷新保留当前菜单，退出后清除菜单位置', async ({ page }) => {
+  await loginViaDialog(page)
+  for (const [menu, heading] of [
+    ['记账流水', '记账流水'], ['家庭账户', '家庭账户'], ['信用账单', '信用账单'],
+    ['分期与负债', '分期与固定负债'], ['投资', '投资账本'], ['设置', '设置'],
+  ]) {
+    await page.locator('nav').getByRole('button', { name: menu }).click()
+    await expect(page.locator('h1')).toHaveText(heading)
+    await page.reload()
+    await expect(page.locator('h1')).toHaveText(heading)
+  }
+  await page.getByRole('button', { name: '登出' }).click()
+  await loginViaDialog(page)
+  await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
+})

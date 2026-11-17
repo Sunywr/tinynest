@@ -53,3 +53,35 @@ func TestDisabledAccountRetainsBalance(t *testing.T) {
 		t.Fatalf("reactivation failed: %v", got)
 	}
 }
+
+func TestDeleteAccountRetainsLedger(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+
+	account := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"name": "待删除账户", "kind": "cash", "opening_balance_minor": 12345,
+	})
+	path := "/api/v1/accounts/" + account["id"].(string)
+	c.mustOK("DELETE", path, nil)
+	c.mustOK("DELETE", path, nil)
+
+	list := c.mustOK("GET", "/api/v1/accounts", nil)
+	if number(list["total"]) != 0 {
+		t.Fatalf("deleted account visible in list: %v", list)
+	}
+	dashboard := c.mustOK("GET", "/api/v1/dashboard/summary", nil)
+	if len(dashboard["accounts"].([]any)) != 0 || number(dashboard["net_worth_minor"]) != 12345 {
+		t.Fatalf("deletion changed dashboard accounting or left the account listed: %v", dashboard)
+	}
+	if status, _ := c.do("DELETE", "/api/v1/accounts/missing", nil); status != 404 {
+		t.Fatalf("missing account deletion returned %d", status)
+	}
+	if status, _ := c.do("PATCH", path, map[string]string{"status": "active"}); status != 404 {
+		t.Fatalf("deleted account could be edited: %d", status)
+	}
+	if got := c.mustOK("GET", path+"/balance", nil); number(got["balance_minor"]) != 12345 {
+		t.Fatalf("deleted account lost its ledger balance: %v", got)
+	}
+	c.mustOK("GET", path+"/journal", nil)
+}

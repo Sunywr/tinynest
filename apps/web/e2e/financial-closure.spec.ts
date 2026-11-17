@@ -47,7 +47,7 @@ function smartValue(scope: import('@playwright/test').Locator, labelText: string
 
 async function ensureLogin(page: import('@playwright/test').Page) {
   await page.goto('/')
-  const dashboard = page.getByText('今天也要好好生活呀')
+  const dashboard = page.locator('nav.nav')
   const landing = page.getByRole('heading', { name: '家的每一笔，都值得被温柔记录。' })
   await expect(dashboard.or(landing)).toBeVisible()
   if (await dashboard.isVisible()) return
@@ -1045,4 +1045,53 @@ test('流水可从列表复制、修改和删除', async ({ page }) => {
   await expect(corrected).toHaveCount(0)
   await expect(copy).toContainText('已更正')
   await expect(original).toContainText('已入账')
+})
+
+test('家庭账户可取消删除或确认移出列表', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '家庭账户' }).click()
+  await page.getByRole('button', { name: '＋ 新建账户' }).click()
+  await page.getByLabel('名称').fill('E2E 待删除账户')
+  await page.getByLabel('期初余额（元）').fill('12.34')
+  await page.getByRole('button', { name: '创建账户' }).click()
+
+  const row = page.locator('.rankrow').filter({ hasText: 'E2E 待删除账户' })
+  const modal = page.locator('.confirm-card')
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  await modal.getByRole('button', { name: '取消' }).click()
+  await expect(row).toBeVisible()
+
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  await modal.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(page.getByText('账户已删除')).toBeVisible()
+  await expect(row).toHaveCount(0)
+})
+
+test('项目和分类可从各自的管理页删除', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+
+  for (const entry of [
+    { type: '项目', create: '创建并关联' },
+    { type: '分类', create: '新增分类' },
+  ]) {
+    const name = `E2E 待删除${entry.type}`
+    const management = page.getByRole('button', { name: `${entry.type}管理` })
+    await management.click()
+    await page.getByLabel(`新${entry.type}名称`).fill(name)
+    await page.getByRole('button', { name: entry.create }).click()
+    await expect(page.getByText(`${entry.type}已新增`)).toBeVisible()
+
+    await management.click()
+    const select = page.locator('label').filter({ hasText: `编辑${entry.type}` }).locator('select')
+    const option = select.locator('option').filter({ hasText: name })
+    await select.selectOption(await option.getAttribute('value') ?? '')
+    await page.getByRole('button', { name: `删除${entry.type}` }).click()
+    await page.locator('.confirm-card').getByRole('button', { name: '删除', exact: true }).click()
+    await expect(page.getByText(`${entry.type}已删除`)).toBeVisible()
+
+    await management.click()
+    await expect(option).toHaveCount(0)
+    await page.getByRole('button', { name: '返回列表' }).click()
+  }
 })

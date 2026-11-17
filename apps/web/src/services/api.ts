@@ -68,11 +68,13 @@ export const api = {
   ensureCurrentMember: () => post<{ id: string; name: string; status: string }>('/household/members/current', {}),
   categories: () => get('/categories'),
   createCategory: (body: any) => post('/categories', body),
+  deleteCategory: (id: string) => request(`/categories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   updateCategory: (id: string, body: { name: string; sort: number; active: boolean }) =>
     request(`/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   projects: () => get('/projects'),
   createProject: (name: string) => post('/projects', { name }),
   project: (id: string) => get(`/projects/${encodeURIComponent(id)}`),
+  deleteProject: (id: string) => request(`/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   updateProject: (id: string, body: { name: string; start_on: string; end_on: string; note: string; status: string }) =>
     request(`/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   projectSummary: (id: string) => get(`/projects/${id}/summary`),
@@ -80,6 +82,7 @@ export const api = {
   accounts: () => get('/accounts'),
   createAccount: (body: any) => post('/accounts', body),
   account: (id: string) => get(`/accounts/${encodeURIComponent(id)}`),
+  deleteAccount: (id: string) => request<{ id: string; status: string }>(`/accounts/${id}`, { method: 'DELETE' }),
   updateAccount: (id: string, body: { name: string; subtype: string; owner_member_id: string; note: string; status: string }) =>
     request(`/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   accountJournal: (id: string) => get<{ items: { id: string; occurred_on: string; change_minor: number; reversal_of: string | null }[] }>(`/accounts/${encodeURIComponent(id)}/journal`),

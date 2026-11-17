@@ -56,6 +56,8 @@ CREATE DATABASE tinynest_credit;
 CREATE DATABASE tinynest_concurrency;
 CREATE DATABASE tinynest_mixed_load;
 CREATE DATABASE tinynest_current_member;
+CREATE DATABASE tinynest_delete_account;
+CREATE DATABASE tinynest_delete_classification;
 CREATE DATABASE tinynest_restore;
 CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';
 GRANT ALL ON tinynest_drill.* TO 'tinynest_drill'@'localhost';
@@ -63,6 +65,8 @@ GRANT ALL ON tinynest_credit.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_concurrency.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_mixed_load.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_current_member.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_delete_account.* TO 'tinynest_drill'@'localhost';
+GRANT ALL ON tinynest_delete_classification.* TO 'tinynest_drill'@'localhost';
 SQL
 
 stage='check the host socket'
@@ -84,6 +88,8 @@ run_ledger_test tinynest_credit TestV011_T1_CreditStatementLifecycle
 run_ledger_test tinynest_concurrency TestConcurrentTransactionReplays
 run_ledger_test tinynest_mixed_load TestMixedLedgerLoad -v
 run_ledger_test tinynest_current_member TestCurrentHouseholdMember
+run_ledger_test tinynest_delete_account TestDeleteAccountRetainsLedger
+run_ledger_test tinynest_delete_classification TestDeleteProjectAndCategoryRetainsHistory
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)

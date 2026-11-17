@@ -54,7 +54,7 @@ func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	var project projectDetails
 	invalid := errors.New("项目名称、状态或日期范围无效")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		query := selectProject
+		query := selectProject + " AND status<>'deleted'"
 		if a.DB.IsMySQL() {
 			query += " FOR UPDATE"
 		}
@@ -105,4 +105,10 @@ func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, 200, project)
 	}
+}
+
+func (a *API) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	a.deleteClassification(w, r, "project", "项目不存在",
+		`UPDATE projects SET status='deleted' WHERE id=? AND household_id=? AND status<>'deleted'`,
+		`SELECT id FROM projects WHERE id=? AND household_id=? AND status='deleted'`)
 }

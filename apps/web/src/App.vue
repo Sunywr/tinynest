@@ -329,6 +329,8 @@ async function boot() {
     setCSRFToken(m.csrf_token)
     authed.value = true
     apiStatus.value = '已连接'
+    const savedView = nav.find(item => item.key === window.history.state?.tinynestView)
+    if (savedView) go(savedView.key)
     await loadAll()
     applyTxPrefs()
   } catch {
@@ -532,7 +534,18 @@ watch(transactionAmount, input => {
   input?.focus()
 }, { flush: 'post' })
 let ledgerNavigation = 0
-function go(v: View) { restoreTransactionDraft(); ledgerNavigation++; view.value = v; errorMsg.value = ''; panel.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
+function go(v: View) {
+  restoreTransactionDraft()
+  ledgerNavigation++
+  view.value = v
+  window.history.replaceState({ ...window.history.state, tinynestView: v }, '')
+  errorMsg.value = ''
+  panel.value = ''
+  if (v === 'settings') {
+    void refreshUsers()
+    void refreshApplications()
+  }
+}
 function openPanel(p: string, prefilled = false) {
   restoreTransactionDraft()
   ledgerNavigation++
@@ -645,6 +658,25 @@ async function addCategory() {
   }, '分类已新增')
 }
 
+function deleteCategory() {
+  const category = categoryEdit.value
+  if (!category || loading.value) return
+  requestConfirm({
+    title: '删除分类',
+    message: `确定删除「${category.name}」吗？已有流水会保留分类。请先删除该分类下的子分类。`,
+    tone: 'danger',
+    confirmText: '删除',
+    onConfirm: () => {
+      void run(async () => {
+        await api.deleteCategory(category.id)
+        if (categoryEdit.value?.id === category.id) categoryEdit.value = null
+        if (f.tx.category_id === category.id) f.tx.category_id = ''
+        if (f.installment.category_id === category.id) f.installment.category_id = ''
+      }, '分类已删除')
+    },
+  })
+}
+
 async function saveCategory() {
   const category = categoryEdit.value
   if (!category || !category.name.trim() || !Number.isInteger(category.sort)) return
@@ -688,6 +720,27 @@ async function openProject(event: Event) {
     projectTotals.value = totals
   } catch (e) { fail(e) }
   finally { loading.value = false }
+}
+
+function deleteProject() {
+  const project = projectEdit.value
+  if (!project || !canWrite.value || loading.value) return
+  requestConfirm({
+    title: '删除项目',
+    message: `确定删除「${project.name}」吗？已有流水会保留项目关联。`,
+    tone: 'danger',
+    confirmText: '删除',
+    onConfirm: () => {
+      void run(async () => {
+        await api.deleteProject(project.id)
+        if (projectEdit.value?.id === project.id) {
+          projectEdit.value = null
+          projectTotals.value = null
+        }
+        if (f.tx.project_id === project.id) f.tx.project_id = ''
+      }, '项目已删除')
+    },
+  })
 }
 
 async function saveProject() {
@@ -1192,6 +1245,16 @@ function submitRefund() {
   }), '退款已冲减原支出')
 }
 
+function deleteAccount(account: { id: string; name: string }) {
+  requestConfirm({
+    title: '删除账户',
+    message: `确定删除「${account.name}」吗？删除后将从账户列表和记账选项移除，已有余额和分录仍保留在账本中。`,
+    tone: 'danger',
+    confirmText: '删除',
+    onConfirm: () => { void run(() => api.deleteAccount(account.id), '账户已删除') },
+  })
+}
+
 function setAccountStatus(a: any, status: 'active' | 'disabled') {
   const disabling = status === 'disabled'
   requestConfirm({
@@ -1540,6 +1603,7 @@ const metricCards = computed(() => {
                 </div>
                 <p v-if="projectTotals">累计收入 {{ formatMinor(projectTotals.income_minor) }} · 净支出 {{ formatMinor(projectTotals.net_expense_minor) }}</p>
                 <button v-if="canWrite" class="ghost" type="submit" :disabled="loading">保存项目</button>
+                <button v-if="canWrite" class="ghost" type="button" :disabled="loading" @click="deleteProject">删除项目</button>
               </template>
             </form>
             <template v-if="projectTotals">
@@ -1591,6 +1655,7 @@ const metricCards = computed(() => {
                 </template>
               </div>
               <button v-if="categoryEdit" class="ghost" type="submit" :disabled="loading">保存分类</button>
+              <button v-if="categoryEdit" class="ghost" type="button" :disabled="loading" @click="deleteCategory">删除分类</button>
             </form>
           </section>
         </template>
@@ -1608,6 +1673,7 @@ const metricCards = computed(() => {
               <span class="rowacts">
                 <button type="button" class="ghost" @click="openAccountById(a.id); openPanel('edit')">编辑</button>
                 <button v-if="canWrite" type="button" class="ghost" @click="setAccountStatus(a, a.status === 'disabled' ? 'active' : 'disabled')">{{ a.status === 'disabled' ? '启用' : '停用' }}</button>
+                <button v-if="canWrite" type="button" class="ghost" @click="deleteAccount(a)">删除</button>
               </span></div>
               <p v-if="!accounts.length" class="empty">还没有账户，点上方「新建账户」开始吧</p></div>
           </section>

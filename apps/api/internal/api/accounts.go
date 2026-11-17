@@ -24,6 +24,38 @@ func validateAccountOwner(r *http.Request, tx *sql.Tx, householdID string, owner
 	return err
 }
 
+// Keep the account and its ledger references for historical reporting.
+func (a *API) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	id := r.PathValue("id")
+	ctx := r.Context()
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `UPDATE accounts SET status='deleted'
+			WHERE id=? AND household_id=? AND status<>'deleted'`, id, p.HouseholdID)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			var existing string
+			return tx.QueryRowContext(ctx, `SELECT id FROM accounts
+				WHERE id=? AND household_id=? AND status='deleted'`, id, p.HouseholdID).Scan(&existing)
+		}
+		return audit(ctx, tx, p, "delete_account", "account", id, "{}")
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		writeErr(w, 404, "not_found", "账户不存在")
+	case err != nil:
+		internalErr(w, err)
+	default:
+		writeJSON(w, 200, map[string]any{"id": id, "status": "deleted"})
+	}
+}
+
 func (a *API) handleGetAccount(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	id := r.PathValue("id")
@@ -79,8 +111,11 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var code string
-		if err := tx.QueryRowContext(r.Context(), `SELECT ledger_code FROM accounts WHERE id=? AND household_id=?`,
-			id, p.HouseholdID).Scan(&code); err != nil {
+		query := `SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status<>'deleted'`
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		if err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&code); err != nil {
 			return err
 		}
 		if err := validateAccountOwner(r, tx, p.HouseholdID, in.Owner); err != nil {
@@ -91,7 +126,7 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			subtype=CASE WHEN ? IS NULL THEN subtype ELSE NULLIF(?,'') END,
 			owner_member_id=CASE WHEN ? IS NULL THEN owner_member_id ELSE NULLIF(?,'') END,
 			note=CASE WHEN ? IS NULL THEN note ELSE NULLIF(?,'') END
-			WHERE id=? AND household_id=?`,
+			WHERE id=? AND household_id=? AND status<>'deleted'`,
 			in.Name, in.Status, in.Subtype, in.Subtype, in.Owner, in.Owner, in.Note, in.Note, id, p.HouseholdID); err != nil {
 			return err
 		}
