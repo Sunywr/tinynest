@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -81,6 +82,26 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 		UPDATE credit_statements SET system_due_minor =
 		  (SELECT COALESCE(SUM(amount_minor),0) FROM credit_statement_items WHERE statement_id=?)
 		WHERE id=?`, stmtID, stmtID)
+	if err != nil {
+		return err
+	}
+	return refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, stmtID)
+}
+
+// A posted bill change updates an existing reminder without altering confirmed history.
+func refreshPendingStatementAmount(ctx context.Context, tx *sql.Tx, householdID, statementID string) error {
+	var remaining int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT system_due_minor-paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
+		statementID, householdID).Scan(&remaining); err != nil {
+		return err
+	}
+	const pending = ` WHERE household_id=? AND source_type='credit_statement' AND source_id=? AND status='pending'`
+	if remaining <= 0 {
+		_, err := tx.ExecContext(ctx, "DELETE FROM schedule_due_items"+pending, householdID, statementID)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE schedule_due_items SET amount_minor=?"+pending, remaining, householdID, statementID)
 	return err
 }
 
@@ -311,10 +332,15 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 		// Status is derived from facts + business date, not a mutable running flag.
 		newPaid := paid + int64(amount)
 		newStatus := deriveStatementStatus(cycleEnd, dueOn, a.businessDate(), sysDue, newPaid)
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE credit_statements SET paid_minor=?, status=? WHERE id=?`,
-			newPaid, newStatus, stmtID); err != nil {
+		result, err := tx.ExecContext(r.Context(), `
+			UPDATE credit_statements SET paid_minor=?, status=?
+			WHERE id=? AND household_id=? AND system_due_minor=? AND paid_minor=?`,
+			newPaid, newStatus, stmtID, p.HouseholdID, sysDue, paid)
+		if err != nil {
 			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return errors.New("账单金额已变化，请刷新后重试")
 		}
 		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "credit_statement", stmtID); err != nil {
 			return err

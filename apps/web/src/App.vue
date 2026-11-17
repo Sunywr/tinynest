@@ -293,6 +293,8 @@ function minor(s: string): number | null { return parseMinor(s) }
 // Wipe every in-memory financial value on logout / session expiry so a browser
 // back navigation can never re-render stale private data.
 function clearPrivateState() {
+  transactionDraft.value = null
+  ledgerNavigation++
   me.value = null
   summary.value = null; creditDash.value = null; netWorth.value = null
   dividendHistory.value = null; feePreview.value = null
@@ -529,17 +531,20 @@ const transactionAmount = ref<HTMLInputElement | null>(null)
 watch(transactionAmount, input => {
   input?.focus()
 }, { flush: 'post' })
-function go(v: View) { view.value = v; errorMsg.value = ''; panel.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
-function openPanel(p: string) {
+let ledgerNavigation = 0
+function go(v: View) { restoreTransactionDraft(); ledgerNavigation++; view.value = v; errorMsg.value = ''; panel.value = ''; if (v === 'settings') { void refreshUsers(); void refreshApplications() } }
+function openPanel(p: string, prefilled = false) {
+  restoreTransactionDraft()
+  ledgerNavigation++
   panel.value = p
   errorMsg.value = ''
-  if (p === 'tx') {
+  if (p === 'tx' && !prefilled) {
     setTxDirection('expense')
     selectedMember.value = me.value?.member_id || ''
     void resolveCurrentMember()
   }
 }
-function closePanel() { panel.value = ''; errorMsg.value = '' }
+function closePanel() { restoreTransactionDraft(); ledgerNavigation++; panel.value = ''; errorMsg.value = '' }
 
 function setTxDirection(direction: string) {
   f.tx.type = direction
@@ -656,9 +661,10 @@ async function run(fn: () => Promise<any>, okMsg: string) {
   // Auto-back must not clobber a newer navigation: only close the panel that
   // was open when this submit started, and only if it is still open.
   const submittedPanel = panel.value
+  const submittedNavigation = ledgerNavigation
   try {
     await fn(); toast(okMsg); await loadAll()
-    if (panel.value === submittedPanel) closePanel()
+    if (panel.value === submittedPanel && ledgerNavigation === submittedNavigation) closePanel()
     if (f.instPayment.contract_id) await refreshInstDetail()
     if (f.debtPayment.contract_id) { try { debtDetail.value = await api.debt(f.debtPayment.contract_id) } catch { /* keep stale */ } }
   }
@@ -806,30 +812,115 @@ async function addMember() {
   }, '成员已新增')
 }
 
+type DraftSplit = { category_id: string; project_id: string; amount: string; note?: string }
+const transactionDraft = ref<{
+  replaceID: string
+  key: string
+  merchant?: string
+  currency?: string
+  splits: DraftSplit[]
+  previousForm: Record<string, unknown>
+  previousMember: string
+} | null>(null)
+
+function restoreTransactionDraft() {
+  const draft = transactionDraft.value
+  if (!draft) return
+  Object.assign(f.tx, draft.previousForm)
+  selectedMember.value = draft.previousMember
+  transactionDraft.value = null
+}
+
+function canCopyTransaction(t: any) {
+  return t.type === 'transfer' || !!(t.account_id || t.credit_instrument_id)
+}
+
+async function openTransactionDraft(id: string, replace: boolean) {
+  if (loading.value) return
+  const navigation = ledgerNavigation
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    const detail = await api.transaction(id)
+    if (!authed.value || navigation !== ledgerNavigation) return
+    if (replace && detail.status !== 'posted') return toast('这笔流水已冲正')
+    openPanel('tx', true)
+    const splits: DraftSplit[] = detail.splits.map((split: any) => ({
+      category_id: split.category_id, project_id: split.project_id || '',
+      amount: (split.amount_minor / 100).toFixed(2), note: split.note || undefined,
+    }))
+    transactionDraft.value = {
+      replaceID: replace ? id : '', key: crypto.randomUUID(),
+      merchant: detail.merchant, currency: detail.currency, splits,
+      previousForm: { ...f.tx }, previousMember: selectedMember.value,
+    }
+    Object.assign(f.tx, {
+      type: detail.type, amount: (detail.amount_minor / 100).toFixed(2),
+      occurred_on: replace ? detail.occurred_on : today(),
+      payment_kind: detail.payment_kind,
+      account_id: detail.account_id || '', to_account_id: detail.to_account_id || '',
+      credit_instrument_id: detail.credit_instrument_id || '',
+      category_id: splits[0]?.category_id || '', project_id: splits[0]?.project_id || '',
+      note: detail.note || '',
+    })
+    selectedMember.value = detail.member_id || ''
+  } catch (e) {
+    if (navigation === ledgerNavigation) fail(e)
+  } finally {
+    loading.value = false
+  }
+}
+
+function deleteTransaction(id: string) {
+  requestConfirm({
+    title: '删除流水', message: '确认后会冲正该笔流水，原记录保留并标记为已冲正。',
+    confirmText: '删除流水', tone: 'danger',
+    onConfirm: () => { if (!loading.value) void run(() => api.reverseTransaction(id), '流水已冲正') },
+  })
+}
+
 function createTx() {
-  if (memberResolving.value) return
+  if (loading.value || memberResolving.value) return
   const amount = minor(f.tx.amount)
   if (amount === null || amount <= 0) return toast('请输入有效金额（最多两位小数）')
+  const draft = transactionDraft.value
+  const body = {
+    type: f.tx.type, amount_minor: amount, occurred_on: f.tx.occurred_on,
+    member_id: selectedMember.value || undefined, note: f.tx.note || undefined,
+    merchant: draft?.merchant, currency: draft?.currency,
+    account_id: f.tx.account_id || undefined,
+  }
+  const submit = (payload: typeof body & Record<string, unknown>, message: string) =>
+    run(() => (draft?.replaceID
+      ? api.replaceTransaction(draft.replaceID, payload, draft.key)
+      : api.createTransaction(payload, draft?.key)).then(() => saveTxPrefs()),
+    draft?.replaceID ? '流水已修改' : message)
   if (f.tx.type === 'transfer') {
     if (!f.tx.account_id || !f.tx.to_account_id) return toast('请选择转出与转入账户')
     if (f.tx.account_id === f.tx.to_account_id) return toast('转出与转入账户不能相同')
-    return run(() => api.createTransaction({
-      type: 'transfer', amount_minor: amount, occurred_on: f.tx.occurred_on,
-      member_id: selectedMember.value || undefined, account_id: f.tx.account_id, to_account_id: f.tx.to_account_id, note: f.tx.note || undefined,
-    }).then(() => saveTxPrefs()), '转账已入账')
+    return submit({ ...body, to_account_id: f.tx.to_account_id }, '转账已入账')
   }
-  if (!f.tx.category_id) return toast('请选择分类')
-  if (f.tx.type === 'expense' && f.tx.payment_kind === 'credit' && !f.tx.credit_instrument_id) return toast('请选择信用工具')
-  if ((f.tx.type === 'income' || f.tx.payment_kind === 'cash') && !f.tx.account_id) return toast('请选择收/付款账户')
-  return run(() => api.createTransaction({
-    type: f.tx.type, amount_minor: amount, occurred_on: f.tx.occurred_on,
-    member_id: selectedMember.value || undefined,
-    payment_kind: f.tx.type === 'expense' ? f.tx.payment_kind : 'cash',
-    account_id: f.tx.account_id || undefined,
-    credit_instrument_id: f.tx.credit_instrument_id || undefined,
-    note: f.tx.note || undefined,
-    splits: [{ category_id: f.tx.category_id, project_id: f.tx.project_id || undefined, amount_minor: amount }],
-  }).then(() => saveTxPrefs()), '记账成功')
+  const credit = f.tx.type === 'expense' && f.tx.payment_kind === 'credit'
+  if (credit && !f.tx.credit_instrument_id) return toast('请选择信用工具')
+  if (!credit && !f.tx.account_id) return toast('请选择收/付款账户')
+  const draftSplits = draft && draft.splits.length > 1 ? draft.splits : [{
+    category_id: f.tx.category_id, project_id: f.tx.project_id,
+    amount: f.tx.amount, note: draft?.splits[0]?.note,
+  }]
+  const splits = draftSplits.map(split => ({
+    category_id: split.category_id, project_id: split.project_id || undefined,
+    amount_minor: minor(split.amount), note: split.note,
+  }))
+  if (splits.some(split => !split.category_id || !split.amount_minor || split.amount_minor < 0) ||
+      splits.reduce((sum, split) => sum + (split.amount_minor ?? 0), 0) !== amount) {
+    return toast('请填写分类和拆分金额，且拆分金额合计须等于总金额')
+  }
+  return submit({
+    ...body, payment_kind: credit ? 'credit' : 'cash',
+    account_id: credit ? undefined : body.account_id,
+    credit_instrument_id: credit ? f.tx.credit_instrument_id : undefined,
+    splits,
+  }, '记账成功')
 }
 async function openAccount(event: Event) {
   await openAccountById((event.target as HTMLSelectElement).value)
@@ -1344,13 +1435,18 @@ const metricCards = computed(() => {
                 <button type="button" class="ghost" :disabled="ledgerLoading || loading" @click="Object.assign(ledgerFilters, { from: '', to: '', type: '' }); filterLedger()">清除筛选</button>
               </div>
             </form>
-            <div class="translist"><div class="transaction" v-for="t in ledgerTransactions" :key="t.id">
+            <div class="translist"><div class="transaction ledger-transaction" v-for="t in ledgerTransactions" :key="t.id">
               <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
-              <div class="txbody"><div class="txname">{{ t.merchant || t.type }}</div>
-                <div class="txcat">{{ t.occurred_on }} · {{ t.status }}</div></div>
+              <div class="txbody"><div class="txname">{{ t.merchant || t.note || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出') }}</div>
+                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已冲正' : '已入账' }}</div></div>
               <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
-              <div class="rowacts" v-if="t.status === 'posted' && t.type === 'expense'">
-                <button v-if="canWrite" type="button" class="ghost" @click="refund(t.id)">退款</button>
+              <div class="rowacts" v-if="canWrite">
+                <button v-if="canCopyTransaction(t)" type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, false)">复制</button>
+                <template v-if="t.status === 'posted' && canCopyTransaction(t)">
+                  <button type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, true)">修改</button>
+                  <button type="button" class="ghost" :disabled="loading" @click="deleteTransaction(t.id)">删除</button>
+                </template>
+                <button v-if="t.status === 'posted' && t.type === 'expense'" type="button" class="ghost" :disabled="loading" @click="refund(t.id)">退款</button>
               </div>
             </div><p v-if="!ledgerTransactions.length && !ledgerLoading" class="empty">没有符合条件的流水</p></div>
             <button v-if="ledgerCursor" type="button" class="ghost" :disabled="ledgerLoading || loading" @click="loadLedgerPage(appliedLedgerFilter, ledgerCursor)">
@@ -1358,7 +1454,9 @@ const metricCards = computed(() => {
             </button>
           </section>
           <form v-if="panel === 'tx'" class="panel formpanel" @submit.prevent="createTx">
-            <div class="paneltitle"><div><h2>记一笔</h2><span class="subinfo">常用分类与账户会自动记住（仅本机偏好）</span></div>
+            <div class="paneltitle"><div><h2>{{ transactionDraft?.replaceID ? '修改流水' : transactionDraft ? '复制流水' : '记一笔' }}</h2>
+              <span v-if="transactionDraft?.replaceID" class="subinfo">保存后会冲正原流水并入账更正记录</span>
+              <span v-else-if="!transactionDraft" class="subinfo">常用分类与账户会自动记住（仅本机偏好）</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="tx-primary-fields">
               <label>方向<SmartSelect :model-value="f.tx.type" :options="txDirections" @update:model-value="setTxDirection" /></label>
@@ -1366,7 +1464,17 @@ const metricCards = computed(() => {
               <label>日期<DatePicker v-model="f.tx.occurred_on" /></label>
             </div>
             <div class="tx-extra-fields">
-              <template v-if="f.tx.type !== 'transfer'">
+              <template v-if="f.tx.type !== 'transfer' && transactionDraft && transactionDraft.splits.length > 1">
+                <template v-for="(split, index) in transactionDraft.splits" :key="index">
+                  <label>拆分 {{ index + 1 }} 分类
+                    <SmartSelect v-model="split.category_id" :options="txCategoryOptions" placeholder="请选择分类" /></label>
+                  <label>拆分 {{ index + 1 }} 项目
+                    <SmartSelect v-model="split.project_id" :options="txProjectOptions" placeholder="不关联" /></label>
+                  <label>拆分 {{ index + 1 }} 金额（元）<input v-model="split.amount" inputmode="decimal" /></label>
+                  <label>拆分 {{ index + 1 }} 备注<input v-model="split.note" /></label>
+                </template>
+              </template>
+              <template v-else-if="f.tx.type !== 'transfer'">
                 <label>分类
                   <SmartSelect v-model="f.tx.category_id" :options="txCategoryOptions" placeholder="请选择分类"
                     :allow-create="true" @create="(q) => openCreate('category', q, (id) => f.tx.category_id = id, { kind: f.tx.type === 'income' ? 'income' : 'expense' })" /></label>
@@ -1394,7 +1502,7 @@ const metricCards = computed(() => {
                 <div class="tx-note-editor"><textarea v-model="f.tx.note" aria-label="备注" rows="3" placeholder="写下这笔流水的备注"></textarea></div>
               </details>
             </div>
-            <button class="primary" type="submit" :disabled="loading || memberResolving">确认入账</button>
+            <button class="primary" type="submit" :disabled="loading || memberResolving">{{ transactionDraft?.replaceID ? '保存修改' : '确认入账' }}</button>
           </form>
           <form v-if="panel === 'refund'" class="panel formpanel" @submit.prevent="submitRefund">
             <div class="paneltitle"><div><h2>退款</h2><span class="subinfo">关联原交易，冲减原支出而非计入收入</span></div>
@@ -2082,6 +2190,11 @@ form label { margin-bottom: 13px; }
 .rowacts { display: flex; gap: 5px; margin-left: 10px; }
 .rowacts .ghost { padding: 5px 9px; font-size: 11px; }
 .rowacts .ghost + .ghost { margin-left: 0; }
+@media (max-width: 560px) {
+  .ledger-transaction { flex-wrap: wrap; }
+  .ledger-transaction .rowacts { flex: 0 0 100%; flex-wrap: wrap; }
+  .ledger-transaction .rowacts .ghost { min-height: 36px; }
+}
 @media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .formgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .formgrid { grid-template-columns: 1fr; } .rankrow { flex-direction: column; align-items: flex-start; gap: 4px; } .rowacts { margin-left: 0; } }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ func (a *API) registerTransactions(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/transactions", a.handleListTransactions)
 	a.route(mux, "POST /api/v1/transactions", a.handleCreateTransaction)
 	a.route(mux, "GET /api/v1/transactions/{id}", a.handleGetTransaction)
+	a.route(mux, "POST /api/v1/transactions/{id}/replace", a.handleCreateTransaction)
 	a.route(mux, "POST /api/v1/transactions/{id}/reverse", a.handleReverseTransaction)
 	a.route(mux, "POST /api/v1/refunds", a.handleCreateRefund)
 	a.route(mux, "GET /api/v1/refunds/by-transaction/{id}", a.handleListRefunds)
@@ -88,6 +90,10 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		in.Currency = "CNY"
 	}
 	key := idempotencyKey(r)
+	replaceID := r.PathValue("id")
+	if replaceID != "" && key != "" {
+		key = fmt.Sprintf("replace:%x", sha256.Sum256([]byte(p.HouseholdID+"\x00"+replaceID+"\x00"+key)))
+	}
 	const findExisting = `SELECT id FROM transactions WHERE idempotency_key=? AND household_id=?`
 	var existing string
 	txID, entryID := newID("tx"), newID("je")
@@ -97,6 +103,11 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		if key != "" {
 			err := tx.QueryRowContext(r.Context(), findExisting, key, p.HouseholdID).Scan(&existing)
 			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		if replaceID != "" {
+			if err := a.reverseTransaction(tx, r, p, replaceID, newID("je")); err != nil {
 				return err
 			}
 		}
@@ -209,7 +220,7 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, "")
+		return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, replaceID)
 	})
 	if err != nil && key != "" && existing == "" {
 		// Another database client may commit the same key after our lookup.
@@ -344,28 +355,69 @@ func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var typ, occurred, status, entryID string
 	var amount int64
+	var acc, toAcc, instrument, member, merchant, note *string
+	var currency string
 	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT type,amount_minor,occurred_on,status,entry_id FROM transactions WHERE id=? AND household_id=?`,
-		id, p.HouseholdID).Scan(&typ, &amount, &occurred, &status, &entryID)
+		`SELECT type,amount_minor,occurred_on,status,entry_id,account_id,to_account_id,credit_instrument_id,member_id,merchant,note,currency FROM transactions WHERE id=? AND household_id=?`,
+		id, p.HouseholdID).Scan(&typ, &amount, &occurred, &status, &entryID, &acc, &toAcc, &instrument, &member, &merchant, &note, &currency)
 	if err != nil {
 		writeErr(w, 404, "not_found", "流水不存在")
 		return
 	}
-	lines, _ := a.DB.QueryContext(r.Context(),
-		`SELECT account_code,debit_minor,credit_minor FROM journal_lines WHERE entry_id=? ORDER BY line_no`, entryID)
+	lines, err := a.DB.QueryContext(r.Context(), `
+		SELECT l.account_code,l.debit_minor,l.credit_minor FROM journal_lines l
+		JOIN journal_entries e ON e.id=l.entry_id
+		WHERE e.id=? AND e.household_id=? ORDER BY l.line_no`, entryID, p.HouseholdID)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	defer lines.Close()
 	journal := []map[string]any{}
-	if lines != nil {
-		defer lines.Close()
-		for lines.Next() {
-			var code string
-			var dr, cr int64
-			if lines.Scan(&code, &dr, &cr) == nil {
-				journal = append(journal, map[string]any{"account": code, "debit_minor": dr, "credit_minor": cr})
-			}
+	paymentKind := "cash"
+	for lines.Next() {
+		var code string
+		var dr, cr int64
+		if err := lines.Scan(&code, &dr, &cr); err != nil {
+			internalErr(w, err)
+			return
 		}
+		if instrument != nil && code == ledger.CreditSubject(*instrument) {
+			paymentKind = "credit"
+		}
+		journal = append(journal, map[string]any{"account": code, "debit_minor": dr, "credit_minor": cr})
+	}
+	if err := lines.Err(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	splitRows, err := a.DB.QueryContext(r.Context(), `
+		SELECT s.category_id,s.project_id,s.amount_minor,s.note FROM transaction_splits s
+		JOIN transactions t ON t.id=s.transaction_id
+		WHERE t.id=? AND t.household_id=? ORDER BY s.line_no`, id, p.HouseholdID)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	defer splitRows.Close()
+	splits := []splitInput{}
+	for splitRows.Next() {
+		var split splitInput
+		if err := splitRows.Scan(&split.CategoryID, &split.ProjectID, &split.AmountMinor, &split.Note); err != nil {
+			internalErr(w, err)
+			return
+		}
+		splits = append(splits, split)
+	}
+	if err := splitRows.Err(); err != nil {
+		internalErr(w, err)
+		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"id": id, "type": typ, "amount_minor": amount, "occurred_on": occurred,
+		"account_id": acc, "to_account_id": toAcc, "credit_instrument_id": instrument,
+		"member_id": member, "merchant": merchant, "note": note, "currency": currency, "splits": splits,
+		"payment_kind": paymentKind,
+		"id":           id, "type": typ, "amount_minor": amount, "occurred_on": occurred,
 		"status": status, "entry_id": entryID, "journal_lines": journal,
 	})
 }
@@ -375,41 +427,102 @@ func (a *API) handleReverseTransaction(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	revID := newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var entryID, status string
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT entry_id,status FROM transactions WHERE id=? AND household_id=?`, id, p.HouseholdID).
-			Scan(&entryID, &status); err != nil {
-			return errors.New("流水不存在")
-		}
-		if status != "posted" {
-			return errors.New("只有已入账流水可以冲正")
-		}
-		orig, err := loadEntry(tx, r, entryID)
-		if err != nil {
-			return err
-		}
-		rev, err := orig.Reverse(revID, a.businessDate())
-		if err != nil {
-			return err
-		}
-		if err := db.SaveEntry(r.Context(), tx, rev, p.HouseholdID, "", p.Username); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE transactions SET status='reversed' WHERE id=?`, id); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(),
-			`UPDATE journal_entries SET status='reversed' WHERE id=?`, entryID); err != nil {
-			return err
-		}
-		return audit(r.Context(), tx, p, "reverse_transaction", "transaction", id, revID)
+		return a.reverseTransaction(tx, r, p, id, revID)
 	})
 	if err != nil {
 		writeErr(w, 400, "conflict", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{"transaction_id": id, "reversal_entry_id": revID, "status": "reversed"})
+}
+
+// reverseTransaction compensates the journal and credit bill in the caller's transaction.
+func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, revID string) error {
+	res, err := tx.ExecContext(r.Context(),
+		`UPDATE transactions SET status='reversed' WHERE id=? AND household_id=? AND status='posted'`, id, p.HouseholdID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return errors.New("只有本家庭已入账流水可以冲正")
+	}
+	for _, query := range []string{
+		`SELECT id FROM refunds WHERE transaction_id=? AND household_id=? LIMIT 1`,
+		`SELECT id FROM installment_contracts WHERE source_transaction_id=? AND household_id=? LIMIT 1`,
+	} {
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		var linkedID string
+		err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&linkedID)
+		if err == nil {
+			return errors.New("已关联退款或分期的流水不能直接删除或修改")
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	var entryID string
+	var instrument *string
+	if err := tx.QueryRowContext(r.Context(),
+		`SELECT entry_id,credit_instrument_id FROM transactions WHERE id=? AND household_id=?`, id, p.HouseholdID).
+		Scan(&entryID, &instrument); err != nil {
+		return errors.New("流水不存在")
+	}
+	orig, err := loadEntry(tx, r, entryID)
+	if err != nil {
+		return err
+	}
+	rev, err := orig.Reverse(revID, a.businessDate())
+	if err != nil {
+		return err
+	}
+	if err := db.SaveEntry(r.Context(), tx, rev, p.HouseholdID, "", p.Username); err != nil {
+		return err
+	}
+	isCredit := false
+	for _, line := range orig.Lines {
+		if instrument != nil && line.Account == ledger.CreditSubject(*instrument) {
+			isCredit = true
+			break
+		}
+	}
+	if isCredit {
+		var statementID string
+		var amount int64
+		if err := tx.QueryRowContext(r.Context(), `
+				SELECT s.id,i.amount_minor FROM credit_statement_items i
+				JOIN credit_statements s ON s.id=i.statement_id
+				WHERE i.source_type='transaction' AND i.source_id=? AND s.household_id=?`,
+			id, p.HouseholdID).Scan(&statementID, &amount); err != nil {
+			return errors.New("原信用账单不可用")
+		}
+		result, err := tx.ExecContext(r.Context(), `
+				UPDATE credit_statements SET system_due_minor=system_due_minor-?
+				WHERE id=? AND household_id=? AND paid_minor=0 AND system_due_minor>=?
+				AND NOT EXISTS (SELECT 1 FROM credit_statement_items
+					WHERE statement_id=? AND source_type='installment_conversion')`,
+			amount, statementID, p.HouseholdID, amount, statementID)
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return errors.New("账单已有还款、转分期或调整，请先核对账单")
+		}
+		if _, err := tx.ExecContext(r.Context(), `
+				INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on)
+				VALUES(?,'reversal',?,?,?)`, statementID, revID, -amount, rev.OccurredOn); err != nil {
+			return err
+		}
+		if err := refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, statementID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(r.Context(),
+		`UPDATE journal_entries SET status='reversed' WHERE id=? AND household_id=?`, entryID, p.HouseholdID); err != nil {
+		return err
+	}
+	return audit(r.Context(), tx, p, "reverse_transaction", "transaction", id, revID)
 }
 
 func (a *API) handleCreateRefund(w http.ResponseWriter, r *http.Request) {
@@ -436,8 +549,11 @@ func (a *API) handleCreateRefund(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var original int64
 		var txType, txStatus string
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT amount_minor,type,status FROM transactions WHERE id=? AND household_id=?`,
+		query := `SELECT amount_minor,type,status FROM transactions WHERE id=? AND household_id=?`
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		if err := tx.QueryRowContext(r.Context(), query,
 			in.TransactionID, p.HouseholdID).Scan(&original, &txType, &txStatus); err != nil {
 			return errors.New("原交易不存在")
 		}

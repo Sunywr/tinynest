@@ -529,15 +529,19 @@ func (a *API) handleConvertFromCredit(w http.ResponseWriter, r *http.Request) {
 		if in.PrincipalMinor > remaining {
 			return errors.New("转分期金额不得超过原账单未还余额")
 		}
+		result, err := tx.ExecContext(r.Context(), `
+			UPDATE credit_statements SET system_due_minor=system_due_minor-?
+			WHERE id=? AND household_id=? AND system_due_minor-paid_minor=?`,
+			in.PrincipalMinor, stmtID, p.HouseholdID, remaining)
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return errors.New("账单金额已变化，请刷新后重试")
+		}
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on)
 			VALUES(?,'installment_conversion',?,?,?)`, stmtID, contractID, -in.PrincipalMinor, a.businessDate()); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(), `
-			UPDATE credit_statements
-			SET system_due_minor=(SELECT SUM(amount_minor) FROM credit_statement_items WHERE statement_id=?)
-			WHERE id=? AND household_id=?`, stmtID, stmtID, p.HouseholdID); err != nil {
 			return err
 		}
 		remaining -= in.PrincipalMinor
