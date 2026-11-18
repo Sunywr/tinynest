@@ -1522,5 +1522,5 @@ test('验收反馈：窄屏各菜单和表单控件均在容器内', async ({ pa
   }
   await page.locator('nav.nav').getByRole('button', { name: '记账流水' }).click()
   await page.locator('.ledger-transaction').first().waitFor()
-  await page.screenshot({ path: test.info().outputPath('ledger-mobile.png'), animations: 'disabled', fullPage: true })
+  await page.screenshot({ path: test.info().outputPath('ledger-mobile.png'), animations: 'disabled' })
 })
