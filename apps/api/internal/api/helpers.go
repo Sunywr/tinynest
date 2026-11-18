@@ -67,6 +67,8 @@ type Options struct {
 	// SchedulerInterval overrides the daily due-item cadence (test hook only).
 	// Zero uses the production daily Asia/Shanghai 00:07 boundary.
 	SchedulerInterval time.Duration
+	MailKey           []byte
+	MailSender        func(context.Context, MailConfig, string, string, string, string) error
 }
 
 type API struct {
@@ -76,6 +78,7 @@ type API struct {
 	limiter *loginLimiter
 	setupMu sync.Mutex
 	schedMu sync.Mutex
+	mailMu  sync.Mutex
 }
 
 // New keeps the historical single-argument form working while allowing the

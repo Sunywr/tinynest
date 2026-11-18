@@ -1,0 +1,9 @@
+CREATE TABLE site_administrators (user_id VARCHAR(64) PRIMARY KEY);
+CREATE TABLE mail_configuration (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, config_json TEXT NOT NULL, password_cipher TEXT NOT NULL, updated_at VARCHAR(40) NOT NULL);
+CREATE TABLE mail_daily_usage (day VARCHAR(10) PRIMARY KEY, total INTEGER NOT NULL DEFAULT 0, announcements INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE email_identities (email VARCHAR(254) PRIMARY KEY, owner VARCHAR(320) NOT NULL UNIQUE, verified_at VARCHAR(40) NOT NULL);
+CREATE TABLE email_challenges (id VARCHAR(64) PRIMARY KEY, owner VARCHAR(320) NOT NULL, email VARCHAR(254) NOT NULL, purpose VARCHAR(32) NOT NULL, digest VARCHAR(64) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, created_at VARCHAR(40) NOT NULL, expires_at VARCHAR(40) NOT NULL, consumed INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX email_challenge_owner ON email_challenges(owner,purpose,created_at);
+CREATE TABLE mail_queue (id VARCHAR(64) PRIMARY KEY, household_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL, recipient VARCHAR(254) NOT NULL, kind VARCHAR(32) NOT NULL, payload TEXT NOT NULL, status VARCHAR(32) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, due_at VARCHAR(40) NOT NULL, expires_at VARCHAR(40) NOT NULL, created_at VARCHAR(40) NOT NULL);
+CREATE INDEX mail_queue_status ON mail_queue(status,due_at);
+CREATE TABLE mail_preferences (user_id VARCHAR(64) PRIMARY KEY, announcements INTEGER NOT NULL DEFAULT 1);

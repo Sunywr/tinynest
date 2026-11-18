@@ -19,7 +19,7 @@ import (
 func newMemberClient(t *testing.T, ts *httptest.Server, admin *testClient, username, password string) *testClient {
 	t.Helper()
 	profile := admin.mustOK("POST", "/api/v1/household/members", map[string]string{"name": username})
-	admin.mustOK("POST", "/api/v1/auth/register", map[string]string{"username": username, "password": password})
+	admin.registerVerified(username, password)
 	invite := admin.mustOK("POST", "/api/v1/household/invitations", map[string]any{"member_id": profile["id"]})
 	admin.mustOK("POST", "/api/v1/auth/join", map[string]any{"username": username, "password": password, "code": invite["code"]})
 	for _, it := range admin.mustOK("GET", "/api/v1/admin/join-applications", nil)["items"].([]any) {
@@ -29,7 +29,7 @@ func newMemberClient(t *testing.T, ts *httptest.Server, admin *testClient, usern
 		}
 	}
 	jar, _ := cookiejar.New(nil)
-	c := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar}}
+	c := &testClient{mailAPI: admin.mailAPI, t: t, base: ts.URL, hc: &http.Client{Jar: jar}}
 	login := c.mustOK("POST", "/api/v1/auth/session", map[string]string{"username": username, "password": password})
 	c.csrf = login["csrf_token"].(string)
 	return c
@@ -43,11 +43,11 @@ func TestUserSelfServiceProfileAndPassword(t *testing.T) {
 	member := newMemberClient(t, ts, admin, "member-self", "member-password-12")
 
 	member.mustOK("PATCH", "/api/v1/auth/me/profile", map[string]any{
-		"name": "小新", "avatar": "🐱", "birthday": "1995-05-20", "payday": 25, "email": "xiaoxin@example.com",
+		"name": "小新", "avatar": "🐱", "birthday": "1995-05-20", "payday": 25,
 	})
 	me := member.mustOK("GET", "/api/v1/auth/me", nil)
 	if me["member_name"] != "小新" || me["avatar"] != "🐱" || me["birthday"] != "1995-05-20" ||
-		number(me["payday"]) != 25 || me["email"] != "xiaoxin@example.com" {
+		number(me["payday"]) != 25 || me["email"] != "member-self@example.com" {
 		t.Fatalf("profile not persisted: %v", me)
 	}
 	// 姓名 flows to the bound member profile used by transaction attribution.
@@ -80,9 +80,12 @@ func TestUserSelfServiceProfileAndPassword(t *testing.T) {
 		}
 	}
 	// Clearing optional fields is explicit.
-	member.mustOK("PATCH", "/api/v1/auth/me/profile", map[string]any{"email": nil, "payday": nil})
+	if status, _ := member.do("PATCH", "/api/v1/auth/me/profile", map[string]any{"email": nil}); status != 400 {
+		t.Fatal("email cleared without verification")
+	}
+	member.mustOK("PATCH", "/api/v1/auth/me/profile", map[string]any{"payday": nil})
 	me = member.mustOK("GET", "/api/v1/auth/me", nil)
-	if _, ok := me["email"]; ok {
+	if _, ok := me["email"]; !ok {
 		t.Fatalf("email not cleared: %v", me)
 	}
 
@@ -111,8 +114,10 @@ func TestUserSelfServiceProfileAndPassword(t *testing.T) {
 	if code, _ := member.do("POST", "/api/v1/auth/me/password", map[string]any{"current_password": "member-password-12", "new_password": "short"}); code != 400 {
 		t.Fatalf("short new password returned %d", code)
 	}
-	member.mustOK("POST", "/api/v1/auth/me/password", map[string]any{"current_password": "member-password-12", "new_password": "brand-new-pass-99"})
-	member.mustOK("GET", "/api/v1/auth/me", nil) // existing session stays valid
+	member.changePasswordVerified("member-password-12", "brand-new-pass-99")
+	if status, _ := member.do("GET", "/api/v1/auth/me", nil); status != 401 {
+		t.Fatal("session survived password change")
+	}
 
 	jar, _ := cookiejar.New(nil)
 	relogin := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar}}
@@ -132,7 +137,9 @@ func TestViewerSelfServiceAllowed(t *testing.T) {
 	admin.mustOK("PATCH", "/api/v1/admin/users/"+userID+"/role", map[string]string{"role": "viewer"})
 
 	viewer.mustOK("PATCH", "/api/v1/auth/me/profile", map[string]any{"name": "只读君", "birthday": "1990-01-02"})
-	viewer.mustOK("POST", "/api/v1/auth/me/password", map[string]any{"current_password": "viewer-password-12", "new_password": "viewer-new-pass-99"})
+	viewer.changePasswordVerified("viewer-password-12", "viewer-new-pass-99")
+	login := viewer.mustOK("POST", "/api/v1/auth/session", map[string]string{"username": "viewer-self", "password": "viewer-new-pass-99"})
+	viewer.csrf = login["csrf_token"].(string)
 	if me := viewer.mustOK("GET", "/api/v1/auth/me", nil); me["member_name"] != "只读君" {
 		t.Fatalf("viewer profile not updated: %v", me)
 	}
@@ -162,7 +169,7 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 		{"DELETE", "", nil},
 	} {
 		result := outsider.call(attempt.method, "/api/v1/admin/users/"+m2id+attempt.path, attempt.body, nil)
-		if result.Status != 404 {
+		if result.Status != 404 && !(attempt.path == "/password" && result.Status == 403) {
 			t.Fatalf("cross-household %s returned %d: %v", attempt.method, result.Status, result.Body)
 		}
 	}
@@ -178,7 +185,7 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 	})
 
 	admin.mustOK("PATCH", "/api/v1/admin/users/"+m2id+"/profile", map[string]any{
-		"name": "被管理者", "avatar": "🐶", "birthday": "1988-08-08", "payday": 10, "email": "two@example.com",
+		"name": "被管理者", "avatar": "🐶", "birthday": "1988-08-08", "payday": 10,
 	})
 	if me := m2.mustOK("GET", "/api/v1/auth/me", nil); me["member_name"] != "被管理者" || me["avatar"] != "🐶" {
 		t.Fatalf("admin profile update not visible: %v", me)
@@ -188,7 +195,10 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 	}
 
 	// Admin password reset: old sessions revoked, new password works.
-	admin.mustOK("POST", "/api/v1/admin/users/"+m2id+"/password", map[string]any{"new_password": "reset-pass-0000"})
+	if status, _ := admin.do("POST", "/api/v1/admin/users/"+m2id+"/password", map[string]any{"new_password": "reset-pass-0000"}); status != 403 {
+		t.Fatal("admin bypassed verification")
+	}
+	m2.changePasswordVerified("managed-password-2", "reset-pass-0000")
 	if code, _ := m2.do("GET", "/api/v1/auth/me", nil); code != 401 {
 		t.Fatalf("session not revoked after reset: %d", code)
 	}
@@ -248,7 +258,7 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 	for _, l := range logs {
 		actions[l["action"].(string)] = true
 	}
-	for _, want := range []string{"update_user_profile", "reset_user_password", "delete_user"} {
+	for _, want := range []string{"update_user_profile", "password_security_reset", "delete_user"} {
 		if !actions[want] {
 			t.Fatalf("audit log missing %s: %v", want, actions)
 		}

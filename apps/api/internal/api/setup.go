@@ -64,6 +64,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerV012(mux)
 	a.registerV013(mux)
 	a.registerV014(mux)
+	a.registerMail(mux)
 }
 
 // --- bootstrap & identity ---------------------------------------------------
@@ -262,6 +263,12 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		"user_id": p.UserID, "household_id": p.HouseholdID,
 		"username": p.Username, "csrf_token": p.CSRFToken, "role": p.Role,
 	}
+	var verified int
+	if e := a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM email_identities WHERE owner=?`, p.UserID).Scan(&verified); e != nil {
+		internalErr(w, e)
+		return
+	}
+	out["email_verified"] = verified == 1
 	if email.Valid {
 		out["email"] = email.String
 	}

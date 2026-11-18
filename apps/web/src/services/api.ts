@@ -49,7 +49,7 @@ export type UserProfile = {
   email?: string
 }
 export type ManagedUser = UserProfile & { id: string; role: string; status: string }
-type ProfileUpdate = { name?: string; avatar: string | null; birthday: string | null; payday: number | null; email: string | null }
+type ProfileUpdate = { name?: string; avatar: string | null; birthday: string | null; payday: number | null; email?: string | null }
 
 export const api = {
   // There is intentionally NO setup() client: bootstrap is a controlled
@@ -61,10 +61,10 @@ export const api = {
   },
   me: () => get('/auth/me'),
   updateMyProfile: (body: ProfileUpdate) => request('/auth/me/profile', { method: 'PATCH', body: JSON.stringify(body) }),
-  changeMyPassword: (current_password: string, new_password: string) => post('/auth/me/password', { current_password, new_password }),
+  changeMyPassword: (current_password: string, new_password: string, proof: {challenge_id:string;code:string}) => post('/auth/me/password', { current_password, new_password, proof }),
   logout: () => del('/auth/session'),
 
-  register: (body: { username: string; password: string }) => post('/auth/register', body),
+  register: (body: { username: string; password: string; email:string;proof:{challenge_id:string;code:string} }) => post('/auth/register', body),
   applyInvite: (body: { username: string; password: string; code: string }) => post('/auth/join', body),
   issueInvite: (body: { member_id: string; member_name: string; username: string }) => post<{ code: string }>('/household/invitations', body),
   invitations: () => get<{ items: { id: string; member_name: string; target_username: string; expires_at: string }[] }>('/admin/invitations'),

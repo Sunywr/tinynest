@@ -53,7 +53,7 @@
 | DELETE | `/auth/session` | IMPLEMENTED | 登出、撤销会话 |
 | GET | `/auth/me` | IMPLEMENTED | 当前用户、角色、household_id 与 csrf_token；已绑定且启用的成员档案返回 member_id 和 member_name，否则为空。已设置的 avatar、birthday、payday、email 随响应返回 |
 | PATCH | `/auth/me/profile` | IMPLEMENTED | 更新自己的姓名和可选资料，返回 `status` 和 `updated` 字段列表 |
-| POST | `/auth/me/password` | IMPLEMENTED | 提交 `current_password` 和 `new_password` 修改自己的密码，保留既有会话 |
+| POST | `/auth/me/password` | IMPLEMENTED | 提交 `current_password` 和 `new_password` 修改自己的密码；额外要求邮箱验证 proof，成功撤销全部会话 |
 | POST | `/auth/register` · `/auth/join` | IMPLEMENTED | 注册登录名、凭邀请码申请加入家庭。申请由家庭管理员审批 |
 
 ### `/household` · `/categories` · `/projects`（S1）
@@ -199,7 +199,7 @@
 | POST | `/admin/join-applications/{id}` · `/admin/users/{id}/disable` | IMPLEMENTED | 审批加入申请、停用成员账号并撤销会话 |
 | PATCH | `/admin/users/{id}/role` | IMPLEMENTED | 更改启用成员的记账权限 |
 | PATCH | `/admin/users/{id}/profile` | IMPLEMENTED | 编辑本家庭成员或只读账号资料，返回 `status` 和 `updated` |
-| POST | `/admin/users/{id}/password` | IMPLEMENTED | 提交 `new_password` 并撤销目标账号全部会话 |
+| POST | `/admin/users/{id}/password` | IMPLEMENTED | 返回 403 verification_required；成员须通过邮箱自行找回 |
 | DELETE | `/admin/users/{id}` | IMPLEMENTED | 删除本家庭成员或只读账号及其会话，保留成员档案、历史账务和审计 |
 | GET / POST | `/admin/migrations` · `/admin/backup` | PLANNED | 迁移就绪由 `/readyz` 验证，具体版本和备份从部署侧数据库及备份任务核对 |
 
@@ -218,3 +218,22 @@
 管理员可通过 `PATCH /admin/users/{id}/role` 将本家庭的启用成员设为 `member` 或 `viewer`。角色在每次请求时读取，已有会话随下一次请求采用新权限。只读成员可查看账本、更新自己的资料和密码并退出登录。账本写入与邀请码写操作返回 403。账号管理接口仅接受本家庭的 `member` 或 `viewer` 账号 ID，其他目标返回 404。
 
 资料更新仅处理请求中的字段。姓名 `name` 写入已绑定的成员档案，未绑定时创建档案并绑定。用户名固定。头像可传最多 8 个字符的文字，或 64×64 像素 JPEG data URL（Base64 部分最多 32 KiB）。生日为 `YYYY-MM-DD` 且介于 1900-01-01 与上海业务日之间，发薪日为 1 至 31，邮箱最多 254 字节。可选字段可提交 `null` 清除，清除后响应省略对应字段。管理员账号列表对本家庭返回同样的可选字段。密码长度为 8 至 256 字节。所有资料及密码写入均要求有效会话和 CSRF。
+
+## 邮件与邮箱验证（2026-11-18 已部署）
+
+参见 [飞书邮件接入与上线说明](feishu-mail.md)。以下路径均位于 `/api/v1`，写操作除注册与找回外要求会话及 CSRF。
+
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| GET / POST | `/site/mail` | 仅站点管理员读取脱敏全站配置、测试候选并原子保存；POST 要求 `config`、`password`（空则保留）、`current_password`、`test_recipient`、当前 `version` |
+| GET | `/auth/me/mail` | 验证邮箱、公告订阅、站点管理权限与邮件可用状态 |
+| POST | `/auth/me/mail/preferences` | 更新 `announcements` 布尔偏好 |
+| POST | `/auth/mail/challenge` | `email` 与 `purpose=register/reset`，返回 `challenge_id`；reset 对未知邮箱同样返回 accepted |
+| POST | `/auth/me/mail/challenge` | `purpose=bind/old_email/password`、`current_password`，bind 另传目标 `email` |
+| POST | `/auth/me/mail/confirm` | `email`、`current_password`、`proof`；更换已验证邮箱另需 `old_proof` |
+| POST | `/auth/mail/reset` | `email`、`new_password`、`proof`，成功撤销会话 |
+| GET / POST | `/household/mail/announcements` | 仅家庭管理员查询投递状态，或提交 `title/body/preview/expected_count` 预览及发送 |
+
+`proof` 为 `{challenge_id, code}`。验证码 10 分钟有效，60 秒可重发，最多尝试 5 次。注册 `/auth/register` 额外要求 `email` 与 `proof`；密码修改 `/auth/me/password` 额外要求 `proof`，成功后所有会话失效。`/auth/me` 新增 `email_verified`。
+
+资料接口不能直接改变邮箱；家庭管理员密码重置接口现返回 403 `verification_required`，须用户自行通过邮箱找回。SMTP 缺失或禁用返回 `mail_unavailable`，额度不足返回 `mail_quota`；队列的 `smtp_accepted` 仅表示 SMTP 接受。

@@ -41,3 +41,7 @@ UMask=0077
 
 [Install]
 WantedBy=multi-user.target
+
+# Optional: install a 32-byte key first, then add under [Service] in a drop-in:
+# LoadCredential=mail-key:/etc/tinynest/credentials/mail-key
+# SMTP credentials are configured dynamically by a site administrator in the UI.

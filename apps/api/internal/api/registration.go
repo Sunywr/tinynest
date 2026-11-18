@@ -32,6 +32,8 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Username string
 		Password string
+		Email    string    `json:"email"`
+		Proof    mailProof `json:"proof"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2048)
 	if decode(r, &in) != nil || !registrationName.MatchString(in.Username) || len(in.Password) < 12 || len(in.Password) > 256 {
@@ -43,6 +45,12 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-registrationWork }()
 	default:
 		writeErr(w, 429, "rate_limited", "请稍后重试")
+		return
+	}
+	in.Email = normalizeEmail(in.Email)
+	owner := "registration:" + in.Email
+	if !validEmail(in.Email) || a.checkProof(r.Context(), in.Proof, owner, "register", in.Email) != nil {
+		writeErr(w, 400, "verification_failed", "请先验证注册邮箱")
 		return
 	}
 	hash, err := auth.HashPassword(in.Password)
@@ -59,7 +67,29 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
  SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM users WHERE username=?)
  ON DUPLICATE KEY UPDATE created_at=pending_registrations.created_at`
 	}
-	if _, err = a.DB.ExecContext(r.Context(), query, in.Username, hash, a.nowUTC(), in.Username); err != nil {
+	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if e := a.consumeProof(r.Context(), tx, in.Proof, owner, "register", in.Email); e != nil {
+			return e
+		}
+		// Reserve the address with the pending login identity until household approval.
+		if _, e := tx.ExecContext(r.Context(), `INSERT INTO email_identities(email,owner,verified_at) VALUES(?,?,?)`, in.Email, "pending:"+in.Username, a.nowUTC()); e != nil {
+			return errMailValidation
+		}
+		result, e := tx.ExecContext(r.Context(), query, in.Username, hash, a.nowUTC(), in.Username)
+		if e != nil {
+			return e
+		}
+		n, _ := result.RowsAffected()
+		if n != 1 {
+			return errMailValidation
+		}
+		return nil
+	})
+	if errors.Is(err, errMailValidation) {
+		writeJSON(w, 202, map[string]string{"status": "accepted"})
+		return
+	}
+	if err != nil {
 		internalErr(w, err)
 		return
 	}
@@ -238,6 +268,12 @@ func (a *API) handleDecideApplication(w http.ResponseWriter, r *http.Request) {
 		}
 		user := newID("usr")
 		if _, err = tx.ExecContext(ctx, `INSERT INTO users(id,household_id,username,password_hash,role) VALUES(?,?,?,?,'member')`, user, p.HouseholdID, username, hash); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE email_identities SET owner=? WHERE owner=?`, user, "pending:"+username); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET email=(SELECT email FROM email_identities WHERE owner=?) WHERE id=? AND household_id=?`, user, user, p.HouseholdID); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO household_user_members(user_id,member_id) VALUES(?,?)`, user, member); err != nil {

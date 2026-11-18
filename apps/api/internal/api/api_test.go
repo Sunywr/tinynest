@@ -16,6 +16,7 @@ import (
 )
 
 type testClient struct {
+	mailAPI *API
 	t       testing.TB
 	base    string
 	hc      *http.Client
@@ -51,12 +52,12 @@ func newTestServer(t testing.TB) (*httptest.Server, *testClient, *db.DB) {
 	if len(applied) != len(expected) {
 		t.Fatalf("expected %d migrations, got %v", len(expected), applied)
 	}
-	a := New(database, Options{SetupToken: testSetupToken})
+	a := New(database, Options{SetupToken: testSetupToken, MailKey: bytes.Repeat([]byte{7}, 32)})
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
 	ts := httptest.NewServer(mux)
 	jar, _ := cookiejar.New(nil)
 	// The one-time bootstrap token is used ONLY for the initial setup call.
-	tc := &testClient{t: t, base: ts.URL, hc: &http.Client{Jar: jar},
+	tc := &testClient{mailAPI: a, t: t, base: ts.URL, hc: &http.Client{Jar: jar},
 		headers: map[string]string{setupTokenHeader: testSetupToken}}
 
 	code, body := tc.do("POST", "/api/v1/setup", map[string]any{

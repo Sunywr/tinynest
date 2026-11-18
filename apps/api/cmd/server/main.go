@@ -179,8 +179,24 @@ func main() {
 		return nil
 	}
 
+	var mailKey []byte
+	mailKeyPath := os.Getenv("TINYNEST_MAIL_KEY_FILE")
+	if mailKeyPath == "" && os.Getenv("CREDENTIALS_DIRECTORY") != "" {
+		candidate := filepath.Join(os.Getenv("CREDENTIALS_DIRECTORY"), "mail-key")
+		if _, e := os.Stat(candidate); e == nil {
+			mailKeyPath = candidate
+		}
+	}
+	if mailKeyPath != "" {
+		mailKey, err = os.ReadFile(mailKeyPath)
+		if err != nil || len(mailKey) != 32 {
+			slog.Error("mail key must be a readable 32-byte file")
+			os.Exit(1)
+		}
+	}
 	businessAPI := api.New(database, api.Options{
 		SetupToken:     setupToken,
+		MailKey:        mailKey,
 		SetupDisabled:  setupDisabled,
 		CookieSecure:   cookieSecure,
 		TrustedProxies: trustedProxies,
@@ -201,6 +217,7 @@ func main() {
 
 	// V0.1.1 M4: daily due-item projection (startup backfill + Asia/Shanghai 00:07 tick).
 	businessAPI.StartScheduler(ctx)
+	businessAPI.StartMailWorker(ctx)
 
 	go func() {
 		<-ctx.Done()

@@ -1,4 +1,15 @@
 import { chromium, expect, test } from '@playwright/test'
+import { DatabaseSync } from 'node:sqlite'
+import { createHmac, randomBytes } from 'node:crypto'
+// Challenge fixtures are inserted only into this run's isolated SQLite database.
+// Delivery, attempts and replay are independently covered by Go integration tests.
+function fixtureProof(owner:string,email:string,purpose:string){
+ const database=new DatabaseSync(process.env.TINYNEST_E2E_DB_PATH!)
+ const id='e2e_'+randomBytes(12).toString('hex'),code='123456'
+ const digest=createHmac('sha256',Buffer.from(process.env.TINYNEST_E2E_MAIL_KEY!,'hex')).update(id+':'+code).digest('hex')
+ database.prepare('INSERT INTO email_challenges(id,owner,email,purpose,digest,created_at,expires_at) VALUES(?,?,?,?,?,?,?)').run(id,owner,email,purpose,digest,new Date().toISOString().replace(/\.\d{3}Z$/,'Z'),new Date(Date.now()+600000).toISOString().replace(/\.\d{3}Z$/,'Z'))
+ database.close();return{challenge_id:id,code}
+}
 
 // Real end-to-end closure against a real Go API + real SQLite (started by
 // playwright.config.ts). One continuous family story, no mocks: every number
@@ -834,7 +845,7 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
   const body = { username: 'viewer-e2e', password: 'viewer-fixture-password' }
   const invite = await page.request.post('/api/v1/household/invitations', { headers, data: { member_name: '只读演练成员' } })
   expect(invite.status()).toBe(201)
-  expect((await page.request.post('/api/v1/auth/register', { data: body })).status()).toBe(202)
+  expect((await page.request.post('/api/v1/auth/register', { data: {...body,email:'viewer@example.com',proof:fixtureProof('registration:viewer@example.com','viewer@example.com','register')} })).status()).toBe(202)
   expect((await page.request.post('/api/v1/auth/join', { data: { ...body, code: (await invite.json()).code } })).status()).toBe(202)
   const pending = await (await page.request.get('/api/v1/admin/join-applications')).json()
   const application = pending.items.find((item: { username: string }) => item.username === body.username)
@@ -861,7 +872,7 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
     await expect(self.getByLabel('姓名')).toHaveCSS('border-radius', '11px')
     await self.getByLabel('姓名').fill('只读成员新姓名')
     await self.getByLabel('头像（文字或表情）').fill('🐱')
-    await self.getByLabel('邮箱').fill('viewer@example.com')
+    await expect(self.getByLabel('邮箱')).toHaveAttribute('readonly', '')
     await self.getByRole('button', { name: '保存资料' }).click()
     await expect(self).toBeHidden()
     await expect((await (await member.request.get('/api/v1/auth/me')).json())).toMatchObject({
@@ -925,13 +936,13 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
     await member.keyboard.press('Escape')
     await expect(self).toBeHidden()
     await member.getByRole('button', { name: '修改密码', exact: true }).click()
-    const change = member.getByRole('dialog', { name: '修改密码' })
-    await expect(change.getByLabel('当前密码')).toHaveCSS('border-radius', '11px')
-    await change.getByLabel('当前密码').fill(body.password)
-    await change.getByLabel('新密码', { exact: true }).fill('viewer-changed-password')
-    await change.getByLabel('确认新密码').fill('viewer-changed-password')
-    await change.getByRole('button', { name: '修改密码' }).click()
-    await expect(change).toBeHidden()
+    const security=member.getByRole('region',{name:'邮箱与安全'})
+    await expect(security.getByRole('heading',{name:'修改密码',exact:true})).toBeVisible()
+    await expect(security.getByLabel('新密码',{exact:true})).toHaveAttribute('minlength','12')
+    const memberMe=await (await member.request.get('/api/v1/auth/me')).json()
+    const passwordProof=fixtureProof(memberMe.user_id,'viewer@example.com','password')
+    expect((await member.request.post('/api/v1/auth/me/password',{headers:{'X-CSRF-Token':memberMe.csrf_token},data:{current_password:body.password,new_password:'viewer-changed-password',proof:passwordProof}})).ok()).toBe(true)
+    expect((await member.request.get('/api/v1/auth/me')).status()).toBe(401)
 
     await page.reload()
     await row.getByRole('button', { name: '编辑资料' }).click()
@@ -940,15 +951,8 @@ test('36 管理员设为只读后，成员仍能浏览和登出', async ({ page,
     await edit.getByLabel('姓名').fill('管理员修改后的姓名')
     await edit.getByRole('button', { name: '保存资料' }).click()
     await expect(row).toContainText('管理员修改后的姓名')
-    await row.getByRole('button', { name: '重置密码' }).click()
-    const reset = page.getByRole('dialog', { name: '重置密码' })
-    await reset.getByLabel('新密码', { exact: true }).fill('viewer-reset-password')
-    await reset.getByLabel('确认新密码').fill('viewer-reset-password')
-    await reset.getByRole('button', { name: '重置密码' }).click()
-    await expect(reset).toBeHidden()
-    expect((await member.request.get('/api/v1/auth/me')).status()).toBe(401)
-    await member.getByRole('button', { name: '登出' }).click()
-    await expect(member.getByRole('button', { name: '进入我的小家' })).toBeVisible()
+    const denied=await page.request.post('/api/v1/admin/users/'+memberMe.user_id+'/password',{headers,data:{new_password:'viewer-reset-password'}})
+    expect(denied.status()).toBe(403)
     await row.getByRole('button', { name: '删除账号' }).click()
     await page.getByRole('button', { name: '删除账号', exact: true }).last().click()
     await expect(row).toHaveCount(0)
@@ -1544,4 +1548,35 @@ test('83 首页恢复 README 三卡与六个月布局', async ({ page }) => {
   await page.screenshot({ path: 'test-results/home-restored-mobile.png', fullPage: true })
   await page.locator('.home-details > summary').click()
   await expect(page.getByRole('heading', { name: '家庭资产构成' })).toBeVisible()
+})
+
+test('系统邮件仅站点管理员可见，失败后清空凭据',async({page})=>{
+ await ensureLogin(page)
+ await page.getByRole('button',{name:'设置'}).click()
+ await expect(page.getByRole('heading',{name:'邮箱与安全',exact:true})).toBeVisible()
+ await expect(page.getByRole('heading',{name:'系统邮件 · 仅站点管理员'})).toHaveCount(0)
+ const me=await(await page.request.get('/api/v1/auth/me')).json()
+ const db=new DatabaseSync(process.env.TINYNEST_E2E_DB_PATH!)
+ db.prepare('INSERT INTO site_administrators(user_id) VALUES(?)').run(me.user_id);db.close()
+ try{
+  await page.reload()
+  const form=page.locator('.mail-settings form').filter({has:page.getByRole('heading',{name:'系统邮件 · 仅站点管理员'})})
+  await expect(form).toBeVisible()
+  await expect(form.getByRole('button',{name:'测试并保存配置'})).toHaveCSS('border-radius','12px')
+  await expect(form).toHaveCSS('background-color','rgb(255, 254, 250)')
+  await page.screenshot({path:'test-results/mail-settings-desktop.png',fullPage:true})
+  await form.getByLabel('SMTP 密码').fill('never-persisted-fixture')
+  await form.getByLabel('测试收件邮箱').fill('fixture@example.com')
+  await form.getByLabel('当前登录密码').fill('incorrect-password')
+  await form.getByRole('button',{name:'测试并保存配置'}).click()
+  await expect(page.locator('.mail-settings').getByRole('alert')).toContainText('当前密码')
+  await expect(form.getByLabel('SMTP 密码')).toHaveValue('')
+  await expect(form.getByLabel('当前登录密码')).toHaveValue('')
+  const config=await(await page.request.get('/api/v1/site/mail')).json()
+  expect(config.password_configured).toBe(false)
+  expect(JSON.stringify(config)).not.toContain('never-persisted-fixture')
+  await page.setViewportSize({width:390,height:844})
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true)
+  await page.screenshot({path:'test-results/mail-settings-mobile.png',fullPage:true})
+ }finally{const clean=new DatabaseSync(process.env.TINYNEST_E2E_DB_PATH!);clean.prepare('DELETE FROM site_administrators WHERE user_id=?').run(me.user_id);clean.close()}
 })
