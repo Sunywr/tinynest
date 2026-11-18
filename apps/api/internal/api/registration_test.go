@@ -8,7 +8,7 @@ func TestRegistrationRequiresApproval(t *testing.T) {
 	defer ts.Close()
 
 	credentials := map[string]string{"username": "new-member", "password": "valid-password-123"}
-	c.mustOK("POST", "/api/v1/auth/register", credentials)
+	c.registerVerified(credentials["username"], credentials["password"])
 	invite := c.mustOK("POST", "/api/v1/household/invitations", map[string]any{"member_name": "新成员", "username": credentials["username"]})
 	c.mustOK("POST", "/api/v1/auth/join", map[string]any{"username": credentials["username"], "password": credentials["password"], "code": invite["code"]})
 	if status, _ := c.do("POST", "/api/v1/auth/session", credentials); status != 401 {
@@ -46,7 +46,7 @@ func TestRevokedInvitationCannotBeUsed(t *testing.T) {
 	id := items[0].(map[string]any)["id"].(string)
 	c.mustOK("DELETE", path+"/"+id, nil)
 	credentials := map[string]string{"username": "revoked-test", "password": "valid-password-123"}
-	c.mustOK("POST", "/api/v1/auth/register", credentials)
+	c.registerVerified(credentials["username"], credentials["password"])
 	credentials["code"] = invite["code"].(string)
 	if code, _ := c.do("POST", "/api/v1/auth/join", credentials); code != 400 {
 		t.Fatalf("revoked invite returned %d", code)

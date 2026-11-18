@@ -152,6 +152,13 @@ func (a *API) applyProfileUpdate(ctx context.Context, q db.Queryer, householdID,
 		changed = append(changed, "payday")
 	}
 	if patch.has("email") {
+		var current string
+		if err := q.QueryRowContext(ctx, `SELECT COALESCE(email,'') FROM users WHERE id=? AND household_id=?`, targetUserID, householdID).Scan(&current); err != nil {
+			return "", err
+		}
+		if email != current {
+			return "", &profileRejected{"请通过邮箱验证入口修改邮箱"}
+		}
 		sets = append(sets, "email=?")
 		if patch.isNull("email") || email == "" {
 			args = append(args, nil)
@@ -277,8 +284,9 @@ func (a *API) handleUpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleChangeMyPassword(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
+		CurrentPassword string    `json:"current_password"`
+		NewPassword     string    `json:"new_password"`
+		Proof           mailProof `json:"proof"`
 	}
 	if err := decode(r, &in); err != nil || len(in.NewPassword) < 8 || len(in.NewPassword) > 256 {
 		writeErr(w, 400, "invalid_request", "新密码须为 8 至 256 位")
@@ -290,8 +298,13 @@ func (a *API) handleChangeMyPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", "账号不存在")
 		return
 	}
-	if !auth.VerifyPassword(hash, in.CurrentPassword) {
+	if !a.verifyCurrent(r, p.UserID, in.CurrentPassword) {
 		writeErr(w, 400, "invalid_request", "当前密码不正确")
+		return
+	}
+	var verifiedEmail string
+	if a.DB.QueryRowContext(r.Context(), `SELECT email FROM email_identities WHERE owner=?`, p.UserID).Scan(&verifiedEmail) != nil || a.checkProof(r.Context(), in.Proof, p.UserID, "password", verifiedEmail) != nil {
+		writeErr(w, 400, "verification_failed", "请先绑定邮箱并完成密码修改验证")
 		return
 	}
 	newHash, err := auth.HashPassword(in.NewPassword)
@@ -300,6 +313,9 @@ func (a *API) handleChangeMyPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		if e := a.consumeProof(r.Context(), tx, in.Proof, p.UserID, "password", verifiedEmail); e != nil {
+			return e
+		}
 		result, err := tx.ExecContext(r.Context(), `UPDATE users SET password_hash=? WHERE id=? AND household_id=? AND password_hash=? AND status='active'`,
 			newHash, p.UserID, p.HouseholdID, hash)
 		if err != nil {
@@ -312,7 +328,7 @@ func (a *API) handleChangeMyPassword(w http.ResponseWriter, r *http.Request) {
 		if n == 0 {
 			return &profileRejected{"账号或密码已变更，请重新登录"}
 		}
-		return audit(r.Context(), tx, p, "change_password", "user", p.UserID, "{}")
+		return a.passwordSecurity(r.Context(), tx, p, verifiedEmail)
 	})
 	var rejected *profileRejected
 	if errors.As(err, &rejected) {
@@ -361,43 +377,7 @@ func (a *API) handleAdminUpdateUserProfile(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *API) handleAdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
-	p, _ := principal(r)
-	var in struct {
-		NewPassword string `json:"new_password"`
-	}
-	if err := decode(r, &in); err != nil || len(in.NewPassword) < 8 || len(in.NewPassword) > 256 {
-		writeErr(w, 400, "invalid_request", "新密码须为 8 至 256 位")
-		return
-	}
-	id := r.PathValue("id")
-	newHash, err := auth.HashPassword(in.NewPassword)
-	if err != nil {
-		internalErr(w, err)
-		return
-	}
-	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(r.Context(), `UPDATE users SET password_hash=?
-			WHERE id=? AND household_id=? AND role IN ('member','viewer')`, newHash, id, p.HouseholdID)
-		if err != nil {
-			return err
-		}
-		if n, _ := result.RowsAffected(); n == 0 {
-			return sql.ErrNoRows
-		}
-		if _, err := tx.ExecContext(r.Context(), `UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL`,
-			a.nowUTC(), id); err != nil {
-			return err
-		}
-		return audit(r.Context(), tx, p, "reset_user_password", "user", id, "{}")
-	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		writeErr(w, 404, "not_found", "成员账号不存在")
-	case err != nil:
-		internalErr(w, err)
-	default:
-		writeJSON(w, 200, map[string]string{"id": id, "status": "ok"})
-	}
+	writeErr(w, 403, "verification_required", "请让成员使用登录页的邮箱找回密码；无法访问邮箱时联系站点管理员执行受控恢复")
 }
 
 func (a *API) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -417,6 +397,18 @@ func (a *API) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `DELETE FROM household_user_members WHERE user_id=?`, id); err != nil {
+			return err
+		}
+		for _, table := range []string{"email_identities", "email_challenges", "mail_preferences", "site_administrators"} {
+			column := "user_id"
+			if table == "email_identities" || table == "email_challenges" {
+				column = "owner"
+			}
+			if _, err := tx.ExecContext(r.Context(), "DELETE FROM "+table+" WHERE "+column+"=?", id); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(r.Context(), `UPDATE mail_queue SET status='cancelled',payload='' WHERE user_id=? AND status IN ('queued','sending')`, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `DELETE FROM users WHERE id=? AND household_id=?`, id, p.HouseholdID); err != nil {

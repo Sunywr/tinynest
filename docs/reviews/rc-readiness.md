@@ -127,3 +127,12 @@ Windows amd64、Go 1.23.6、SQLite，以 API 写入一个家庭的 2,500 条合�
 从 `apps/api` 运行 `go test ./internal/api -run '^$' -bench '^BenchmarkLedgerReads$' -benchtime=2s '-cpu=1,8'`。并发列为按吞吐量折算的平均每操作时间。延迟分位数、写入吞吐及生产 MySQL 性能仍为 UNVERIFIED。
 
 SQLite 并发写入回归以 16 个并行 HTTP 请求提交同一笔支出。连续 25 轮均验证一次创建、15 次返回同一流水 ID、账户只扣款一次。复跑命令为 `go test ./internal/api -run '^TestConcurrentTransactionReplays$' -count=25 -parallel=16`。
+
+
+## 飞书邮件与样式发布（2026-11-18）
+
+用户确认公共邮箱测试发信成功，并授权邮件功能与样式提交、推送、合并 main、清理分支及生产部署。邮箱设置与密码找回的按钮、控件、卡片和手机单列布局已统一；站点配置按钮圆角及卡片背景的失败断言在修复后通过。Go 全量 test/vet/build/tidy、前端类型检查与构建、品牌原图检查通过。此前 Linux 全量 race、MySQL 8.0 Unix socket 12 项邮件/账号回归、SQLite 012→013 带数据备份恢复证据继续有效；本次样式不改变后端行为。
+
+部署保留当前 SMTP 配置、邮件加密密钥与站点管理员身份，先备份数据库并保存旧发布目录。生产投递的用户确认仅覆盖测试邮件，实际安全流程、飞书日界线和 iPhone 实机仍待逐项验收。
+
+本轮完整 Chromium 回归 84/84 通过，桌面与 390px 邮件设置截图已检查。

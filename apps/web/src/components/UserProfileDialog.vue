@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { api, today, type UserProfile } from '../services/api'
 import DatePicker from './DatePicker.vue'
 
-const props = defineProps<{ profile: UserProfile; userId?: string; passwordOnly?: boolean }>()
+const props = defineProps<{ profile: UserProfile; userId?: string }>()
 const emit = defineEmits<{ close: []; saved: [message: string, profileChanged: boolean] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
 const busy = ref(false)
@@ -16,7 +16,6 @@ const draft = reactive({
   payday: props.profile.payday ?? '',
   email: props.profile.email || '',
 })
-const password = reactive({ current: '', next: '', confirm: '' })
 const avatarImage = computed(() => draft.avatar.startsWith('data:image/jpeg;base64,'))
 
 onMounted(() => dialog.value?.showModal())
@@ -43,7 +42,7 @@ function saveProfile() {
     avatar: draft.avatar || null,
     birthday: draft.birthday || null,
     payday: Number(draft.payday) || null,
-    email: draft.email || null,
+
   }
   void submit(() => props.userId ? api.updateUserProfile(props.userId, body) : api.updateMyProfile(body), '资料已保存', true)
 }
@@ -81,27 +80,16 @@ async function uploadAvatar(event: Event) {
   }
 }
 
-function savePassword() {
-  if (password.next !== password.confirm) {
-    error.value = '两次输入的新密码不一致'
-    return
-  }
-  void submit(
-    () => props.userId ? api.resetUserPassword(props.userId, password.next) : api.changeMyPassword(password.current, password.next),
-    props.userId ? '密码已重置，该账号的会话已退出' : '密码已修改',
-    false,
-  )
-}
 </script>
 
 <template>
   <dialog ref="dialog" class="profile-dialog" aria-labelledby="profile-heading" @cancel.self.prevent="!busy && emit('close')">
     <div class="profile-heading">
-      <h2 id="profile-heading">{{ passwordOnly ? (userId ? '重置密码' : '修改密码') : (userId ? '编辑用户资料' : '个人资料') }}</h2>
+      <h2 id="profile-heading">{{ userId ? '编辑用户资料' : '个人资料' }}</h2>
       <button class="ghost" type="button" :disabled="busy" @click="emit('close')">关闭</button>
     </div>
     <p>登录用户名 <strong>{{ profile.username }}</strong></p>
-    <form v-if="!passwordOnly" class="profile-fields" @submit.prevent="saveProfile">
+    <form class="profile-fields" @submit.prevent="saveProfile">
       <label>姓名 <input v-model="draft.name" required /></label>
       <div class="profile-avatar">
         <img v-if="avatarImage" :src="draft.avatar" width="64" height="64" alt="头像预览" />
@@ -111,15 +99,8 @@ function savePassword() {
       <label>上传头像图片 <input type="file" accept="image/*" :disabled="busy || processingAvatar" @change="uploadAvatar" /></label>
       <label>生日 <DatePicker v-model="draft.birthday" min="1900-01-01" :max="today()" open-on-click /></label>
       <label>每月发薪日 <input v-model="draft.payday" type="number" min="1" max="31" /></label>
-      <label>邮箱 <input v-model="draft.email" type="email" maxlength="254" /></label>
+      <label>邮箱 <input v-model="draft.email" readonly type="email" maxlength="254" /></label>
       <button class="primary" :disabled="busy || processingAvatar">保存资料</button>
-    </form>
-    <form v-else class="profile-fields" @submit.prevent="savePassword">
-      <p v-if="userId">重置后，该账号的所有会话将退出。</p>
-      <label v-else>当前密码 <input v-model="password.current" type="password" autocomplete="current-password" required /></label>
-      <label>新密码 <input v-model="password.next" type="password" autocomplete="new-password" minlength="8" maxlength="256" required /></label>
-      <label>确认新密码 <input v-model="password.confirm" type="password" autocomplete="new-password" required /></label>
-      <button class="primary" :disabled="busy">{{ userId ? '重置密码' : '修改密码' }}</button>
     </form>
     <p v-if="error" role="alert">{{ error }}</p>
   </dialog>

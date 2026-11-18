@@ -14,7 +14,7 @@ func TestMemberAccountLifecycle(t *testing.T) {
 	base := "/api/v1/admin/users"
 	credentials := map[string]string{"username": "member-test", "password": "member-test-password"}
 	profile := admin.mustOK("POST", "/api/v1/household/members", map[string]string{"name": "成员"})
-	admin.mustOK("POST", "/api/v1/auth/register", credentials)
+	admin.registerVerified(credentials["username"], credentials["password"])
 	invite := admin.mustOK("POST", "/api/v1/household/invitations", map[string]any{"member_id": profile["id"]})
 	admin.mustOK("POST", "/api/v1/auth/join", map[string]any{"username": credentials["username"], "password": credentials["password"], "code": invite["code"]})
 	pending := admin.mustOK("GET", "/api/v1/admin/join-applications", nil)["items"].([]any)

@@ -1,13 +1,19 @@
 import { defineConfig } from '@playwright/test'
 import fs from 'node:fs'
+import {randomBytes} from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 // A fresh SQLite per run: POST /api/v1/setup is single-use by design.
-const dataDir = path.join(os.tmpdir(), `tinynest-e2e-data-${Date.now()}`)
+const dataDir = process.env.TINYNEST_E2E_RUN_DIR || path.join(os.tmpdir(), `tinynest-e2e-data-${Date.now()}`)
+process.env.TINYNEST_E2E_RUN_DIR=dataDir
 fs.mkdirSync(dataDir, { recursive: true })
+const mailKey=process.env.TINYNEST_E2E_MAIL_KEY ? Buffer.from(process.env.TINYNEST_E2E_MAIL_KEY,'hex') : randomBytes(32)
+fs.writeFileSync(path.join(dataDir,'mail.key'),mailKey,{mode:0o600})
+process.env.TINYNEST_E2E_DB_PATH=path.join(dataDir,'tinynest.sqlite3')
+process.env.TINYNEST_E2E_MAIL_KEY=mailKey.toString('hex')
 
 // The Go toolchain is NOT on the global PATH of this workstation; CI provides
 // it via PATH. Both are honored here without touching the app code.
@@ -44,6 +50,7 @@ export default defineConfig({
         TINYNEST_DB_PATH: path.join(dataDir, 'tinynest.sqlite3'),
         TINYNEST_SETUP_TOKEN: setupToken,
         TINYNEST_COOKIE_SECURE: 'false',
+        TINYNEST_MAIL_KEY_FILE: path.join(dataDir,'mail.key'),
         TINYNEST_TRUSTED_PROXIES: '',
       },
       url: 'http://127.0.0.1:8787/api/v1/healthz',

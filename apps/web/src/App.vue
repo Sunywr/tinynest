@@ -6,6 +6,9 @@ import AccountIcon from './components/AccountIcon.vue'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
 import DatePicker from './components/DatePicker.vue'
+import MailSettings from './components/MailSettings.vue'
+import PasswordRecovery from './components/PasswordRecovery.vue'
+import { request } from './services/api'
 import UserProfileDialog from './components/UserProfileDialog.vue'
 
 type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
@@ -27,7 +30,10 @@ const notice = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
 const users = ref<ManagedUser[]>([])
-const profileDialog = ref<{ profile: UserProfile; userID?: string; passwordOnly?: boolean } | null>(null)
+const profileDialog = ref<{ profile: UserProfile; userID?: string } | null>(null)
+const recoverMode=ref(false)
+const registrationEmail=ref(''),registrationCode=ref(''),registrationChallenge=ref(''),registrationUntil=ref(0)
+async function sendRegistrationCode(){if(loading.value)return;loading.value=true;loginError.value='';try{if(Date.now()<registrationUntil.value)throw Error('请在60秒后重发');const r=await request('/auth/mail/challenge',{method:'POST',body:JSON.stringify({email:registrationEmail.value,purpose:'register'})});registrationChallenge.value=r.challenge_id;registrationUntil.value=Date.now()+60000;joinNotice.value='验证码已排队发送，10分钟内有效'}catch(e){loginError.value=e instanceof Error?e.message:String(e)}finally{loading.value=false}}
 const joinMode = ref(false)
 const inviteCode = ref('')
 const joinNotice = ref('')
@@ -804,7 +810,7 @@ async function applyForHousehold(register: boolean) {
   loginError.value = ''
   const credentials = { username: authForm.username, password: authForm.password }
   try {
-    if (register) await api.register(credentials)
+    if (register) await request('/auth/register',{method:'POST',body:JSON.stringify({...credentials,email:registrationEmail.value,proof:{challenge_id:registrationChallenge.value,code:registrationCode.value}})})
     if (inviteCode.value.trim()) {
       await api.applyInvite({ ...credentials, code: inviteCode.value.trim() })
       joinNotice.value = '申请已提交，管理员批准后即可登录。'
@@ -869,6 +875,8 @@ async function refreshUsers() {
     if (me.value === session) users.value = result.items
   } catch (e) { fail(e) }
 }
+
+async function refreshMailIdentity(){try{Object.assign(me.value,await api.me())}catch(e){fail(e)}}
 
 async function profileSaved(message: string, profileChanged: boolean) {
   const editor = profileDialog.value
@@ -1590,9 +1598,12 @@ const metricCards = computed(() => {
             <img src="/icons/tinynest-original.png" alt="" class="dialog-logo" />
             <h2 id="login-title">欢迎回家</h2>
             <p id="login-desc">登录后进入你的家庭财务驾驶舱。</p>
-            <form @submit.prevent="joinMode ? applyForHousehold(true) : submitLogin()">
+            <PasswordRecovery v-if="recoverMode" @close="recoverMode=false" />
+            <form v-else @submit.prevent="joinMode ? applyForHousehold(true) : submitLogin()">
               <label>用户名<input ref="usernameRef" v-model="authForm.username" autocomplete="username" required /></label>
               <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
+              <template v-if="joinMode"><label>注册邮箱<input v-model="registrationEmail" type="email" required autocomplete="email"></label><button type="button" :disabled="loading" @click="sendRegistrationCode">发送注册验证码</button><label>邮箱验证码<input v-model="registrationCode" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label></template>
+              <button v-if="!joinMode" class="btn-quiet" type="button" @click="recoverMode=true">忘记密码</button>
               <label v-if="joinMode">邀请码（加入家庭时填写）<input v-model="inviteCode" autocomplete="off" /></label>
               <p v-if="joinNotice && joinMode" role="status">{{ joinNotice }}</p>
               <p v-if="loginError" class="err" role="alert">{{ loginError }}</p>
@@ -1631,13 +1642,14 @@ const metricCards = computed(() => {
               <template v-else>{{ me.avatar }}</template>
             </span>
             <button class="ghost" @click="profileDialog = { profile: me }">个人资料</button>
-            <button class="ghost" @click="profileDialog = { profile: me, passwordOnly: true }">修改密码</button>
+            <button class="ghost" @click="go('settings')">修改密码</button>
             <button class="ghost" @click="logout()">登出</button>
           </div>
         </div>
         <UserProfileDialog v-if="profileDialog" :profile="profileDialog.profile" :user-id="profileDialog.userID"
-          :password-only="profileDialog.passwordOnly" @close="profileDialog = null" @saved="profileSaved" />
+          @close="profileDialog = null" @saved="profileSaved" />
 
+        <p v-if="!me.email_verified && view !== 'settings'" role="status">请补充验证邮箱，方便保护账号与找回密码。<button class="ghost" @click="go('settings')">去验证</button></p>
         <!-- 首页 -->
         <template v-if="view === 'home'">
           <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>每一笔小小的记录，都在帮我们照顾这个温暖的家。</p></div>
@@ -2380,6 +2392,7 @@ const metricCards = computed(() => {
 
         <template v-else>
           <section class="greeting"><div><h1>设置</h1><p>账本信息与安全说明</p></div></section>
+          <MailSettings :role="me?.role || ''" @identity-updated="refreshMailIdentity" />
           <div class="actions-bar">
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('invite')">邀请加入家庭</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('member')">新增成员档案</button>
@@ -2423,7 +2436,7 @@ const metricCards = computed(() => {
               <div v-for="user in users" :key="user.id" class="rankrow">
                 <span>{{ user.member_name || user.username }}<template v-if="user.member_name && user.member_name !== user.username">（{{ user.username }}）</template> · {{ user.role === 'admin' ? '管理员' : user.status === 'disabled' ? '已停用' : user.role === 'viewer' ? '只读' : '成员' }}</span>
                 <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="profileDialog = { profile: user, userID: user.id }">编辑资料</button>
-                <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="profileDialog = { profile: user, userID: user.id, passwordOnly: true }">重置密码</button>
+                <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="toast('请成员在登录页使用已验证邮箱找回密码；无法访问邮箱请联系站点管理员。')">重置密码</button>
                 <button v-if="user.role !== 'admin'" class="ghost" :disabled="loading" @click="deleteUser(user)">删除账号</button>
                 <button v-if="user.role !== 'admin' && user.status === 'active'" class="ghost" :disabled="loading" @click="changeUserRole(user.id, user.role === 'viewer' ? 'member' : 'viewer')">{{ user.role === 'viewer' ? '允许记账' : '设为只读' }}</button>
                 <button v-if="user.role !== 'admin' && user.status === 'active'" class="ghost" :disabled="loading" @click="disableUser(user.id, user.username)">停用</button>
