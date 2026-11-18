@@ -334,7 +334,11 @@ test('刷新保留当前菜单，退出后清除菜单位置', async ({ page }) 
     await page.reload()
     await expect(page.locator('h1')).toHaveText(heading)
   }
+  const loggedOut=page.waitForResponse(response=>response.url().endsWith('/api/v1/auth/session')&&response.request().method()==='DELETE'&&response.ok())
   await page.getByRole('button', { name: '登出' }).click()
+  await loggedOut
+  await expect(page.getByRole('button',{name:CTA})).toBeVisible()
+  await expect(page.locator('nav.nav')).toHaveCount(0)
   await loginViaDialog(page)
   await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
 })
