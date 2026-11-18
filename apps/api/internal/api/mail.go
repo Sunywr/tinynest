@@ -36,7 +36,7 @@ type MailConfig struct {
 }
 
 func defaultMailConfig() MailConfig {
-	return MailConfig{Host: "smtp.feishu.cn", Port: 465, Username: "admin@tinynest.cn", From: "admin@tinynest.cn", Name: "TinyNest 小家", DailyLimit: 100, AnnouncementLimit: 20}
+	return MailConfig{Host: "", Port: 465, Username: "", From: "", Name: "TinyNest 小家", DailyLimit: 100, AnnouncementLimit: 20}
 }
 func validEmail(s string) bool {
 	a, e := mail.ParseAddress(s)
@@ -128,8 +128,8 @@ func (a *API) handleMailConfig(w http.ResponseWriter, r *http.Request) {
 		Version         int        `json:"version"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8192)
-	if decode(r, &in) != nil || in.Config.Host != "smtp.feishu.cn" || (in.Config.Port != 465 && in.Config.Port != 587) || !validEmail(in.Config.From) || in.Config.Username != in.Config.From || len(in.Config.Name) > 100 || strings.ContainsAny(in.Config.Name, "\r\n") || in.Config.DailyLimit < 1 || in.Config.AnnouncementLimit < 0 || in.Config.AnnouncementLimit > in.Config.DailyLimit || len(in.Password) > 1024 || !validEmail(in.TestRecipient) {
-		writeErr(w, 400, "invalid_request", "请检查飞书服务器、账号、额度和测试收件地址")
+	if decode(r, &in) != nil || !validSMTPHost(in.Config.Host) || (in.Config.Port != 465 && in.Config.Port != 587) || !validEmail(in.Config.From) || strings.TrimSpace(in.Config.Username) == "" || len(in.Config.Username) > 320 || strings.ContainsAny(in.Config.Username, "\r\n") || len(in.Config.Name) > 100 || strings.ContainsAny(in.Config.Name, "\r\n") || in.Config.DailyLimit < 1 || in.Config.AnnouncementLimit < 0 || in.Config.AnnouncementLimit > in.Config.DailyLimit || len(in.Password) > 1024 || !validEmail(in.TestRecipient) {
+		writeErr(w, 400, "invalid_request", "请检查SMTP服务器、登录账号、发件地址、额度和测试收件地址")
 		return
 	}
 	p, _ := principal(r)
@@ -212,7 +212,7 @@ func (a *API) sendMail(ctx context.Context, c MailConfig, password, to, subject,
 		return a.opts.MailSender(ctx, c, password, to, subject, body)
 	}
 	d := net.Dialer{Timeout: 10 * time.Second}
-	conn, e := d.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", c.Host, c.Port))
+	conn, e := d.DialContext(ctx, "tcp", net.JoinHostPort(c.Host, fmt.Sprint(c.Port)))
 	if e != nil {
 		return errors.New("smtp connection failed")
 	}
@@ -345,4 +345,26 @@ func (a *API) checkRecipientBudget(ctx context.Context, q db.Queryer, email stri
 		return errRecipientDailyLimit
 	}
 	return nil
+}
+
+// Only host names or IP literals are accepted; URLs and host:port input are not.
+// Ports remain explicitly bound to authenticated TLS submission (465/587).
+func validSMTPHost(host string) bool {
+	if host == "" || host != strings.TrimSpace(host) || len(host) > 253 {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }

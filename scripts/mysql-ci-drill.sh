@@ -102,7 +102,7 @@ GRANT ALL ON tinynest_restore_transactions.* TO 'tinynest_drill'@'localhost';
 SQL
 
 stage='provision recipient quota fixtures'
-for suffix in shared concurrent challenge delivery; do
+for suffix in shared concurrent challenge delivery generic; do
   mysql_root mysql --protocol=socket --user=root -e "CREATE DATABASE tinynest_recipient_${suffix}; GRANT ALL ON tinynest_recipient_${suffix}.* TO 'tinynest_drill'@'localhost';"
 done
 
@@ -147,6 +147,7 @@ run_ledger_test tinynest_recipient_shared TestRecipientDailyLimitSharedAndReset
 run_ledger_test tinynest_recipient_concurrent TestRecipientDailyLimitConcurrentAndRollback
 run_ledger_test tinynest_recipient_challenge TestRecipientLimitRejectsChallengeBeforeQueue
 run_ledger_test tinynest_recipient_delivery TestRecipientLimitStopsQueuedDelivery
+run_ledger_test tinynest_recipient_generic TestGenericSMTPProviderConfiguration
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)

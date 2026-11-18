@@ -18,7 +18,7 @@ async function challenge(purpose:string){await run(async()=>{if(Date.now()<(cool
 function proof(purpose:string,code:string){return{challenge_id:proofs[purpose]||'',code}}
 async function bind(){await run(async()=>{await post('/auth/me/mail/confirm',{email:binding.email,current_password:binding.current_password,proof:proof('bind',binding.code),old_proof:proof('old_email',binding.old_code)});binding.code='';binding.old_code='';binding.current_password='';await load();emit('identityUpdated');message.value='邮箱已验证'})}
 async function password(){await run(async()=>{if(binding.new_password!==binding.confirm_password)throw Error('两次密码不一致');await post('/auth/me/password',{current_password:binding.current_password,new_password:binding.new_password,proof:proof('password',binding.code)});binding.new_password='';binding.current_password='';binding.code='';window.dispatchEvent(new CustomEvent('tinynest:session-expired'))})}
-async function saveConfig(){await run(async()=>{try{await post('/site/mail',{...credentials,config:config.value.config,version:config.value.version});await load();message.value='测试邮件已被SMTP接受，配置已生效'}finally{credentials.password='';credentials.current_password=''}})}
+async function saveConfig(){await run(async()=>{try{if(!config.value.config.from)config.value.config.from=config.value.config.username;await post('/site/mail',{...credentials,config:config.value.config,version:config.value.version});await load();message.value='测试邮件已被SMTP接受，配置已生效'}finally{credentials.password='';credentials.current_password=''}})}
 async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=await post('/household/mail/announcements',{...announcement,preview:isPreview,expected_count:preview.value});if(isPreview){preview.value=r.recipient_count}else{preview.value=null;announcement.title='';announcement.body='';await load();message.value='公告已加入发送队列'}})}
 </script>
 <template>
@@ -50,9 +50,9 @@ async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=a
 <p v-if="config.last_test?.at">最近测试：{{config.last_test.result==='mail_test_failed'?'失败，旧配置继续生效':'SMTP已接受'}} · {{config.last_test.at}}</p>
 <p v-if="!config.key_ready" class="err">服务器尚未配置邮件加密密钥，暂不能保存凭据。</p>
 <label class="mail-toggle"><input v-model="config.config.enabled" type="checkbox">启用邮件服务</label>
-<label>飞书 SMTP<input v-model="config.config.host" readonly></label>
+<label>SMTP 服务器<input v-model="config.config.host" placeholder="smtp.example.com" required autocomplete="off"></label>
 <label>加密连接<select v-model.number="config.config.port"><option :value="465">465 SSL/TLS</option><option :value="587">587 STARTTLS</option></select></label>
-<label>公共邮箱账号<input v-model="config.config.username" type="email" required @input="config.config.from=config.config.username"></label>
+<label>邮箱账号<input v-model="config.config.username" type="email" required @input="config.config.from=config.config.username"></label>
 <label>发件名称<input v-model="config.config.name" maxlength="100" required></label>
 <label>SMTP 密码<input v-model="credentials.password" type="password" autocomplete="new-password" maxlength="1024" :placeholder="config.password_configured?'已配置，留空保留':'请输入专用密码'"></label>
 <label>每日总额度<input v-model.number="config.config.daily_limit" type="number" min="1" required></label>

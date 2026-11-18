@@ -33,3 +33,17 @@ __pycache__/
 # Playwright E2E outputs: committed artifacts live under apps/web/e2e/artifacts
 test-results/
 playwright-report/
+
+# Credentials, private deployment state, and local connection profiles
+id_rsa*
+id_ed25519*
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+*.env.local
+*.credentials.json
+*.credentials.yaml
+*.credentials.yml
+/deploy/local/
+/.secrets/

@@ -106,6 +106,9 @@ func TestMailConfigAtomicReplacementAndRedaction(t *testing.T) {
 		return nil
 	}
 	cfg := defaultMailConfig()
+	cfg.Host = "smtp.provider.example"
+	cfg.Username = "sender@example.com"
+	cfg.From = cfg.Username
 	cfg.Enabled = true
 	body := map[string]any{"config": cfg, "password": "smtp-secret", "current_password": "correct-horse-battery", "test_recipient": "test@example.com", "version": 0}
 	c.mustOK("POST", "/api/v1/site/mail", body)
@@ -371,5 +374,43 @@ func TestMailExpiredPayloadCleanedWhileDisabled(t *testing.T) {
 	}
 	if state != "expired" || payload != "" {
 		t.Fatal("disabled service retained expired content")
+	}
+}
+func TestGenericSMTPProviderConfiguration(t *testing.T) {
+	ts, c, d := newTestServer(t)
+	defer ts.Close()
+	defer d.Close()
+	a := c.mailAPI
+	id := c.mustOK("GET", "/api/v1/auth/me", nil)["user_id"].(string)
+	if _, err := d.Exec(`INSERT INTO site_administrators(user_id) VALUES(?)`, id); err != nil {
+		t.Fatal(err)
+	}
+	a.opts.MailSender = func(_ context.Context, cfg MailConfig, password, to, subject, body string) error {
+		if cfg.Host != "smtp.provider.example" || cfg.Username != "provider-api-user" || cfg.From != "notices@example.com" {
+			t.Fatal("provider fields lost")
+		}
+		return nil
+	}
+	cfg := defaultMailConfig()
+	cfg.Host = "smtp.provider.example"
+	cfg.Username = "provider-api-user"
+	cfg.From = "notices@example.com"
+	cfg.Enabled = true
+	c.mustOK("POST", "/api/v1/site/mail", map[string]any{"config": cfg, "password": "fixture-password", "current_password": "correct-horse-battery", "test_recipient": "recipient@example.com", "version": 0})
+	got := c.mustOK("GET", "/api/v1/site/mail", nil)["config"].(map[string]any)
+	if got["host"] != cfg.Host || got["username"] != cfg.Username || got["from"] != cfg.From {
+		t.Fatal("provider config not persisted")
+	}
+}
+func TestSMTPHostValidation(t *testing.T) {
+	for _, host := range []string{"smtp.example.com", "mail.provider.test", "127.0.0.1", "2001:db8::1"} {
+		if !validSMTPHost(host) {
+			t.Fatalf("valid host rejected: %s", host)
+		}
+	}
+	for _, host := range []string{"", " https://smtp.example.com", "https://smtp.example.com", "smtp.example.com:465", "smtp.example.com/path", "smtp.example.com\r\n", "bad..example", "-bad.example", "bad_.example"} {
+		if validSMTPHost(host) {
+			t.Fatalf("invalid host accepted: %q", host)
+		}
 	}
 }
