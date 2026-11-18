@@ -1,5 +1,13 @@
 # 发布候选复核
 
+## 2026-11-18 用户验收反馈修复发布
+
+- 前后端应用版本切换至 `4636a3b`；后续测试截图调整提交 `ec36d67` 的 [CI 四项全部通过](https://github.com/Sunywr/tinynest/actions/runs/44229426876)，包含 Go race、MySQL Unix socket 迁移与备份恢复，以及 82 项 Chromium E2E。本地 WebKit 针对性 22 项通过。
+- 本轮修复侧栏禁止滚动、流水分类及备注层级与退款标识、Safari 日期控件和全站表单宽度。详情见[反馈修复记录](acceptance-feedback-2026-11-18.md)。
+- 上线前 MySQL 备份作业成功，`tinynest-20261118T031138Z.sql` SHA-256 为 `0dc5e7d8f41394485c952ac15c034b902a5cf37a4e2ea85ab20b251b6cd500a3`。保留前端 `b32e48e`、后端 `5ee466f` 为回滚点；本次无数据库迁移。
+- 生产 HTTPS 首页 200，引用新的 JS/CSS，两者 SHA-256 与本地构建一致；后端二进制上传前后哈希一致。MySQL 就绪、服务 active，未登录流水接口 401、初始化接口 403。Nginx 配置校验通过。
+- 用户已反馈资料保存、iPhone 安装联网、安全退出正常。修复后的 iPhone 布局与生产退款展示仍待用户复核；本次未以生产账号写入测试账务。异地副本校验及本次生产备份独立恢复仍为 UNVERIFIED。
+
 ## 2026-11-17 生日主题日历发布
 
 - 生产前端切换至 `b32e48e`，保留 `0d0def9` 作为回滚点。后端继续运行 `5ee466f`。上线前 MySQL 备份 `tinynest-20261117T144922Z.sql` 的 SHA-256 为 `72c7d07dc6c1aab6f754341f5b1d18c06b01d767b4182eb2c167e177b36426eb`。
