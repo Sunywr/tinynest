@@ -33,7 +33,7 @@ const users = ref<ManagedUser[]>([])
 const profileDialog = ref<{ profile: UserProfile; userID?: string } | null>(null)
 const recoverMode=ref(false)
 const registrationEmail=ref(''),registrationCode=ref(''),registrationChallenge=ref(''),registrationUntil=ref(0)
-async function sendRegistrationCode(){if(loading.value)return;loading.value=true;loginError.value='';try{if(Date.now()<registrationUntil.value)throw Error('请在60秒后重发');const r=await request('/auth/mail/challenge',{method:'POST',body:JSON.stringify({email:registrationEmail.value,purpose:'register'})});registrationChallenge.value=r.challenge_id;registrationUntil.value=Date.now()+60000;joinNotice.value='验证码已排队发送，10分钟内有效'}catch(e){loginError.value=e instanceof Error?e.message:String(e)}finally{loading.value=false}}
+async function sendRegistrationCode(){if(loading.value)return;loading.value=true;loginError.value='';try{if(Date.now()<registrationUntil.value)throw Error('请在60秒后重发');const r=await request('/auth/mail/challenge',{method:'POST',body:JSON.stringify({email:registrationEmail.value,purpose:'register'})});registrationChallenge.value=r.challenge_id;registrationUntil.value=Date.now()+60000;joinNotice.value='验证码已排队发送，10分钟内有效；同一邮箱每天最多3封邮件。'}catch(e){loginError.value=e instanceof Error?e.message:String(e)}finally{loading.value=false}}
 const joinMode = ref(false)
 const inviteCode = ref('')
 const joinNotice = ref('')
@@ -1602,14 +1602,14 @@ const metricCards = computed(() => {
             <form v-else @submit.prevent="joinMode ? applyForHousehold(true) : submitLogin()">
               <label>用户名<input ref="usernameRef" v-model="authForm.username" autocomplete="username" required /></label>
               <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" required minlength="8" /></label>
-              <template v-if="joinMode"><label>注册邮箱<input v-model="registrationEmail" type="email" required autocomplete="email"></label><button type="button" :disabled="loading" @click="sendRegistrationCode">发送注册验证码</button><label>邮箱验证码<input v-model="registrationCode" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label></template>
+              <template v-if="joinMode"><p class="email-flow-hint">① 填写邮箱并获取验证码 → ② 输入验证码和账号资料 → ③ 注册后凭邀请码申请加入家庭。同一邮箱每天最多3封邮件，上海时间零点重置。</p><label>注册邮箱<input v-model="registrationEmail" type="email" required autocomplete="email"></label><button type="button" :disabled="loading" @click="sendRegistrationCode">发送注册验证码</button><label>邮箱验证码<input v-model="registrationCode" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label></template>
               <button v-if="!joinMode" class="btn-quiet" type="button" @click="recoverMode=true">忘记密码</button>
               <label v-if="joinMode">邀请码（加入家庭时填写）<input v-model="inviteCode" autocomplete="off" /></label>
               <p v-if="joinNotice && joinMode" role="status">{{ joinNotice }}</p>
               <p v-if="loginError" class="err" role="alert">{{ loginError }}</p>
               <button class="btn-primary" type="submit" :disabled="loading">{{ loading ? '处理中…' : joinMode ? (inviteCode.trim() ? '注册并申请加入' : '注册') : '登录' }}</button>
               <button v-if="joinMode && inviteCode.trim()" class="btn-quiet" type="button" :disabled="loading" @click="applyForHousehold(false)">已有注册，提交申请</button>
-              <button class="btn-quiet" type="button" :disabled="loading" @click="joinMode = !joinMode; loginError = ''; joinNotice = ''; authForm.password = ''; inviteCode = ''">{{ joinMode ? '返回登录' : '注册新账号' }}</button>
+              <button class="btn-quiet" type="button" :disabled="loading" @click="joinMode = !joinMode; loginError = ''; joinNotice = ''; authForm.password = ''; inviteCode = ''; registrationCode = ''; registrationChallenge = ''">{{ joinMode ? '返回登录' : '注册新账号' }}</button>
             </form>
           </div>
         </div>

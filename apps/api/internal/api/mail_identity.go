@@ -152,6 +152,15 @@ func (a *API) issueChallenge(w http.ResponseWriter, r *http.Request, owner, hh, 
 		writeErr(w, 429, "mail_quota", "当日邮件额度不足，请稍后重试")
 		return
 	}
+
+	if err := a.checkRecipientBudget(r.Context(), a.DB, email); err != nil {
+		if errors.Is(err, errRecipientDailyLimit) {
+			writeErr(w, 429, "email_daily_limit", err.Error())
+		} else {
+			internalErr(w, err)
+		}
+		return
+	}
 	id := newID("challenge")
 	if owner == "" {
 		writeJSON(w, 202, map[string]string{"status": "accepted", "challenge_id": id})

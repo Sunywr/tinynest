@@ -237,3 +237,6 @@
 `proof` 为 `{challenge_id, code}`。验证码 10 分钟有效，60 秒可重发，最多尝试 5 次。注册 `/auth/register` 额外要求 `email` 与 `proof`；密码修改 `/auth/me/password` 额外要求 `proof`，成功后所有会话失效。`/auth/me` 新增 `email_verified`。
 
 资料接口不能直接改变邮箱；家庭管理员密码重置接口现返回 403 `verification_required`，须用户自行通过邮箱找回。SMTP 缺失或禁用返回 `mail_unavailable`，额度不足返回 `mail_quota`；队列的 `smtp_accepted` 仅表示 SMTP 接受。
+
+
+邮件接收地址每日限额：所有用途按规范化邮箱共用三次投递尝试，上海时间零点重置。验证码申请/配置测试超过限额返回 HTTP 429，error.code 为 email_daily_limit。公告预览和提交也检查各收件邮箱额度；队列投递被限制时状态为 daily_limit，正文随之清除。注册与修改密码仍须使用匹配用途的 proof，不能跳过邮箱验证。
