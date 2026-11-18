@@ -379,6 +379,7 @@ test('21 首页三套口径与信用总览闭环（自定义跨月区间）', as
   await ensureLogin(page)
   const from = fmt(new Date(year, month - 1, 1))
   const to = fmt(new Date(year, month + 1, 0))
+  await page.locator('.home-period > summary').click()
   await page.getByLabel('起始').fill(from)
   await page.getByLabel('截止').fill(to)
   await page.getByRole('button', { name: '应用周期' }).click()
@@ -598,6 +599,7 @@ test('24 留空费用按费率自动计费入账（与预览一致）', async ({
 
 test('25 首页资产构成与净资产口径一致', async ({ page }) => {
   await ensureLogin(page)
+  await page.locator('.home-details > summary').click()
   await expect(page.getByRole('heading', { name: '家庭资产构成' })).toBeVisible()
   await expect(page.locator('.rankrow', { hasText: '投资持仓（成本）' })).toContainText('¥1,005.20')
   await expect(page.locator('.note-box', { hasText: '估值日期' })).toContainText('尚未录入')
@@ -661,6 +663,7 @@ test('29 自定义 5 号至次月 4 号区间与真实 API 一致', async ({ pag
   await ensureLogin(page)
   const from = fmt(new Date(year, month - 1, 5))
   const to = fmt(new Date(year, month, 4))
+  await page.locator('.home-period > summary').click()
   await page.getByLabel('起始').fill(from)
   await page.getByLabel('截止').fill(to)
   await page.getByRole('button', { name: '应用周期' }).click()
@@ -1523,4 +1526,20 @@ test('验收反馈：窄屏各菜单和表单控件均在容器内', async ({ pa
   await page.locator('nav.nav').getByRole('button', { name: '记账流水' }).click()
   await page.locator('.ledger-transaction').first().waitFor()
   await page.screenshot({ path: test.info().outputPath('ledger-mobile.png'), animations: 'disabled' })
+})
+
+
+test('83 首页恢复 README 三卡与六个月布局', async ({ page }) => {
+  await ensureLogin(page)
+  await expect(page.locator('.stats.metrics > .stat')).toHaveCount(3)
+  await expect(page.getByRole('heading', { name: '收支小趋势' })).toBeVisible()
+  await expect(page.locator('.home-trend .barcol')).toHaveCount(6)
+  await expect(page.getByText('预算功能未开发', { exact: true })).toBeVisible()
+  await expect(page.locator('.home-details')).not.toHaveAttribute('open', '')
+  await page.screenshot({ path: 'test-results/home-restored-desktop.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: 'test-results/home-restored-mobile.png', fullPage: true })
+  await page.locator('.home-details > summary').click()
+  await expect(page.getByRole('heading', { name: '家庭资产构成' })).toBeVisible()
 })

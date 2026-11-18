@@ -324,7 +324,7 @@ function clearPrivateState() {
   ledgerNavigation++
   me.value = null
   profileDialog.value = null
-  summary.value = null; creditDash.value = null; netWorth.value = null
+  summary.value = null; creditDash.value = null; netWorth.value = null; homeTrend.value = []
   dividendHistory.value = null; feePreview.value = null
   tradeHistory.value = null; tradeHistoryLoading.value = false
   instDetail.value = null; debtDetail.value = null
@@ -503,6 +503,7 @@ async function loadAll() {
     [api.dividends(), v => dividendHistory.value = v],
     [api.netWorth(range.from, range.to), v => netWorth.value = v],
     [api.summary(range.from, range.to), v => summary.value = v],
+    [loadHomeTrend(), () => {}],
     [api.dashboardCredit(range.from, range.to), v => creditDash.value = v],
     [api.categoryRanking(range.from, range.to), v => catRanking.value = v.items || []],
   ]
@@ -551,6 +552,7 @@ function filterLedger() {
 
 async function reloadSummary() {
   try {
+    await loadHomeTrend()
     summary.value = await api.summary(range.from, range.to)
     creditDash.value = await api.dashboardCredit(range.from, range.to)
     netWorth.value = await api.netWorth(range.from, range.to)
@@ -1490,6 +1492,19 @@ function instrumentUsage(id: string) {
   return `已用 ${formatMinor(row.used_minor)} · 可用 ${formatMinor(row.available_minor)} · ${(row.usage_bps / 100).toFixed(1)}%`
 }
 
+const homeTrend = ref<any[]>([])
+async function loadHomeTrend() {
+  const anchor = new Date(`${range.to}T12:00:00`)
+  const rows = await Promise.all(Array.from({ length: 6 }, async (_, i) => {
+    const d = new Date(anchor.getFullYear(), anchor.getMonth() - 5 + i, 1)
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+    const date = (v: Date) => `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`
+    const data = await api.summary(date(d), date(end))
+    return { ...data, month: `${d.getMonth()+1}月` }
+  }))
+  if (authed.value) homeTrend.value = rows
+}
+const trendMax = computed(() => Math.max(1, ...homeTrend.value.flatMap(v => [Math.abs(v.income_minor), Math.abs(v.expense_minor)])))
 const metricCards = computed(() => {
   const s = summary.value
   if (!s) return []
@@ -1625,26 +1640,25 @@ const metricCards = computed(() => {
 
         <!-- 首页 -->
         <template v-if="view === 'home'">
-          <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>所有数字均由实时汇总，不含演示数据。</p></div>
+          <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>每一笔小小的记录，都在帮我们照顾这个温暖的家。</p></div>
             <div class="day">{{ range.from }} ～ {{ range.to }}</div>
             <button v-if="canWrite" type="button" class="btn-primary quick-entry" @click="quickEntry()">＋ 记一笔</button></section>
-          <div class="rangebar">
+          <details class="home-period"><summary>选择统计周期</summary><div class="rangebar">
             <label>起始 <DatePicker v-model="range.from" /></label>
             <label>截止 <DatePicker v-model="range.to" /></label>
             <button class="ghost" @click="reloadSummary()">应用周期</button>
           </div>
-          <div class="stats metrics">
-            <div class="stat" v-for="m in metricCards" :key="m.label">
+          </details><div class="stats metrics home-metrics">
+            <div class="stat" v-for="m in metricCards.slice(0, 3)" :key="m.label">
               <div class="stathead"><span class="statlabel">{{ m.label }}</span><span class="statglyph">✧</span></div>
               <div class="statamount">{{ m.value }}</div><div class="statfoot">{{ m.foot }}</div>
             </div>
           </div>
           <div class="content">
             <div>
-              <section class="panel"><div class="paneltitle"><div><h2>支出分类排行</h2><span class="subinfo">一级分类自动汇总二级分类</span></div></div>
-                <div class="ranklist"><div v-for="c in catRanking.slice(0, 8)" :key="c.category_id" class="rankrow">
-                  <span>{{ c.name }}</span><b>{{ formatMinor(c.expense_minor) }}</b></div>
-                  <p v-if="!catRanking.length" class="empty">本周期暂无支出</p></div>
+              <section class="panel home-trend"><div class="paneltitle"><div><h2>收支小趋势</h2><span class="subinfo">近六个月的生活节奏</span></div><span class="switch">近 6 个月</span></div>
+                <div class="graph"><div class="barcol" v-for="row in homeTrend" :key="row.month"><div class="barpair"><div v-for="kind in ['income', 'expense']" :key="kind" class="bar" :class="kind" :style="{ height: `${Math.abs(row[`${kind}_minor`]) / trendMax * 100}%`, minHeight: row[`${kind}_minor`] ? '7px' : '0' }" :title="`${row.month} ${kind === 'income' ? '收入' : '支出'} ${formatMinor(row[`${kind}_minor`])}`"></div></div><span class="month">{{ row.month }}</span></div></div>
+                <div class="legend"><span><i class="key" style="background:var(--bar)"></i>收入</span><span><i class="key" style="background:var(--primary)"></i>支出</span></div>
               </section>
               <section class="panel transactions"><div class="paneltitle"><div><h2>最近流水</h2></div>
                 <button v-if="canWrite" class="switch" @click="quickEntry()">去记账 →</button></div>
@@ -1657,6 +1671,9 @@ const metricCards = computed(() => {
               </section>
             </div>
             <div>
+              <section class="panel home-budget"><div class="paneltitle"><div><h2>本月预算</h2><span class="subinfo">慢慢花，也能开心存</span></div><span>🌷</span></div><p class="budgetnote">预算功能未开发</p><div class="note-box">♡ 小家碎碎念<br />记录不是限制生活，而是让我们更自由地选择生活。</div></section>
+              <div class="legend-note">° ˖ ✧ 用轻轻柔柔的方式记下每一天 ✧ ˖ °</div>
+              <details class="home-details"><summary>更多家庭财务概览</summary><div class="supplementary-metrics"><div class="stat" v-for="m in metricCards.slice(3)" :key="m.label"><div class="statlabel">{{ m.label }}</div><div class="statamount">{{ m.value }}</div><div class="statfoot">{{ m.foot }}</div></div></div>
               <section class="panel"><div class="paneltitle"><div><h2>家庭资产构成</h2><span class="subinfo">投资按买入成本统计，手工估值另行显示</span></div></div>
                 <div class="ranklist" v-if="netWorth">
                   <div class="rankrow"><span>现金及存款</span><b>{{ formatMinor(netWorth.assets?.cash_minor) }}</b></div>
@@ -1693,6 +1710,7 @@ const metricCards = computed(() => {
                   <p v-if="!dueItems.some(d => d.status === 'pending')" class="empty">暂无待支付事项</p></div>
                 <div class="note-box">♡ 三套口径已分离：收支 / 现金流 / 负债到期<br />投资估值为手工录入，非实时行情；收益率非年化。</div>
               </section>
+              </details>
             </div>
           </div>
         </template>
@@ -2756,4 +2774,9 @@ input, select { font-size: 16px; min-height: 44px; }
 details.panel summary { cursor: pointer; font-size: 17px; font-weight: 750; }
 details.panel form { margin-top: 14px; }
 .website .rankrow > *, .website .txbody { overflow-wrap: anywhere; }
+</style>
+
+<style scoped>
+.home-metrics.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.home-metrics .statamount{font-size:27px}.home-period{margin-bottom:18px;color:var(--muted);font-size:12px}.home-details{margin-top:28px}.home-details>summary{cursor:pointer;color:var(--muted);font-size:12px}.home-budget{margin-top:17px}.supplementary-metrics{display:grid;gap:12px;margin-top:18px}.home-trend{min-height:322px}
+@media(max-width:520px){.home-metrics.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.home-metrics .stat:nth-child(3){grid-column:span 2}.home-budget{margin-top:0}}
 </style>

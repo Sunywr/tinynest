@@ -138,6 +138,7 @@ test('L10 会话过期不闪现私人余额，回到公开页并给出中性提�
     status: 401, contentType: 'application/json',
     body: JSON.stringify({ error: { code: 'unauthorized', message: '请先登录' } }),
   }))
+  await page.locator('.home-period > summary').click()
   await page.getByRole('button', { name: '应用周期' }).click()
   await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
   await expect(page.getByText('登录状态已过期，请重新进入')).toBeVisible()
