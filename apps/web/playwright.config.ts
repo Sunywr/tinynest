@@ -26,6 +26,7 @@ export default defineConfig({
   fullyParallel: false,
   reporter: [['list']],
   use: {
+    browserName: process.env.TINYNEST_E2E_WEBKIT === '1' ? 'webkit' : 'chromium',
     baseURL: 'http://127.0.0.1:5173',
     timezoneId: 'Asia/Shanghai',
     channel: process.env.TINYNEST_E2E_BROWSER_CHANNEL || undefined,

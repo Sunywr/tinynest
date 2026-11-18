@@ -196,6 +196,7 @@ test('09 原消费退款 300 回信用工具', async ({ page }) => {
   await page.getByLabel('到账账户 / 信用工具').selectOption({ label: 'E2E 信用卡' })
   await page.getByRole('button', { name: '提交退款' }).click()
   await expect(page.getByText('退款已冲减原支出')).toBeVisible()
+  await expect(page.locator('.ledger-transaction').filter({ hasText: '¥1,000.00' }).locator('.refund-badge')).toHaveText('部分退款 ¥300.00')
   await page.getByRole('button', { name: '信用账单' }).click()
   await expect(page.locator('.rankrow', { hasText: 'E2E 信用卡' }).first()).toContainText('已用 ¥100.00 · 可用 ¥19,900.00')
 })
@@ -397,7 +398,7 @@ test('21 首页三套口径与信用总览闭环（自定义跨月区间）', as
   await expect(page.locator('.rankrow', { hasText: 'E2E 工资卡' })).toContainText('¥9,720.00')
 })
 
-test('桌面端主内容滚动时侧栏固定，短屏可单独滚动导航', async ({ page }) => {
+test('桌面端主内容滚动时侧栏固定，短屏导航不滚动且菜单可见', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 500 })
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
@@ -422,7 +423,8 @@ test('桌面端主内容滚动时侧栏固定，短屏可单独滚动导航', as
   expect(await sidebar.evaluate(el => {
     el.scrollTop = el.scrollHeight
     return el.scrollTop
-  })).toBeGreaterThan(0)
+  })).toBe(0)
+  await expect(sidebar.getByRole('button', { name: '设置' })).toBeInViewport()
   expect(await page.evaluate(() => window.scrollY)).toBe(offset)
 })
 
@@ -1475,4 +1477,50 @@ test('早期投资成交可撤销，其后成交成本与收益自动重算', as
   await page.getByRole('button', { name: '返回列表' }).click()
   await expect(holding).toContainText('成本 ¥0.00')
   await expect(holding).toContainText('已实现 ¥100.00')
+})
+
+
+test('验收反馈：流水显示分类备注与退款进度', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  const rows = page.locator('.ledger-transaction')
+  await expect(rows.first()).toBeVisible()
+  const response = await page.request.get('/api/v1/transactions?limit=200')
+  const body = await response.json()
+  for (const tx of body.items.filter((t: any) => t.type === 'expense' && t.status === 'posted')) {
+    const row = rows.filter({ hasText: tx.category_names || '支出' }).filter({ hasText: tx.occurred_on })
+    expect(tx.refunded_minor).toBeGreaterThanOrEqual(0)
+    await expect(row.first().locator('.txname')).toBeVisible()
+  }
+  await expect(page.locator('.refund-badge').first()).toBeVisible()
+  await page.screenshot({ path: test.info().outputPath('ledger-desktop.png'), animations: 'disabled' })
+})
+
+test('验收反馈：窄屏各菜单和表单控件均在容器内', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await ensureLogin(page)
+  for (const menu of ['首页概览', '记账流水', '家庭账户', '信用账单', '分期与负债', '投资', '设置']) {
+    await page.locator('nav.nav').getByRole('button', { name: menu }).click()
+    const check = async () => {
+      const overflow = await page.locator('input:visible, select:visible, textarea:visible, .date-field:visible').evaluateAll(els => els.filter(el => {
+        const r = el.getBoundingClientRect(), parent = el.parentElement!.getBoundingClientRect()
+        return r.right > Math.min(window.innerWidth, parent.right) + 1 || r.left < -1
+      }).map(el => el.outerHTML.slice(0, 100)))
+      expect(overflow, menu).toEqual([])
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+    }
+    await check()
+    const buttons = await page.locator('.actions-bar button').allTextContents()
+    for (const name of buttons) {
+      const button = page.locator('.actions-bar button').filter({ hasText: name }).first()
+      if (!await button.isVisible()) continue
+      await button.click()
+      await check()
+      const back = page.getByRole('button', { name: '返回列表', exact: true })
+      if (await back.isVisible()) await back.click()
+    }
+  }
+  await page.locator('nav.nav').getByRole('button', { name: '记账流水' }).click()
+  await page.locator('.ledger-transaction').first().waitFor()
+  await page.screenshot({ path: test.info().outputPath('ledger-mobile.png'), animations: 'disabled', fullPage: true })
 })

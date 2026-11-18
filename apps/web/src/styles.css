@@ -116,7 +116,21 @@ body.dialog-open{overflow:hidden;}
     inset-block-start: var(--stage-block-padding);
     align-self: start;
     block-size: calc(100dvh - 2 * var(--stage-block-padding) - 2px);
-    overflow-y: auto;
+    overflow: clip;
     overscroll-behavior-y: contain;
   }
+}
+
+.formgrid > *, form label, input, select, textarea { min-width:0; max-width:100%; }
+.paneltitle, .actions-bar, .rowacts { flex-wrap:wrap; }
+.txbody, .rankrow > span { overflow-wrap:anywhere; }
+@media (min-width:841px) and (max-height:800px) {
+ .stage:not(.mobile-stage) .website > .sidebar { padding:14px 12px; gap:12px; }
+ .sidebar .nav { gap:3px; }
+ .sidebar .nav button { padding:9px 12px; }
+ .sidebar .sidebottom { display:none; }
+}
+@media (min-width:841px) and (max-height:480px) {
+ .sidebar .brand, .sidebar .navlabel { display:none; }
+ .sidebar .nav button { padding:5px 12px; }
 }

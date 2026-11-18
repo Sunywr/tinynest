@@ -265,7 +265,9 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 	query := `
 		SELECT id,type,amount_minor,occurred_on,account_id,to_account_id,credit_instrument_id,
-		       merchant,note,status,entry_id
+		       merchant,note,status,entry_id,
+		       (SELECT COALESCE(GROUP_CONCAT(DISTINCT c.name),'') FROM transaction_splits s JOIN categories c ON c.id=s.category_id AND c.household_id=transactions.household_id WHERE s.transaction_id=transactions.id),
+		       (SELECT COALESCE(SUM(r.amount_minor),0) FROM refunds r JOIN journal_entries e ON e.id=r.entry_id AND e.household_id=r.household_id WHERE r.household_id=transactions.household_id AND r.transaction_id=transactions.id AND e.status='posted')
 		FROM transactions WHERE household_id=?
 		  AND (?='' OR occurred_on>=?) AND (?='' OR occurred_on<=?) AND (?='' OR type=?)` + visibleTransaction
 	args := []any{p.HouseholdID, from, from, to, to, txType, txType}
@@ -294,10 +296,10 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, typ, occurred, status, entryID string
-		var amount int64
+		var id, typ, occurred, status, entryID, categoryNames string
+		var amount, refunded int64
 		var acc, toAcc, ci, merchant, note *string
-		if err := rows.Scan(&id, &typ, &amount, &occurred, &acc, &toAcc, &ci, &merchant, &note, &status, &entryID); err != nil {
+		if err := rows.Scan(&id, &typ, &amount, &occurred, &acc, &toAcc, &ci, &merchant, &note, &status, &entryID, &categoryNames, &refunded); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -305,6 +307,7 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 			"id": id, "type": typ, "amount_minor": amount, "occurred_on": occurred,
 			"account_id": acc, "to_account_id": toAcc, "credit_instrument_id": ci,
 			"merchant": merchant, "note": note, "status": status, "entry_id": entryID,
+			"category_names": categoryNames, "refunded_minor": refunded,
 		})
 	}
 	if err := rows.Err(); err != nil {

@@ -174,6 +174,9 @@ function moveDay(event: KeyboardEvent) {
 <style scoped>
 .date-field { position: relative; display: block; min-width: 0; }
 .date-field input {
+  max-width: 100%;
+  appearance: none;
+  box-sizing: border-box;
   color: var(--text);
   background: var(--card);
   border: 1px solid var(--border);
@@ -186,6 +189,7 @@ function moveDay(event: KeyboardEvent) {
   font-size: 16px;
 }
 .date-field input:focus-visible { outline: 3px solid var(--primary); outline-offset: 1px; }
+.date-field input::-webkit-date-and-time-value { min-width: 0; text-align: left; }
 .date-field input::-webkit-calendar-picker-indicator { display: none; }
 .calendar-trigger {
   position: absolute;

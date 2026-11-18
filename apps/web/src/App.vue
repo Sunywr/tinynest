@@ -1721,8 +1721,9 @@ const metricCards = computed(() => {
             </form>
             <div class="translist"><div class="transaction ledger-transaction" v-for="t in ledgerTransactions" :key="t.id">
               <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
-              <div class="txbody"><div class="txname">{{ t.merchant || t.note || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出') }}</div>
-                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已更正' : '已入账' }}</div></div>
+              <div class="txbody"><div class="txname">{{ t.category_names || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出') }}</div>
+                <div v-if="t.merchant || t.note" class="txnote">{{ [t.merchant, t.note].filter(Boolean).join(' · ') }}</div>
+                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已更正' : '已入账' }} <span v-if="t.type === 'expense' && t.status === 'posted'" class="refund-badge">{{ t.refunded_minor >= t.amount_minor ? '已全额退款' : t.refunded_minor > 0 ? '部分退款 ' + formatMinor(t.refunded_minor) : '未退款' }}</span></div></div>
               <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
               <div class="rowacts" v-if="canWrite">
                 <button v-if="canCopyTransaction(t)" type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, false)">复制</button>
@@ -2489,6 +2490,9 @@ const metricCards = computed(() => {
 </template>
 
 <style scoped>
+.txnote { font-size:12px; color:var(--muted); margin-top:5px; overflow-wrap:anywhere; }
+.ledger-transaction .txname { font-size:16px; }
+.refund-badge { display:inline-block; margin:4px; padding:3px 7px; border-radius:7px; color:var(--primary-deep); background:var(--soft); }
 .authcard { max-width: 420px; margin: 6vh auto; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 34px; box-shadow: var(--shadow); }
 .authlogo { width: 74px; height: 74px; display: block; margin: 0 auto 12px; }
 .authcard h1 { text-align: center; font-size: 24px; margin: 0 0 6px; }
