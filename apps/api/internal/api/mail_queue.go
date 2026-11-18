@@ -79,6 +79,11 @@ func (a *API) handleAnnouncements(w http.ResponseWriter, r *http.Request) {
 		if count+queued+used > c.DailyLimit || count+queued+ann > c.AnnouncementLimit {
 			return errors.New("quota")
 		}
+		for _, recipient := range list {
+			if err := a.checkRecipientBudget(r.Context(), tx, recipient.email); err != nil {
+				return err
+			}
+		}
 		if in.Preview {
 			return nil
 		}
@@ -93,7 +98,11 @@ func (a *API) handleAnnouncements(w http.ResponseWriter, r *http.Request) {
 		return audit(r.Context(), tx, p, "send_announcement", "mail_queue", "", `{}`)
 	})
 	if e != nil {
-		writeErr(w, 409, "announcement_rejected", "额度不足或收件人已变化，请重新预览")
+		if errors.Is(e, errRecipientDailyLimit) {
+			writeErr(w, 429, "email_daily_limit", "部分收件邮箱已达每日3封上限，请明天再试")
+		} else {
+			writeErr(w, 409, "announcement_rejected", "额度不足或收件人已变化，请重新预览")
+		}
 		return
 	}
 	writeJSON(w, 200, map[string]any{"recipient_count": count, "preview": in.Preview, "status": "queued"})
@@ -150,10 +159,6 @@ func (a *API) processMail(ctx context.Context) {
 	if n != 1 {
 		return
 	}
-	if e = a.reserveMail(ctx, kind, c); e != nil {
-		_, _ = a.DB.ExecContext(ctx, `UPDATE mail_queue SET status='queued',due_at=? WHERE id=?`, a.now().UTC().Add(time.Minute).Format(time.RFC3339), id)
-		return
-	}
 	plain, e := a.mailCrypt(payload, true)
 	var msg []string
 	if e == nil {
@@ -172,6 +177,15 @@ func (a *API) processMail(ctx context.Context) {
 		}
 	}
 	if e == nil && len(msg) >= 2 {
+		if e = a.reserveMail(ctx, kind, c, to); e != nil {
+			if errors.Is(e, errRecipientDailyLimit) {
+				_, _ = a.DB.ExecContext(ctx, `UPDATE mail_queue SET status='daily_limit',payload='' WHERE id=?`, id)
+				return
+			}
+			_, _ = a.DB.ExecContext(ctx, `UPDATE mail_queue SET status='queued',due_at=? WHERE id=?`, a.now().UTC().Add(time.Minute).Format(time.RFC3339), id)
+			return
+		}
+
 		e = a.sendMail(ctx, c, password, to, msg[0], msg[1])
 	} else {
 		e = errors.New("mail payload invalid")

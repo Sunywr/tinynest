@@ -101,6 +101,11 @@ GRANT ALL ON tinynest_admin_user_profile.* TO 'tinynest_drill'@'localhost';
 GRANT ALL ON tinynest_restore_transactions.* TO 'tinynest_drill'@'localhost';
 SQL
 
+stage='provision recipient quota fixtures'
+for suffix in shared concurrent challenge delivery; do
+  mysql_root mysql --protocol=socket --user=root -e "CREATE DATABASE tinynest_recipient_${suffix}; GRANT ALL ON tinynest_recipient_${suffix}.* TO 'tinynest_drill'@'localhost';"
+done
+
 stage='check the host socket'
 test -S "$work/socket/mysqld.sock"
 run_ledger_test() {
@@ -138,6 +143,10 @@ run_ledger_test tinynest_user_profile TestUserSelfServiceProfileAndPassword
 run_ledger_test tinynest_viewer_profile TestViewerSelfServiceAllowed
 run_ledger_test tinynest_admin_user_profile TestAdminManagesUserProfilesAndDeletion
 run_ledger_test tinynest_restore_transactions TestRestoreStandaloneTransactionReversals
+run_ledger_test tinynest_recipient_shared TestRecipientDailyLimitSharedAndReset
+run_ledger_test tinynest_recipient_concurrent TestRecipientDailyLimitConcurrentAndRollback
+run_ledger_test tinynest_recipient_challenge TestRecipientLimitRejectsChallengeBeforeQueue
+run_ledger_test tinynest_recipient_delivery TestRecipientLimitStopsQueuedDelivery
 
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)

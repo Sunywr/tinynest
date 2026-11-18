@@ -14,7 +14,7 @@ const post=(p:string,b:any)=>request(p,{method:'POST',body:JSON.stringify(b)})
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';message.value='';try{await fn()}catch(e){error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false}}
 async function load(){identity.value=await request('/auth/me/mail');if(identity.value.site_admin)config.value=await request('/site/mail');if(props.role==='admin')statuses.value=(await request('/household/mail/announcements')).items}
 onMounted(()=>run(load))
-async function challenge(purpose:string){await run(async()=>{if(Date.now()<(cooldown[purpose]||0))throw Error('请在60秒后重发');const r=await post('/auth/me/mail/challenge',{email:binding.email,purpose,current_password:binding.current_password});proofs[purpose]=r.challenge_id;cooldown[purpose]=Date.now()+60000;message.value='验证码已排队发送，10分钟内有效'})}
+async function challenge(purpose:string){await run(async()=>{if(Date.now()<(cooldown[purpose]||0))throw Error('请在60秒后重发');const r=await post('/auth/me/mail/challenge',{email:binding.email,purpose,current_password:binding.current_password});proofs[purpose]=r.challenge_id;cooldown[purpose]=Date.now()+60000;message.value='验证码已排队发送，10分钟内有效；同一邮箱每天最多3封邮件。'})}
 function proof(purpose:string,code:string){return{challenge_id:proofs[purpose]||'',code}}
 async function bind(){await run(async()=>{await post('/auth/me/mail/confirm',{email:binding.email,current_password:binding.current_password,proof:proof('bind',binding.code),old_proof:proof('old_email',binding.old_code)});binding.code='';binding.old_code='';binding.current_password='';await load();emit('identityUpdated');message.value='邮箱已验证'})}
 async function password(){await run(async()=>{if(binding.new_password!==binding.confirm_password)throw Error('两次密码不一致');await post('/auth/me/password',{current_password:binding.current_password,new_password:binding.new_password,proof:proof('password',binding.code)});binding.new_password='';binding.current_password='';binding.code='';window.dispatchEvent(new CustomEvent('tinynest:session-expired'))})}
@@ -27,6 +27,7 @@ async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=a
 <p v-if="error" class="err" role="alert">{{error}}</p><p v-if="message" class="mail-notice" role="status">{{message}}</p>
 <template v-if="identity">
 <p>{{identity.verified ? `已验证：${identity.email}` : '尚未验证邮箱。记账不受影响，请验证后再修改或找回密码。'}}</p>
+<p class="mail-limit-hint">同一邮箱每天最多3封邮件，各用途共用额度；上海时间零点重置。验证码10分钟有效，60秒后可重发。</p>
 <p v-if="!identity.mail_available">系统邮件尚未启用，请联系站点管理员。</p>
 <form @submit.prevent="bind"><h3>绑定或修改邮箱</h3>
 <label>当前登录密码<input v-model="binding.current_password" type="password" autocomplete="current-password" required maxlength="256"></label>
@@ -35,7 +36,7 @@ async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=a
 <label>新邮箱验证码<input v-model="binding.code" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label>
 <template v-if="identity.verified"><button type="button" :disabled="busy||!identity.mail_available" @click="challenge('old_email')">发送原邮箱验证码</button><label>原邮箱验证码<input v-model="binding.old_code" inputmode="numeric" maxlength="6" required></label></template>
 <button class="btn-primary" :disabled="busy||!identity.mail_available">确认邮箱</button></form>
-<form v-if="identity.verified" @submit.prevent="password"><h3>修改密码</h3><p>修改后所有设备需要重新登录。</p>
+<form v-if="identity.verified" @submit.prevent="password"><h3>修改密码</h3><p>① 验证当前密码 → ② 获取已验证邮箱的验证码 → ③ 设置并确认新密码。修改后所有设备需要重新登录。</p>
 <label>当前登录密码<input v-model="binding.current_password" type="password" required autocomplete="current-password"></label>
 <button type="button" :disabled="busy" @click="challenge('password')">发送密码修改验证码</button>
 <label>验证码<input v-model="binding.code" inputmode="numeric" maxlength="6" required></label>
@@ -66,7 +67,7 @@ async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=a
 <label>正文<textarea v-model="announcement.body" required maxlength="20000" rows="5" @input="preview=null"></textarea></label>
 <button :disabled="busy">预览收件人数与额度</button>
 <div v-if="preview!==null"><h3>{{announcement.title}}</h3><p class="mail-preview">{{announcement.body}}</p><p>将发送给 {{preview}} 位成员。</p><button type="button" class="btn-primary" :disabled="busy||preview===0" @click="sendAnnouncement(false)">确认发送公告</button></div>
-<p v-for="s in statuses" :key="s.status">{{({'queued':'排队中','sending':'发送中','smtp_accepted':'SMTP已接受','failed':'失败','expired':'已过期','cancelled':'已取消'} as Record<string,string>)[s.status]||s.status}}：{{s.count}}</p>
+<p v-for="s in statuses" :key="s.status">{{({'queued':'排队中','sending':'发送中','smtp_accepted':'SMTP已接受','failed':'失败','expired':'已过期','cancelled':'已取消','daily_limit':'已达邮箱每日上限'} as Record<string,string>)[s.status]||s.status}}：{{s.count}}</p>
 </form></section>
 </template>
 <style scoped>

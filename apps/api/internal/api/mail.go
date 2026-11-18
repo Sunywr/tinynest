@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 	"tinynest/api/internal/auth"
+	"tinynest/api/internal/db"
 )
 
 type MailConfig struct {
@@ -160,8 +161,12 @@ func (a *API) handleMailConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 503, "mail_unavailable", "邮件加密密钥未配置")
 		return
 	}
-	if e = a.reserveMail(r.Context(), "test", in.Config); e != nil {
-		writeErr(w, 429, "mail_quota", "当日发信额度不足")
+	if e = a.reserveMail(r.Context(), "test", in.Config, in.TestRecipient); e != nil {
+		if errors.Is(e, errRecipientDailyLimit) {
+			writeErr(w, 429, "email_daily_limit", errRecipientDailyLimit.Error())
+		} else {
+			writeErr(w, 429, "mail_quota", "当日发信额度不足")
+		}
 		return
 	}
 	if e = a.sendMail(r.Context(), in.Config, password, in.TestRecipient, "TinyNest 邮件配置测试", "这是一封系统邮件配置测试邮件。"); e != nil {
@@ -253,7 +258,12 @@ func (a *API) sendMail(ctx context.Context, c MailConfig, password, to, subject,
 	}
 	return nil
 }
-func (a *API) reserveMail(ctx context.Context, kind string, c MailConfig) error {
+
+var errRecipientDailyLimit = errors.New("每个邮箱每天最多接收3封邮件，请明天再试")
+
+const recipientDailyLimit = 3
+
+func (a *API) reserveMail(ctx context.Context, kind string, c MailConfig, recipients ...string) error {
 	return a.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		day := a.businessDate()
 		q := `INSERT INTO mail_daily_usage(day) VALUES(?) ON CONFLICT(day) DO NOTHING`
@@ -262,6 +272,28 @@ func (a *API) reserveMail(ctx context.Context, kind string, c MailConfig) error 
 		}
 		if _, e := tx.ExecContext(ctx, q, day); e != nil {
 			return e
+		}
+
+		if len(recipients) > 0 {
+			email := normalizeEmail(recipients[0])
+			q := `INSERT INTO mail_recipient_daily_usage(day,email) VALUES(?,?) ON CONFLICT(day,email) DO NOTHING`
+			if a.DB.IsMySQL() {
+				q = `INSERT IGNORE INTO mail_recipient_daily_usage(day,email) VALUES(?,?)`
+			}
+			if _, err := tx.ExecContext(ctx, q, day, email); err != nil {
+				return err
+			}
+			result, err := tx.ExecContext(ctx, `UPDATE mail_recipient_daily_usage SET total=total+1 WHERE day=? AND email=? AND total<?`, day, email, recipientDailyLimit)
+			if err != nil {
+				return err
+			}
+			n, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return errRecipientDailyLimit
+			}
 		}
 		ann := 0
 		if kind == "announcement" {
@@ -297,4 +329,20 @@ func (e *mailDeliveryError) Error() string { return "SMTP投递失败" }
 func safeSMTPError(err error) error {
 	var protocol *textproto.Error
 	return &mailDeliveryError{permanent: errors.As(err, &protocol) && protocol.Code >= 500 && protocol.Code <= 599}
+}
+
+// Includes outstanding messages so successful challenge responses do not promise
+// mail that has no recipient budget. The sending transaction remains authoritative.
+func (a *API) checkRecipientBudget(ctx context.Context, q db.Queryer, email string) error {
+	var used, queued int
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(SUM(total),0) FROM mail_recipient_daily_usage WHERE day=? AND email=?`, a.businessDate(), normalizeEmail(email)).Scan(&used); err != nil {
+		return err
+	}
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail_queue WHERE recipient=? AND status IN ('queued','sending') AND expires_at>?`, normalizeEmail(email), a.nowUTC()).Scan(&queued); err != nil {
+		return err
+	}
+	if used+queued >= recipientDailyLimit {
+		return errRecipientDailyLimit
+	}
+	return nil
 }
