@@ -1535,6 +1535,8 @@ test('83 首页恢复 README 三卡与六个月布局', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '收支小趋势' })).toBeVisible()
   await expect(page.locator('.home-trend .barcol')).toHaveCount(6)
   await expect(page.getByText('预算功能未开发', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '信用总览' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '未来待还' })).toBeVisible()
   await expect(page.locator('.home-details')).not.toHaveAttribute('open', '')
   await page.screenshot({ path: 'test-results/home-restored-desktop.png', fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })

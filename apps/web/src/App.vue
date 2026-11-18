@@ -1673,6 +1673,22 @@ const metricCards = computed(() => {
             <div>
               <section class="panel home-budget"><div class="paneltitle"><div><h2>本月预算</h2><span class="subinfo">慢慢花，也能开心存</span></div><span>🌷</span></div><p class="budgetnote">预算功能未开发</p><div class="note-box">♡ 小家碎碎念<br />记录不是限制生活，而是让我们更自由地选择生活。</div></section>
               <div class="legend-note">° ˖ ✧ 用轻轻柔柔的方式记下每一天 ✧ ˖ °</div>
+              <section class="panel"><div class="paneltitle"><div><h2>信用总览</h2><span class="subinfo">按账单到期日 · 额度为实时负债余额</span></div>
+                <button class="switch" @click="go('credit')">管理 →</button></div>
+                <div class="ranklist" v-if="creditDash">
+                  <div class="rankrow"><span>本期应还</span><b>{{ formatMinor(creditDash.due_minor) }}</b></div>
+                  <div class="rankrow"><span>本期已还</span><b>{{ formatMinor(creditDash.paid_minor) }}</b></div>
+                  <div class="rankrow"><span>逾期未还</span><b :class="{ overdue: (creditDash.overdue_minor || 0) > 0 }">{{ formatMinor(creditDash.overdue_minor) }}</b></div>
+                  <div class="rankrow"><span>信用已用 / 可用额度</span><b>{{ formatMinor(creditDash.credit?.used_minor) }} / {{ creditDash.credit?.limit_minor == null ? '未配置' : formatMinor(creditDash.credit.available_minor) }}</b></div>
+                </div>
+                <p v-if="!creditDash" class="empty">暂无信用数据</p>
+              </section>
+              <section class="panel"><div class="paneltitle"><div><h2>未来待还</h2><span class="subinfo">仅待支付，不会自动入账</span></div></div>
+                <div class="ranklist"><div v-for="d in dueItems.filter(d => d.status === 'pending').slice(0, 6)" :key="d.id" class="rankrow">
+                  <span>{{ d.due_on }} · {{ d.source_label || recordLabel(d.source_type) }}</span><b>{{ formatMinor(d.amount_minor) }}</b></div>
+                  <p v-if="!dueItems.some(d => d.status === 'pending')" class="empty">暂无待支付事项</p></div>
+                <div class="note-box">♡ 三套口径已分离：收支 / 现金流 / 负债到期<br />投资估值为手工录入，非实时行情；收益率非年化。</div>
+              </section>
               <details class="home-details"><summary>更多家庭财务概览</summary><div class="supplementary-metrics"><div class="stat" v-for="m in metricCards.slice(3)" :key="m.label"><div class="statlabel">{{ m.label }}</div><div class="statamount">{{ m.value }}</div><div class="statfoot">{{ m.foot }}</div></div></div>
               <section class="panel"><div class="paneltitle"><div><h2>家庭资产构成</h2><span class="subinfo">投资按买入成本统计，手工估值另行显示</span></div></div>
                 <div class="ranklist" v-if="netWorth">
@@ -1693,22 +1709,6 @@ const metricCards = computed(() => {
               <section class="panel"><div class="paneltitle"><div><h2>各账户余额</h2></div></div>
                 <div class="ranklist"><div v-for="a in (summary?.accounts || [])" :key="a.id" class="rankrow">
                   <span><AccountIcon :name="a.name" :subtype="accounts.find(account => account.id === a.id)?.subtype" :kind="a.kind" />{{ a.name }}</span><b>{{ formatMinor(a.balance_minor) }}</b></div></div>
-              </section>
-              <section class="panel"><div class="paneltitle"><div><h2>信用总览</h2><span class="subinfo">按账单到期日 · 额度为实时负债余额</span></div>
-                <button class="switch" @click="go('credit')">管理 →</button></div>
-                <div class="ranklist" v-if="creditDash">
-                  <div class="rankrow"><span>本期应还</span><b>{{ formatMinor(creditDash.due_minor) }}</b></div>
-                  <div class="rankrow"><span>本期已还</span><b>{{ formatMinor(creditDash.paid_minor) }}</b></div>
-                  <div class="rankrow"><span>逾期未还</span><b :class="{ overdue: (creditDash.overdue_minor || 0) > 0 }">{{ formatMinor(creditDash.overdue_minor) }}</b></div>
-                  <div class="rankrow"><span>信用已用 / 可用额度</span><b>{{ formatMinor(creditDash.credit?.used_minor) }} / {{ creditDash.credit?.limit_minor == null ? '未配置' : formatMinor(creditDash.credit.available_minor) }}</b></div>
-                </div>
-                <p v-if="!creditDash" class="empty">暂无信用数据</p>
-              </section>
-              <section class="panel"><div class="paneltitle"><div><h2>未来待还</h2><span class="subinfo">仅待支付，不会自动入账</span></div></div>
-                <div class="ranklist"><div v-for="d in dueItems.filter(d => d.status === 'pending').slice(0, 6)" :key="d.id" class="rankrow">
-                  <span>{{ d.due_on }} · {{ d.source_label || recordLabel(d.source_type) }}</span><b>{{ formatMinor(d.amount_minor) }}</b></div>
-                  <p v-if="!dueItems.some(d => d.status === 'pending')" class="empty">暂无待支付事项</p></div>
-                <div class="note-box">♡ 三套口径已分离：收支 / 现金流 / 负债到期<br />投资估值为手工录入，非实时行情；收益率非年化。</div>
               </section>
               </details>
             </div>
