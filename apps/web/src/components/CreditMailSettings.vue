@@ -270,28 +270,31 @@ function saveBinding() {
         </div>
         <details v-for="(statement, index) in preview" :key="index">
           <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
-          <ul v-if="statement.transactions">
-            <li v-for="(row, rowIndex) in statement.transactions" :key="rowIndex">
-              <time>{{ row.TransactionDate }}</time>
-              <span>{{ row.Description }}</span>
-              <b>{{ amountFormat.format(row.Amount / 100) }}</b>
-              <fieldset v-if="syncOnly && statement.review?.[rowIndex]" :disabled="busy" class="review-row">
+          <table v-if="statement.transactions" class="statement-table" role="table" aria-label="账单交易明细">
+            <thead><tr><th scope="col">交易日</th><th scope="col">交易说明</th><th scope="col" class="statement-amount">金额</th><th v-if="syncOnly" scope="col">分类与操作</th></tr></thead>
+            <tbody>
+            <tr v-for="(row, rowIndex) in statement.transactions" :key="rowIndex">
+              <td class="statement-date"><time :datetime="row.TransactionDate">{{ row.TransactionDate }}</time></td>
+              <td class="statement-description">{{ row.Description }}</td>
+              <td class="statement-amount"><b>{{ amountFormat.format(row.Amount / 100) }}</b></td>
+              <td v-if="syncOnly" class="statement-review">
+              <fieldset v-if="statement.review?.[rowIndex]" :disabled="busy" class="review-row">
                 <template v-for="review in [statement.review[rowIndex]]" :key="review.key">
                   <small v-if="row.Amount <= 0">还款或退款，待核对原流水或付款账户</small>
                   <small v-else-if="review.imported || completed[review.key]">这笔明细此前已处理</small>
                   <div v-else class="review-actions">
-                    <label>支出分类
-                      <select :value="selectedCategory[review.key] ?? review.suggested_category ?? ''"
+                    <label>
+                      <select aria-label="支出分类" :value="selectedCategory[review.key] ?? review.suggested_category ?? ''"
                         @change="selectedCategory[review.key] = ($event.target as HTMLSelectElement).value">
-                        <option value="">请选择</option>
+                        <option value="">选择支出分类</option>
                         <option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
                       </select>
                     </label>
-                    <small v-if="review.category_source && selectedCategory[review.key] === undefined">
-                      {{ review.category_source === 'history' ? '沿用同商户历史分类' : '根据交易摘要建议' }}
-                    </small>
                     <button type="button" class="ghost" :disabled="!(selectedCategory[review.key] ?? review.suggested_category)"
                       @click="createFromPreview(row, review)">{{ review.matches?.length ? '确认另建流水' : '确认创建流水' }}</button>
+                    <small v-if="review.category_source && selectedCategory[review.key] === undefined" class="classification-source">
+                      {{ review.category_source === 'history' ? '沿用同商户分类' : '按交易摘要识别' }}
+                    </small>
                   </div>
                   <div v-for="match in review.matches" :key="match.id" class="review-actions">
                     <span>同日同金额流水 · {{ match.description || '无商户备注' }}</span>
@@ -304,8 +307,10 @@ function saveBinding() {
                   </div>
                 </template>
               </fieldset>
-            </li>
-          </ul>
+              </td>
+            </tr>
+            </tbody>
+          </table>
         </details>
       </section>
     </template>
@@ -320,9 +325,31 @@ form + form { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar .primary { width: auto; margin-top: 0; }
 .preview-action { margin-top: 10px; }
 .preview-statements details { padding: 10px 0; border-top: 1px solid var(--border); }
-.preview-statements summary { cursor: pointer; }
-.preview-statements ul { padding: 0; list-style: none; }
-.preview-statements li { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; overflow-wrap: anywhere; }
-.review-row { flex-basis: 100%; }
+.preview-statements summary { cursor: pointer; font-weight: 700; }
+.statement-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+.statement-table th, .statement-table td { border-bottom: 1px solid var(--border); padding: 8px; text-align: left; vertical-align: top; }
+.statement-table th { color: var(--muted); background: var(--soft); }
+.statement-date, .statement-amount { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.statement-table .statement-amount { text-align: right; }
+.statement-description { overflow-wrap: anywhere; }
+.statement-review { width: 34%; }
+.review-row { margin: 0; }
 .review-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 8px; }
+.review-row .review-actions:first-child { margin-top: 0; }
+.review-row label { flex: 1 1 128px; min-width: 0; }
+.classification-source { flex-basis: 100%; color: var(--muted); }
+@media (max-width: 700px) {
+  .preview-statements summary { min-height: 48px; font-size: 17px; line-height: 48px; }
+  .preview-statements summary::marker { font-size: 20px; }
+  .statement-table { display: block; font-size: 16px; }
+  .statement-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .statement-table tbody { display: block; }
+  .statement-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .statement-table td { border: 0; padding: 0; }
+  .statement-date { grid-area: 1 / 1; }
+  .statement-amount { grid-area: 1 / 2; font-size: 17px; }
+  .statement-description, .statement-review { grid-column: 1 / -1; width: auto; }
+  .credit-mail-settings .review-actions button,
+  .credit-mail-settings .review-row select { min-height: 48px; font-size: 16px; }
+}
 </style>

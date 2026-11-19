@@ -10,6 +10,10 @@ func TestStatementCategorySuggestion(t *testing.T) {
 	active := map[string][]string{"饮食": {"food"}, "交通": {"transport"}}
 	for _, tc := range []struct{ description, want, source string }{
 		{"支付宝-星巴克咖啡", "food", "rule"},
+		{"生活服务 财付通 喜茶 - 上海", "food", "rule"},
+		{"生活服务 财付通 上海市宝山芃星饮品店", "food", "rule"},
+		{"生活服务 支付宝 上海拉扎斯信息科技有限公司", "food", "rule"},
+		{"生活服务 财付通 饿 了 么", "food", "rule"},
 		{"微信支付-滴滴出行", "transport", "rule"},
 		{"支付宝", "", ""},
 		{"星巴克餐厅与地铁联名", "", ""},

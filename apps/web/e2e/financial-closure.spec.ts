@@ -98,11 +98,40 @@ test('01 受控初始化：公开页无初始化入口，运维 API 单次创建
 })
 
 test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page }) => {
+  await page.route('**/api/v1/credit-instruments', async route => {
+    const response = await route.fetch()
+    const data = await response.json()
+    await route.fulfill({ response, json: { ...data, items: [...data.items, {
+      id: 'fixture-card', name: '光大测试卡', issuer: '光大银行', kind: 'credit_card', status: 'active',
+    }] } })
+  })
+  await page.route('**/api/v1/credit-mail', async route => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...await response.json(),
+      mailboxes: [{ id: 'fixture-mailbox', username: 'fixture@example.com', enabled: true }],
+      bindings: [{ instrument_id: 'fixture-card', mailbox_id: 'fixture-mailbox', subject_keyword: '光大信用卡电子账单', card_tail: '0123' }],
+    } })
+  })
+  await page.route('**/api/v1/credit-mail/bindings/fixture-card/preview', route => route.fulfill({ json: {
+    statements: [{ received_on: '2023-09-13', transactions: [
+      { TransactionDate: '2023-08-18', PostingDate: '2023-08-19', Description: '生活服务 财付通 喜茶 - 上海', Amount: 1900 },
+    ], review: [{ key: 'fixture-row', imported: false, matches: [] }] }],
+  } }))
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
   await page.getByRole('button', { name: '同步账单', exact: true }).click()
   await expect(page.getByRole('heading', { name: '同步账单' })).toBeVisible()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toHaveCount(0)
+  await page.getByRole('combobox', { name: /^信用卡/ }).selectOption('fixture-card')
+  await page.getByRole('button', { name: '同步并预览' }).click()
+  await page.getByText('2023-09-13 · 1 笔明细').click()
+  const statementTable = page.getByRole('table', { name: '账单交易明细' })
+  await expect(statementTable.getByRole('columnheader', { name: '交易说明' })).toBeVisible()
+  await expect(statementTable.getByText('生活服务 财付通 喜茶 - 上海')).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(statementTable.getByLabel('支出分类')).toHaveCSS('min-height', '48px')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.setViewportSize({ width: 1280, height: 720 })
   await page.getByRole('button', { name: '返回列表' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
