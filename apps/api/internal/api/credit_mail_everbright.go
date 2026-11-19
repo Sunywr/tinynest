@@ -50,6 +50,12 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
+	card := r.PathValue("id")
+	saved, err := readSavedCreditPreview(ctx, a.DB, p.HouseholdID, card)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
 	password, err := creditMailboxCrypt(a.opts.CreditMailKey, p.HouseholdID, mailboxID, cipher, true)
 	if err != nil {
 		writeErr(w, 503, "mail_key_unavailable", "无法读取授权码，请重新测试并保存邮箱")
@@ -60,11 +66,44 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, "credit_mail_preview_failed", "读取账单失败，请检查邮箱连接后重试")
 		return
 	}
-	if err := a.reviewEverbrightStatements(ctx, p.HouseholdID, r.PathValue("id"), statements); err != nil {
+	// Missing or unreadable mail should not discard an existing usable preview.
+	present := make(map[string]bool)
+	for _, statement := range statements {
+		if statement.Error == "" {
+			present[statement.ReceivedOn] = true
+		}
+	}
+	for _, statement := range saved.Statements {
+		if statement.Error == "" && !present[statement.ReceivedOn] {
+			statement.Review = nil
+			statements = append(statements, statement)
+		}
+	}
+	if err := a.reviewEverbrightStatements(ctx, p.HouseholdID, card, statements); err != nil {
 		internalErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"statements": statements})
+	saved.Statements = statements
+	saved.SynchronizedAt = a.nowUTC()
+	err = a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		current, err := readSavedCreditPreview(ctx, tx, p.HouseholdID, card)
+		if err != nil {
+			return err
+		}
+		if current.Generation != saved.Generation {
+			return errConflict
+		}
+		return a.writeSavedCreditPreview(ctx, tx, p.HouseholdID, card, saved)
+	})
+	if errors.Is(err, errConflict) {
+		writeErr(w, 409, "preview_changed", "预览已变更，请重新打开后再同步")
+		return
+	}
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, saved)
 }
 
 var imapFetchUID = regexp.MustCompile(`(?i)\bUID ([0-9]+)\b`)

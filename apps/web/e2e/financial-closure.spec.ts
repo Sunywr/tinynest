@@ -112,17 +112,22 @@ test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page 
       bindings: [{ instrument_id: 'fixture-card', mailbox_id: 'fixture-mailbox', subject_keyword: '光大信用卡电子账单', card_tail: '0123' }],
     } })
   })
-  await page.route('**/api/v1/credit-mail/bindings/fixture-card/preview', route => route.fulfill({ json: {
-    statements: [{ received_on: '2023-09-13', transactions: [
+  let saved = false
+  let syncRequests = 0
+  const fixtureStatements = [{ received_on: '2023-09-13', transactions: [
       { TransactionDate: '2023-08-18', PostingDate: '2023-08-19', Description: '生活服务 财付通 喜茶 - 上海', Amount: 1900 },
-    ], review: [{ key: 'fixture-row', imported: false, matches: [] }] }],
-  } }))
+    ], review: [{ key: 'fixture-row', imported: false, matches: [] }] }]
+  await page.route('**/api/v1/credit-mail/bindings/fixture-card/preview', route => {
+    if (route.request().method() === 'POST') { saved = true; syncRequests++ }
+    if (route.request().method() === 'DELETE') { saved = false; return route.fulfill({ status: 204 }) }
+    return route.fulfill({ json: { statements: saved ? fixtureStatements : null, choices: {}, synchronized_at: saved ? '2026-11-19T04:00:00Z' : '' } })
+  })
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
   await page.getByRole('button', { name: '同步账单', exact: true }).click()
   await expect(page.getByRole('heading', { name: '同步账单' })).toBeVisible()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toHaveCount(0)
-  await page.getByRole('combobox', { name: /^信用卡/ }).selectOption('fixture-card')
+  await expect(page.getByRole('combobox', { name: /^信用卡/ })).toHaveValue('fixture-card')
   await page.getByRole('button', { name: '同步并预览' }).click()
   await page.getByText('2023-09-13 · 1 笔明细').click()
   const statementTable = page.getByRole('table', { name: '账单交易明细' })
@@ -132,6 +137,13 @@ test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page 
   await expect(statementTable.getByLabel('支出分类')).toHaveCSS('min-height', '48px')
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   await page.setViewportSize({ width: 1280, height: 720 })
+  await page.getByRole('button', { name: '返回列表' }).click()
+  await page.getByRole('button', { name: '同步账单', exact: true }).click()
+  await expect(page.getByText('2023-09-13 · 1 笔明细')).toBeVisible()
+  expect(syncRequests).toBe(1)
+  await page.getByRole('button', { name: '清空预览', exact: true }).click()
+  await page.getByRole('button', { name: '确认清空预览' }).click()
+  await expect(page.getByRole('heading', { name: '光大账单预览' })).toHaveCount(0)
   await page.getByRole('button', { name: '返回列表' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()

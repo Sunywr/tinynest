@@ -45,7 +45,7 @@ func (d *DB) IsMySQL() bool { return d.mysql }
 
 func (d *DB) ExpectedVersions() ([]int, error) {
 	if d.mysql {
-		return []int{1, 2, 3, 4, 5, 6, 7, 8}, nil
+		return []int{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil
 	}
 	return EmbeddedVersions()
 }
@@ -72,7 +72,7 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return nil, err
 	}
-	if version > 8 {
+	if version > 9 {
 		return nil, fmt.Errorf("db: unsupported MySQL schema version %d", version)
 	}
 	applied := []int{}
@@ -219,6 +219,20 @@ func (d *DB) migrateMySQL(ctx context.Context) ([]int, error) {
 			return applied, err
 		}
 		applied = append(applied, 8)
+	}
+	if version < 9 {
+		const filename = "009_credit_mail_previews.sql"
+		body, err := mysqlFS.ReadFile("mysql/" + filename)
+		if err != nil {
+			return applied, err
+		}
+		if _, err := conn.ExecContext(ctx, string(body)); err != nil {
+			return applied, fmt.Errorf("%w: MySQL %s: %v", ErrMigration, filename, err)
+		}
+		if _, err := conn.ExecContext(ctx, "INSERT INTO schema_migrations(version,description) VALUES(9,?)", filename); err != nil {
+			return applied, err
+		}
+		applied = append(applied, 9)
 	}
 	return applied, nil
 }

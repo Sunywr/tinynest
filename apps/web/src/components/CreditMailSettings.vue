@@ -20,6 +20,7 @@ type StatementPreview = {
 type StatementRow = { TransactionDate: string; PostingDate: string; Description: string; Amount: number }
 type LedgerMatch = { id: string; description: string; category_id: string }
 type RowReview = { key: string; imported: boolean; suggested_category?: string; category_source?: 'history' | 'rule'; matches: LedgerMatch[] | null }
+type SavedPreview = { statements: StatementPreview[] | null; choices: Record<string, string>; synchronized_at: string }
 
 const props = defineProps<{ cards: Option[]; categories?: Option[]; syncOnly?: boolean }>()
 const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: [] }>()
@@ -37,6 +38,8 @@ const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keywor
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
 const preview = ref<StatementPreview[] | null>(null)
 const previewBusy = ref(false)
+const synchronizedAt = ref('')
+const confirmClear = ref(false)
 const selectedCategory = ref<Record<string, string>>({})
 const pendingDelete = ref('')
 const completed = ref<Record<string, boolean>>({})
@@ -78,7 +81,58 @@ async function load() {
   keyReady.value = data.key_ready
   loaded.value = true
 }
-onMounted(() => void run(load))
+onMounted(() => void run(async () => {
+  await load()
+  if (props.syncOnly) {
+    const current = props.cards.find(card => bindings.value.some(item => item.instrument_id === card.id))
+    if (current) {
+      binding.value = { ...bindings.value.find(item => item.instrument_id === current.id)! }
+      await restorePreview()
+    }
+  }
+}))
+
+function previewPath() {
+  return '/credit-mail/bindings/' + encodeURIComponent(binding.value.instrument_id) + '/preview'
+}
+
+function applyPreview(data: SavedPreview) {
+  preview.value = data.statements
+  synchronizedAt.value = data.synchronized_at ?? ''
+  selectedCategory.value = data.choices ?? {}
+  completed.value = {}
+  pendingDelete.value = ''
+}
+
+async function restorePreview() {
+  applyPreview(await request<SavedPreview>(previewPath()))
+}
+
+function savePreviewCategory(key: string, category: string) {
+  // Update only the affected choice, so another user's edits are preserved.
+  const old = selectedCategory.value[key]
+  selectedCategory.value[key] = category
+  void run(async () => {
+    try {
+      await request(previewPath(), { method: 'PATCH', body: JSON.stringify({ key, category_id: category }) })
+    } catch (err) {
+      if (old === undefined) delete selectedCategory.value[key]
+      else selectedCategory.value[key] = old
+      throw err
+    }
+  })
+}
+
+function clearPreview() {
+  if (busy.value || !confirmClear.value) return
+  void run(async () => {
+    await request(previewPath(), { method: 'DELETE' })
+    applyPreview({ statements: null, synchronized_at: '', choices: {} })
+    confirmClear.value = false
+    confirmBatch.value = false
+    notice.value = '已清空这张卡的预览'
+  })
+}
 
 function edit(item?: Mailbox) {
   box.value = item ? { ...item, folder: item.folder.toUpperCase() === 'INBOX' ? inboxLabel : item.folder, password: '' } : fresh()
@@ -104,24 +158,21 @@ function saveMailbox(enabled = true) {
 
 function selectCard() {
   preview.value = null
+  synchronizedAt.value = ''
+  confirmClear.value = false
   confirmBatch.value = false
   const id = binding.value.instrument_id
   const current = bindings.value.find(item => item.instrument_id === id)
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
+  if (props.syncOnly && id) void run(restorePreview)
 }
 
 function previewStatements() {
   if (!canPreview.value || busy.value) return
-  preview.value = null
   confirmBatch.value = false
   previewBusy.value = true
   void run(async () => {
-    const id = encodeURIComponent(binding.value.instrument_id)
-    const data = await request<{ statements: StatementPreview[] }>('/credit-mail/bindings/' + id + '/preview', { method: 'POST' })
-    selectedCategory.value = {}
-    completed.value = {}
-    pendingDelete.value = ''
-    preview.value = data.statements
+    applyPreview(await request<SavedPreview>(previewPath(), { method: 'POST' }))
   }).finally(() => { previewBusy.value = false })
 }
 
@@ -250,12 +301,21 @@ function saveBinding() {
           </div>
           <button v-if="!syncOnly" class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
           <button v-if="canPreview" class="ghost preview-action" type="button" @click="previewStatements">
-            {{ previewBusy ? '正在读取账单…' : syncOnly ? '同步并预览' : '读取光大账单预览' }}
+            {{ previewBusy ? '正在读取账单…' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取光大账单预览' }}
           </button>
         </fieldset>
       </form>
-      <section v-if="preview !== null && canPreview" class="preview-statements">
+      <section v-if="preview !== null && (syncOnly || canPreview)" class="preview-statements">
         <h3>光大账单预览</h3>
+        <p v-if="synchronizedAt">上次同步 {{ new Date(synchronizedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
+        <div v-if="syncOnly && synchronizedAt" class="review-actions">
+          <template v-if="confirmClear">
+            <span>清空本卡预览和未提交的分类选择，已入账流水会保留。</span>
+            <button type="button" class="ghost" :disabled="busy" @click="clearPreview">确认清空预览</button>
+            <button type="button" class="ghost" @click="confirmClear = false">取消</button>
+          </template>
+          <button v-else type="button" class="ghost" :disabled="busy" @click="confirmClear = true">清空预览</button>
+        </div>
         <p v-if="!preview.length">未找到符合标题关键字的光大账单。</p>
         <p v-else>找到 {{ preview.length }} 封账单。已分类且无疑似重复的明细可批量确认。</p>
         <div v-if="syncOnly && batchRows.length" class="review-actions">
@@ -285,7 +345,7 @@ function saveBinding() {
                   <div v-else class="review-actions">
                     <label>
                       <select aria-label="支出分类" :value="selectedCategory[review.key] ?? review.suggested_category ?? ''"
-                        @change="selectedCategory[review.key] = ($event.target as HTMLSelectElement).value">
+                        @change="savePreviewCategory(review.key, ($event.target as HTMLSelectElement).value)">
                         <option value="">选择支出分类</option>
                         <option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
                       </select>
