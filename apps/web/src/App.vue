@@ -2020,8 +2020,11 @@ const metricCards = computed(() => {
             </div><button class="ghost" type="submit">确认还款</button>
           </form>
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
-            <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow">
-              <span><AccountIcon :name="c.name" :subtype="c.issuer" :kind="c.kind" />{{ c.name }} <small>{{ recordLabel(c.kind) }} · {{ recordLabel(c.status) }}</small></span>
+            <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow credit-tool-row">
+              <span class="credit-tool-identity">
+                <AccountIcon :name="c.name" :subtype="c.issuer" :kind="c.kind" :mark-only="c.kind === 'credit_card'" />
+                <span>{{ c.name }}<small>{{ recordLabel(c.kind) }} · {{ recordLabel(c.status) }}</small></span>
+              </span>
               <b v-if="creditDash">{{ instrumentUsage(c.id) }}</b>
               <span v-if="canWrite" class="rowacts">
                 <button v-if="c.status === 'active'" type="button" class="ghost" @click="deactivateInstrument(c.id)">停用</button>
@@ -2644,6 +2647,9 @@ form label { margin-bottom: 13px; }
 .rowacts { display: flex; gap: 5px; margin-left: 10px; }
 .rowacts .ghost { padding: 5px 9px; font-size: 11px; }
 .rowacts .ghost + .ghost { margin-left: 0; }
+.credit-tool-row { gap: 12px; flex-wrap: wrap; }
+.credit-tool-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.credit-tool-identity small { display: block; }
 @media (max-width: 560px) {
   .ledger-transaction { flex-wrap: wrap; }
   .ledger-transaction .rowacts { flex: 0 0 100%; flex-wrap: wrap; }
