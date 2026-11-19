@@ -120,6 +120,20 @@ func EmbeddedVersions() ([]int, error) {
 // Migrate applies missing versions in order, each in its own transaction.
 // Re-running is a no-op; the database is never rebuilt unconditionally.
 func (d *DB) Migrate(ctx context.Context) ([]int, error) {
+	applied, err := d.migrateSchema(ctx)
+	if err != nil {
+		return applied, err
+	}
+	// Detach legacy child categories in place so references in posted splits,
+	// contracts and import rules keep pointing to the same category IDs.
+	_, err = d.ExecContext(ctx, `UPDATE categories SET parent_id=NULL, level=1 WHERE parent_id IS NOT NULL OR level<>1`)
+	if err != nil {
+		return applied, fmt.Errorf("%w: flatten categories: %v", ErrMigration, err)
+	}
+	return applied, nil
+}
+
+func (d *DB) migrateSchema(ctx context.Context) ([]int, error) {
 	if d.mysql {
 		return d.migrateMySQL(ctx)
 	}

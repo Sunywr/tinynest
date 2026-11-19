@@ -22,7 +22,6 @@ erDiagram
     households ||--o{ investment_fee_rules : owns
     households ||--o{ audit_logs : owns
 
-    categories ||--o{ categories : "parent_id (2级)"
     categories ||--o{ transaction_splits : classifies
     projects  ||--o{ transaction_splits : aggregates
 
@@ -66,7 +65,7 @@ erDiagram
 | `users` | id, household_id, username, password_hash(Argon2id), role, status | 用户名唯一 |
 | `sessions` | id, user_id, token_hash, csrf_token, expires_at, revoked_at | HttpOnly/Secure/SameSite |
 | `household_members` | id, household_id, name, status | 仅交易归属，不登录 |
-| `categories` | id, household_id, parent_id, kind(income/expense), name, level<=2, sort, active | 停用不删历史 |
+| `categories` | id, household_id, kind(income/expense), name, sort, active | 停用不删历史，旧子分类保留原 ID 并转为独立分类 |
 | `projects` | id, household_id, name, start_on, end_on, note, status | 停用仍可查历史 |
 | `audit_logs` | id, household_id, actor, action, entity, entity_id, payload_json, created_at | 只追加 |
 

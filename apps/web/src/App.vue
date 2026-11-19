@@ -123,35 +123,22 @@ const feePreview = ref<any>(null)
 const netWorth = ref<any>(null)
 const dividendHistory = ref<any>(null)
 
-const categoryDraft = reactive({ name: '', kind: 'expense', parent_id: '' })
+const categoryDraft = reactive({ name: '', kind: 'expense' })
 const categoryEdit = ref<{ id: string; name: string; sort: number; active: boolean } | null>(null)
 const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense' && c.active === 1))
 const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income' && c.active === 1))
 
 // —— 记账表单：关联项的可搜索 + 可即时新建选项 ——
 const txCategoryOptions = computed(() => {
-  const base = categoryOptions(f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value)
+  const base = (f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value).map(c => ({ id: c.id, name: c.name }))
   const cur = f.tx.category_id
   if (cur) {
     const sel = categories.value.find(c => c.id === cur)
-    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: categoryName(sel) + '（已停用）' })
+    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: sel.name + '（已停用）' })
   }
   return base
 })
 
-type CategoryChoice = { id: string; name: string; parent_id?: string | null }
-
-function categoryName(category: CategoryChoice) {
-  const parent = categories.value.find(c => c.id === category.parent_id)
-  return parent ? `${parent.name} › ${category.name}` : category.name
-}
-
-function categoryOptions(choices: CategoryChoice[]) {
-  const ids = new Set(choices.map(c => c.id))
-  const roots = choices.filter(c => !c.parent_id || !ids.has(c.parent_id))
-  return roots.flatMap(root => [root, ...choices.filter(c => c.parent_id === root.id)])
-    .map(c => ({ id: c.id, name: categoryName(c) }))
-}
 const txProjectOptions = computed(() =>
   [{ id: '', name: '不关联' }, ...projects.value.filter(p => p.status === 'active' || p.id === f.tx.project_id).map(p => ({ id: p.id, name: p.name }))])
 const txMemberOptions = computed(() => {
@@ -352,7 +339,7 @@ function clearPrivateState() {
   users.value = [];
   household.value = null; members.value = []; memberName.value = ''; selectedMember.value = ''; memberResolving.value = false
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
-  Object.assign(categoryDraft, { name: '', kind: 'expense', parent_id: '' })
+  Object.assign(categoryDraft, { name: '', kind: 'expense' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   paymentHistory.value = null; paymentHistoryLoading.value = false
   archivedStatements.value = null; archivedStatementsLoading.value = false
@@ -706,7 +693,7 @@ async function addCategory() {
   const name = categoryDraft.name.trim()
   if (!name || loading.value) return
   await run(async () => {
-    await api.createCategory({ name, kind: categoryDraft.kind, parent_id: categoryDraft.parent_id || null })
+    await api.createCategory({ name, kind: categoryDraft.kind })
     categoryDraft.name = ''
   }, '分类已新增')
 }
@@ -716,14 +703,13 @@ function deleteCategory() {
   if (!category || loading.value) return
   requestConfirm({
     title: '删除分类',
-    message: `确定删除「${category.name}」吗？已有流水会保留分类。请先删除该分类下的子分类。`,
+    message: `确定删除「${category.name}」吗？已有流水会保留分类。`,
     tone: 'danger',
     confirmText: '删除',
     onConfirm: () => {
       void run(async () => {
         await api.deleteCategory(category.id)
         if (categoryEdit.value?.id === category.id) categoryEdit.value = null
-        if (categoryDraft.parent_id === category.id) categoryDraft.parent_id = ''
         if (f.tx.category_id === category.id) f.tx.category_id = ''
         if (f.installment.category_id === category.id) f.installment.category_id = ''
       }, '分类已删除')
@@ -737,7 +723,6 @@ async function saveCategory() {
   const { id, name, sort, active } = category
   await run(async () => {
     await api.updateCategory(id, { name, sort, active })
-    if (!active && categoryDraft.parent_id === id) categoryDraft.parent_id = ''
     if (!active && f.tx.category_id === id) f.tx.category_id = ''
     if (!active && f.installment.category_id === id) f.installment.category_id = ''
   }, '分类已更新')
@@ -1891,17 +1876,13 @@ const metricCards = computed(() => {
             </template>
           </section>
           <section v-if="panel === 'category'" class="panel formpanel">
-            <div class="paneltitle"><div><h2>分类管理</h2><span class="subinfo">支持两级分类、改名、排序与停用</span></div>
+            <div class="paneltitle"><div><h2>分类管理</h2><span class="subinfo">支持改名、排序与停用</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <form @submit.prevent="addCategory">
               <div class="formgrid">
                 <label>新分类名称<input v-model="categoryDraft.name" required /></label>
-                <label>分类方向<SearchableSelect><select v-model="categoryDraft.kind" @change="categoryDraft.parent_id = ''">
+                <label>分类方向<SearchableSelect><select v-model="categoryDraft.kind">
                   <option value="expense">支出</option><option value="income">收入</option>
-                </select></SearchableSelect></label>
-                <label>上级分类<SearchableSelect :allow-create="true" @create="(q) => openCreate('category', q, (id) => categoryDraft.parent_id = id, { kind: categoryDraft.kind })"><select v-model="categoryDraft.parent_id">
-                  <option value="">无（一级分类）</option>
-                  <option v-for="c in categories.filter(c => c.level === 1 && c.kind === categoryDraft.kind && c.active === 1)" :key="c.id" :value="c.id">{{ c.name }}</option>
                 </select></SearchableSelect></label>
               </div>
               <button class="ghost" type="submit" :disabled="loading">新增分类</button>
@@ -1911,7 +1892,7 @@ const metricCards = computed(() => {
                 <label>编辑分类<SearchableSelect><select :value="categoryEdit?.id ?? ''" @change="selectCategory">
                   <option value="">请选择</option>
                   <option v-for="c in categories" :key="c.id" :value="c.id">
-                    {{ c.kind === 'income' ? '收入' : '支出' }} · {{ categoryName(c) }}{{ c.active ? '' : '（已停用）' }}
+                    {{ c.kind === 'income' ? '收入' : '支出' }} · {{ c.name }}{{ c.active ? '' : '（已停用）' }}
                   </option>
                 </select></SearchableSelect></label>
                 <template v-if="categoryEdit">
@@ -2216,7 +2197,7 @@ const metricCards = computed(() => {
             <div class="formgrid">
               <label>名称<input v-model="f.installment.name" placeholder="如：客厅装修" /></label>
               <label>消费分类<SearchableSelect :allow-create="true" @create="(q) => openCreate('category', q, (id) => f.installment.category_id = id, { kind: 'expense' })"><select v-model="f.installment.category_id"><option value="">请选择</option>
-                <option v-for="c in categoryOptions(expenseCategories)" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
+                <option v-for="c in expenseCategories" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
               <label>本金（元）<input v-model="f.installment.principal" inputmode="decimal" /></label>
               <label>总手续费（元）<input v-model="f.installment.fee" inputmode="decimal" /></label>
               <label>期数<input type="number" min="1" v-model.number="f.installment.periods" /></label>

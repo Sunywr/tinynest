@@ -141,19 +141,15 @@ func (a *API) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleDashboardCategories(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	from, to := a.period(r)
-	// Roll every second-level split up to its top-level category; without this join
-	// child categories would be silently dropped from the ranking.
 	rows, err := a.DB.QueryContext(r.Context(), `
-		SELECT COALESCE(c.parent_id, c.id) AS root_id,
-		       COALESCE(parent.name, c.name) AS root_name,
+		SELECT c.id, c.name,
 		       SUM(s.amount_minor) AS total
 		FROM transaction_splits s
 		JOIN transactions t ON t.id=s.transaction_id AND t.status='posted' AND t.type='expense'
 		  AND t.occurred_on>=? AND t.occurred_on<=?
-		JOIN categories c ON c.id=s.category_id
-		LEFT JOIN categories parent ON parent.id=c.parent_id
+		JOIN categories c ON c.id=s.category_id AND c.household_id=t.household_id
 		WHERE t.household_id=? AND c.kind='expense'
-		GROUP BY root_id, root_name ORDER BY total DESC`, from, to, p.HouseholdID)
+		GROUP BY c.id, c.name ORDER BY total DESC`, from, to, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return

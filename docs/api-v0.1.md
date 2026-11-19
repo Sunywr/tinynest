@@ -60,9 +60,9 @@
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（两级，level<=2） |
+| GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（单层，新增仅需 `name` 和 `kind`） |
 | PATCH | `/categories/{id}` | IMPLEMENTED | 传入任一字段：`name`（非空）、`sort`（整数）、`active`（布尔值）；仅更新本家庭分类。停用后不可用于新流水，历史关联保留 |
-| DELETE | `/categories/{id}` | IMPLEMENTED | 从管理列表和记账选项移除，保留历史关联。有子分类时返回 409，重复删除返回 200 |
+| DELETE | `/categories/{id}` | IMPLEMENTED | 从管理列表和记账选项移除，保留历史关联。重复删除返回 200 |
 | GET/POST | `/projects` | IMPLEMENTED | 项目列表 / 新建 |
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出、分类构成与最近 100 条拆分流水 |
 | GET | `/projects/{id}` · PATCH `/projects/{id}` | IMPLEMENTED | 项目详情与编辑。支持名称、起止日期、说明和启用或归档状态；日期或说明传空字符串可清除 |
@@ -179,7 +179,7 @@
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
 | GET | `/dashboard/summary` | IMPLEMENTED | 收入/支出/结余/现金净流量/应还负债/投资总收益/净资产；**全部按 household_id 隔离** |
-| GET | `/dashboard/categories` | IMPLEMENTED | 分类支出排行（一级汇总二级） |
+| GET | `/dashboard/categories` | IMPLEMENTED | 分类支出排行 |
 | GET | `/dashboard/projects` | IMPLEMENTED | 项目累计收支 |
 | GET | `/dashboard/credit` | IMPLEMENTED | 按到期日统计账单应还、已还与逾期，并返回实时信用额度 |
 | GET | `/dashboard/net-worth` | IMPLEMENTED（V0.1.2） | 资产构成 / 负债结构 / 投资成本·市值·估值日期 / 净资产，逐项带 `ledger_code` 可下钻；与 `summary` 使用同一统计窗口，`net_worth_minor` 一致 |

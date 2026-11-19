@@ -301,7 +301,7 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id, parent_id, kind, name, level, sort, active FROM categories
+		`SELECT id, kind, name, sort, active FROM categories
 		 WHERE household_id=? AND active>=0 ORDER BY kind, sort, name`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
@@ -309,18 +309,16 @@ func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type cat struct {
-		ID       string  `json:"id"`
-		ParentID *string `json:"parent_id"`
-		Kind     string  `json:"kind"`
-		Name     string  `json:"name"`
-		Level    int     `json:"level"`
-		Sort     int     `json:"sort"`
-		Active   int     `json:"active"`
+		ID     string `json:"id"`
+		Kind   string `json:"kind"`
+		Name   string `json:"name"`
+		Sort   int    `json:"sort"`
+		Active int    `json:"active"`
 	}
 	out := []cat{}
 	for rows.Next() {
 		var c cat
-		if err := rows.Scan(&c.ID, &c.ParentID, &c.Kind, &c.Name, &c.Level, &c.Sort, &c.Active); err != nil {
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Sort, &c.Active); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -344,38 +342,13 @@ func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "kind 必须为 income/expense，名称不可为空")
 		return
 	}
-	id := newID("cat")
-	invalidParent := errors.New("只允许在同类型且未删除的一级分类下建立二级分类")
-	ctx := r.Context()
-	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
-		level := 1
-		if in.ParentID != nil {
-			query := `SELECT kind,level FROM categories WHERE id=? AND household_id=? AND active>=0`
-			if a.DB.IsMySQL() {
-				query += " FOR UPDATE"
-			}
-			var parentKind string
-			var parentLevel int
-			err := tx.QueryRowContext(ctx, query, *in.ParentID, p.HouseholdID).Scan(&parentKind, &parentLevel)
-			if errors.Is(err, sql.ErrNoRows) {
-				return invalidParent
-			}
-			if err != nil {
-				return err
-			}
-			if parentKind != in.Kind || parentLevel != 1 {
-				return invalidParent
-			}
-			level = 2
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO categories(id,household_id,parent_id,kind,name,level) VALUES(?,?,?,?,?,?)`,
-			id, p.HouseholdID, in.ParentID, in.Kind, in.Name, level)
-		return err
-	})
-	if errors.Is(err, invalidParent) {
-		writeErr(w, 400, "invalid_request", invalidParent.Error())
+	if in.ParentID != nil {
+		writeErr(w, 400, "invalid_request", "分类不支持设置上级")
 		return
 	}
+	id := newID("cat")
+	_, err := a.DB.ExecContext(r.Context(), `INSERT INTO categories(id,household_id,kind,name) VALUES(?,?,?,?)`,
+		id, p.HouseholdID, in.Kind, in.Name)
 	if err != nil {
 		internalErr(w, err)
 		return
