@@ -100,6 +100,10 @@ test('01 受控初始化：公开页无初始化入口，运维 API 单次创建
 test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
+  await page.getByRole('button', { name: '同步账单', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '同步账单' })).toBeVisible()
+  await expect(page.getByLabel('IMAP 主机（TLS 993）')).toHaveCount(0)
+  await page.getByRole('button', { name: '返回列表' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
   const mailPanel = page.locator('section.panel', { has: page.getByRole('heading', { name: '账单邮箱', exact: true }) })

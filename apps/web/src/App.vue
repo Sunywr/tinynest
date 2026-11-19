@@ -1983,11 +1983,17 @@ const metricCards = computed(() => {
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('pay')">账单还款</button>
             <button type="button" class="ghost" @click="openArchivedStatements()">已归档账单</button>
             <button type="button" class="ghost" @click="openPanel('creditMail')">账单邮箱</button>
+            <button v-if="canWrite" type="button" class="ghost" @click="openPanel('creditMailSync')">同步账单</button>
           </div>
           <CreditMailSettings v-if="panel === 'creditMail' && canWrite"
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active')"
             @close="closePanel()" />
-          <section v-else-if="panel === 'creditMail'" class="panel formpanel">
+          <CreditMailSettings v-if="panel === 'creditMailSync' && canWrite" sync-only
+            :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active' && (c.name.includes('光大') || c.issuer?.includes('光大')))"
+            :categories="expenseCategories" @close="closePanel()"
+            @edit-transaction="id => { go('ledger'); void openTransactionDraft(id, true) }"
+            @ledger-changed="loadAll()" />
+          <section v-if="panel === 'creditMail' && !canWrite" class="panel formpanel">
             <div class="paneltitle">
               <h2>账单邮箱</h2>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button>

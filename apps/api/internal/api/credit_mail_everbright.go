@@ -26,6 +26,7 @@ import (
 type everbrightPreviewStatement struct {
 	ReceivedOn   string                         `json:"received_on"`
 	Transactions []credit.EverbrightTransaction `json:"transactions"`
+	Review       []everbrightRowReview          `json:"review,omitempty"`
 	Error        string                         `json:"error,omitempty"`
 }
 
@@ -57,6 +58,10 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 	statements, err := readEverbrightPreview(ctx, host, user, password, folder, keyword, tail)
 	if err != nil {
 		writeErr(w, 502, "credit_mail_preview_failed", "读取账单失败，请检查邮箱连接后重试")
+		return
+	}
+	if err := a.reviewEverbrightStatements(ctx, p.HouseholdID, r.PathValue("id"), statements); err != nil {
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"statements": statements})

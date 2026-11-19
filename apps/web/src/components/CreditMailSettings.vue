@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { request } from '../services/api'
+import { api, request } from '../services/api'
 
 type Option = { id: string; name: string; issuer?: string }
 type Mailbox = {
@@ -14,11 +14,15 @@ type Binding = {
 
 type StatementPreview = {
   received_on: string; error?: string
-  transactions: { TransactionDate: string; PostingDate: string; Description: string; Amount: number }[] | null
+  transactions: StatementRow[] | null
+  review?: RowReview[]
 }
+type StatementRow = { TransactionDate: string; PostingDate: string; Description: string; Amount: number }
+type LedgerMatch = { id: string; description: string; category_id: string }
+type RowReview = { key: string; imported: boolean; suggested_category?: string; matches: LedgerMatch[] | null }
 
-const props = defineProps<{ cards: Option[] }>()
-defineEmits<{ close: [] }>()
+const props = defineProps<{ cards: Option[]; categories?: Option[]; syncOnly?: boolean }>()
+const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: [] }>()
 const inboxLabel = '收件箱'
 const fresh = () => ({ id: '', host: '', username: '', folder: inboxLabel, enabled: true, version: 0, tested_at: '', password: '' })
 const box = ref(fresh())
@@ -33,6 +37,9 @@ const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keywor
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
 const preview = ref<StatementPreview[] | null>(null)
 const previewBusy = ref(false)
+const selectedCategory = ref<Record<string, string>>({})
+const pendingDelete = ref('')
+const completed = ref<Record<string, boolean>>({})
 const canPreview = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const saved = bindings.value.find(item => item.instrument_id === card?.id)
@@ -90,13 +97,55 @@ function selectCard() {
 }
 
 function previewStatements() {
+  if (!canPreview.value || busy.value) return
   preview.value = null
   previewBusy.value = true
   void run(async () => {
     const id = encodeURIComponent(binding.value.instrument_id)
     const data = await request<{ statements: StatementPreview[] }>('/credit-mail/bindings/' + id + '/preview', { method: 'POST' })
+    selectedCategory.value = {}
+    completed.value = {}
+    pendingDelete.value = ''
     preview.value = data.statements
   }).finally(() => { previewBusy.value = false })
+}
+
+function createFromPreview(row: StatementRow, review: RowReview) {
+  const category = selectedCategory.value[review.key] ?? review.suggested_category
+  if (!category || row.Amount <= 0 || review.imported || completed.value[review.key]) return
+  void run(async () => {
+    const result = await api.createTransaction({
+      type: 'expense', amount_minor: row.Amount, currency: 'CNY', occurred_on: row.TransactionDate,
+      payment_kind: 'credit', credit_instrument_id: binding.value.instrument_id, merchant: row.Description,
+      splits: [{ category_id: category, amount_minor: row.Amount }],
+    }, review.key)
+    completed.value[review.key] = true
+    if (!result.replayed) {
+      for (const statement of preview.value ?? []) {
+        statement.transactions?.forEach((other, i) => {
+          const candidate = statement.review?.[i]
+          if (candidate && other.TransactionDate === row.TransactionDate && other.Amount === row.Amount) {
+            candidate.matches = [...(candidate.matches ?? []), { id: result.id, description: row.Description, category_id: category }]
+          }
+        })
+      }
+    }
+    emit('ledgerChanged')
+    notice.value = result.replayed ? '这笔明细此前已处理' : '流水已创建'
+  })
+}
+
+function deleteFromPreview(id: string) {
+  if (pendingDelete.value !== id) return
+  void run(async () => {
+    await api.deleteTransaction(id)
+    pendingDelete.value = ''
+    for (const statement of preview.value ?? []) {
+      for (const review of statement.review ?? []) review.matches = review.matches?.filter(item => item.id !== id) ?? null
+    }
+    emit('ledgerChanged')
+    notice.value = '流水已冲正并从列表移除'
+  })
 }
 
 function saveBinding() {
@@ -114,7 +163,7 @@ function saveBinding() {
 <template>
   <section class="panel formpanel credit-mail-settings">
     <div class="paneltitle">
-      <h2>账单邮箱</h2>
+      <h2>{{ syncOnly ? '同步账单' : '账单邮箱' }}</h2>
       <button type="button" class="ghost" @click="$emit('close')">返回列表</button>
     </div>
     <p v-if="error" class="err" role="alert">{{ error }}</p>
@@ -122,7 +171,7 @@ function saveBinding() {
     <button v-if="!loaded && !busy" type="button" class="ghost" @click="run(load)">重试</button>
     <p v-if="loaded && !keyReady" role="status">服务器尚未配置账单邮箱加密密钥。</p>
     <template v-if="loaded">
-      <form @submit.prevent="saveMailbox()">
+      <form v-if="!syncOnly" @submit.prevent="saveMailbox()">
         <fieldset :disabled="busy">
           <legend>{{ box.id ? '编辑邮箱' : '新增邮箱' }}</legend>
           <div v-if="boxes.length" class="actions-bar">
@@ -144,31 +193,31 @@ function saveBinding() {
           </div>
         </fieldset>
       </form>
-      <form @submit.prevent="saveBinding">
+      <form @submit.prevent="syncOnly ? previewStatements() : saveBinding()">
         <fieldset :disabled="busy">
-          <legend>信用卡绑定</legend>
+          <legend>{{ syncOnly ? '选择已绑定的信用卡' : '信用卡绑定' }}</legend>
           <div class="formgrid">
             <label>信用卡<select v-model="binding.instrument_id" required @change="selectCard">
               <option value="">请选择</option><option v-for="card in cards" :key="card.id" :value="card.id">{{ card.name }}</option>
             </select></label>
-            <label>账单邮箱<select v-model="binding.mailbox_id">
+            <label v-if="!syncOnly">账单邮箱<select v-model="binding.mailbox_id">
               <option value="">不绑定</option><option v-for="item in available" :key="item.id" :value="item.id" :disabled="!item.enabled">{{ item.username }}{{ item.enabled ? '' : '（已停用）' }}</option>
             </select></label>
-            <template v-if="binding.mailbox_id">
+            <template v-if="!syncOnly && binding.mailbox_id">
               <label>标题关键字<input v-model.trim="binding.subject_keyword" required maxlength="255"></label>
               <label>卡尾号<input v-model.trim="binding.card_tail" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4"></label>
             </template>
           </div>
-          <button class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
+          <button v-if="!syncOnly" class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
           <button v-if="canPreview" class="ghost preview-action" type="button" @click="previewStatements">
-            {{ previewBusy ? '正在读取账单…' : '读取光大账单预览' }}
+            {{ previewBusy ? '正在读取账单…' : syncOnly ? '同步并预览' : '读取光大账单预览' }}
           </button>
         </fieldset>
       </form>
       <section v-if="preview !== null && canPreview" class="preview-statements">
         <h3>光大账单预览</h3>
         <p v-if="!preview.length">未找到符合标题关键字的光大账单。</p>
-        <p v-else>找到 {{ preview.length }} 封账单。以下明细仅供预览。</p>
+        <p v-else>找到 {{ preview.length }} 封账单。请逐笔核对分类和已有流水后确认操作。</p>
         <details v-for="(statement, index) in preview" :key="index">
           <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
           <ul v-if="statement.transactions">
@@ -176,6 +225,32 @@ function saveBinding() {
               <time>{{ row.TransactionDate }}</time>
               <span>{{ row.Description }}</span>
               <b>{{ amountFormat.format(row.Amount / 100) }}</b>
+              <fieldset v-if="syncOnly && statement.review?.[rowIndex]" :disabled="busy" class="review-row">
+                <template v-for="review in [statement.review[rowIndex]]" :key="review.key">
+                  <small v-if="row.Amount <= 0">还款或退款，待核对原流水或付款账户</small>
+                  <small v-else-if="review.imported || completed[review.key]">这笔明细此前已处理</small>
+                  <div v-else class="review-actions">
+                    <label>支出分类
+                      <select :value="selectedCategory[review.key] ?? review.suggested_category ?? ''"
+                        @change="selectedCategory[review.key] = ($event.target as HTMLSelectElement).value">
+                        <option value="">请选择</option>
+                        <option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
+                      </select>
+                    </label>
+                    <button type="button" class="ghost" :disabled="!(selectedCategory[review.key] ?? review.suggested_category)"
+                      @click="createFromPreview(row, review)">{{ review.matches?.length ? '确认另建流水' : '确认创建流水' }}</button>
+                  </div>
+                  <div v-for="match in review.matches" :key="match.id" class="review-actions">
+                    <span>同日同金额流水 · {{ match.description || '无商户备注' }}</span>
+                    <button type="button" class="ghost" @click="emit('editTransaction', match.id)">修改</button>
+                    <template v-if="pendingDelete === match.id">
+                      <button type="button" class="ghost" @click="deleteFromPreview(match.id)">确认冲正流水</button>
+                      <button type="button" class="ghost" @click="pendingDelete = ''">取消</button>
+                    </template>
+                    <button v-else type="button" class="ghost" @click="pendingDelete = match.id">删除</button>
+                  </div>
+                </template>
+              </fieldset>
             </li>
           </ul>
         </details>
@@ -195,4 +270,6 @@ form + form { padding-top: 18px; border-top: 1px solid var(--border); }
 .preview-statements summary { cursor: pointer; }
 .preview-statements ul { padding: 0; list-style: none; }
 .preview-statements li { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; overflow-wrap: anywhere; }
+.review-row { flex-basis: 100%; }
+.review-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 8px; }
 </style>
