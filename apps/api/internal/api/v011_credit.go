@@ -103,6 +103,7 @@ func (a *API) handlePatchInstrument(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name             *string `json:"name"`
 		Issuer           *string `json:"issuer"`
+		LogoKey          *string `json:"logo_key"`
 		CreditLimitMinor *int64  `json:"credit_limit_minor"`
 		ClearCreditLimit bool    `json:"clear_credit_limit"`
 		CycleStartDay    *int    `json:"cycle_start_day"`
@@ -139,6 +140,10 @@ func (a *API) handlePatchInstrument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "名称不能为空")
 		return
 	}
+	if in.LogoKey != nil && !validCreditLogo(*in.LogoKey) {
+		writeErr(w, 400, "invalid_request", "请选择支持的银行图标")
+		return
+	}
 
 	changed := map[string]any{}
 	if in.Name != nil {
@@ -146,6 +151,9 @@ func (a *API) handlePatchInstrument(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Issuer != nil {
 		changed["issuer"] = *in.Issuer
+	}
+	if in.LogoKey != nil {
+		changed["logo_key"] = *in.LogoKey
 	}
 	if in.CreditLimitMinor != nil {
 		changed["credit_limit_minor"] = *in.CreditLimitMinor
@@ -187,27 +195,27 @@ func (a *API) handlePatchInstrument(w http.ResponseWriter, r *http.Request) {
 	finalStatus := "active"
 
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT status FROM credit_instruments WHERE id=? AND household_id=? AND status<>'deleted'`, id, p.HouseholdID).
+		query := `SELECT status FROM credit_instruments WHERE id=? AND household_id=? AND status<>'deleted'`
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		if err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).
 			Scan(&finalStatus); err != nil {
 			return errors.New("信用工具不存在")
 		}
-		res, err := tx.ExecContext(r.Context(), `
+		_, err := tx.ExecContext(r.Context(), `
 			UPDATE credit_instruments SET
-			  name=COALESCE(?,name), issuer=COALESCE(?,issuer),
+			  name=COALESCE(?,name), issuer=COALESCE(?,issuer), logo_key=COALESCE(?,logo_key),
 			  credit_limit_minor=CASE WHEN ?=1 THEN NULL ELSE COALESCE(?,credit_limit_minor) END,
 			  cycle_start_day=COALESCE(?,cycle_start_day), cycle_end_day=COALESCE(?,cycle_end_day),
 			  due_day=COALESCE(?,due_day), due_month_offset=COALESCE(?,due_month_offset),
 			  status=COALESCE(?,status), note=COALESCE(?,note)
 			WHERE id=? AND household_id=? AND status<>'deleted'`,
-			ptrArg(in.Name), ptrArg(in.Issuer), clear, ptrArg(in.CreditLimitMinor),
+			ptrArg(in.Name), ptrArg(in.Issuer), ptrArg(in.LogoKey), clear, ptrArg(in.CreditLimitMinor),
 			ptrArg(in.CycleStartDay), ptrArg(in.CycleEndDay), ptrArg(in.DueDay), ptrArg(in.DueMonthOffset),
 			ptrArg(in.Status), ptrArg(in.Note), id, p.HouseholdID)
 		if err != nil {
 			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return errors.New("信用工具不存在")
 		}
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO credit_instrument_changes(id,household_id,instrument_id,changed_fields,reason,actor)

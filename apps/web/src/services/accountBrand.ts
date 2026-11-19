@@ -43,9 +43,13 @@ const aliases = Object.entries(brands).flatMap(([brand, names]) =>
   names.split(' ').map(name => ({ brand, name })),
 ).sort((a, b) => b.name.length - a.name.length)
 
+export const creditBankMarks = ['spdb', 'ceb', 'cmb', 'citic'].map(id => ({
+  id, name: brands[id].split(' ')[0],
+}))
+
 export function accountBrand(...fields: (string | null | undefined)[]): string | undefined {
   for (const field of fields) {
-    const name = field?.normalize('NFKC').toLowerCase().replace(/\\s+/g, '')
+    const name = field?.normalize('NFKC').toLowerCase().replace(/\s+/g, '')
     if (!name) continue
     if (Object.hasOwn(brands, name)) return name
     const match = aliases.find(alias => name.includes(alias.name))

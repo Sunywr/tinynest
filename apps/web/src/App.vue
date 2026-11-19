@@ -3,6 +3,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError, type ManagedUser, type UserProfile } from './services/api'
 
 import AccountIcon from './components/AccountIcon.vue'
+import { creditBankMarks } from './services/accountBrand'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
 import {
@@ -297,7 +298,7 @@ const f = reactive<any>({
   tx: { type: 'expense', amount: '', occurred_on: today(), payment_kind: 'cash', account_id: '', to_account_id: '', credit_instrument_id: '', category_id: '', project_id: '', note: '' },
   account: { kind: 'cash', name: '', opening_balance: '' },
   project: { name: '' },
-  credit: { kind: 'credit_card', name: '', cycle_start_day: 1, cycle_end_day: 31, due_day: 10, due_month_offset: 1, credit_limit: '' },
+  credit: { kind: 'credit_card', name: '', issuer: '', logo_key: '', note: '', cycle_start_day: 1, cycle_end_day: 31, due_day: 10, due_month_offset: 1, credit_limit: '' },
   statementCycle: { id: '', cycle_start_on: '', cycle_end_on: '', due_on: '', reason: '' },
   payment: { statement_id: '', amount: '', from_account_id: '', paid_on: today() },
   installment: { name: '', category_id: '', principal: '', fee: '0', periods: 3, first_due_on: today() },
@@ -1113,11 +1114,32 @@ function createAccount() {
   if (!f.account.name || opening === null || opening < 0) return toast('请填写账户名称与有效期初余额')
   return run(() => api.createAccount({ kind: f.account.kind, name: f.account.name, opening_balance_minor: opening }), '账户已创建')
 }
+const creditEditID = ref('')
+function openCreditForm(card?: {
+  id: string; kind: string; name: string; issuer?: string; logo_key?: string; note?: string
+  credit_limit_minor?: number; cycle_start_day: number; cycle_end_day: number; due_day: number; due_month_offset: number
+}) {
+  creditEditID.value = card?.id ?? ''
+  Object.assign(f.credit, {
+    kind: card?.kind ?? 'credit_card', name: card?.name ?? '', issuer: card?.issuer ?? '',
+    logo_key: card?.logo_key ?? '', note: card?.note ?? '',
+    cycle_start_day: card?.cycle_start_day ?? 1, cycle_end_day: card?.cycle_end_day ?? 31,
+    due_day: card?.due_day ?? 10, due_month_offset: card?.due_month_offset ?? 1,
+    credit_limit: card?.credit_limit_minor == null ? '' : (card.credit_limit_minor / 100).toFixed(2),
+  })
+  openPanel('create')
+}
 function createCredit() {
-  if (!f.credit.name) return toast('请填写信用工具名称')
+  if (loading.value) return
+  if (!f.credit.name.trim()) return toast('请填写信用工具名称')
   const limit = f.credit.credit_limit === '' ? null : minor(f.credit.credit_limit)
   if (limit !== null && (limit === undefined || limit <= 0)) return toast('额度必须为正数或留空（未配置）')
-  return run(() => api.createCreditInstrument({ ...f.credit, credit_limit_minor: limit ?? undefined }), '信用工具已创建')
+  const { credit_limit, ...fields } = f.credit
+  const payload = { ...fields, name: fields.name.trim(), credit_limit_minor: limit ?? undefined }
+  const id = creditEditID.value
+  return id
+    ? run(() => api.patchCreditInstrument(id, { ...payload, clear_credit_limit: limit === null }), '信用工具已修改')
+    : run(() => api.createCreditInstrument(payload), '信用工具已创建')
 }
 function editStatementCycle(statement: { id: string; cycle_start_on: string; cycle_end_on: string; due_on: string }) {
   const { id, cycle_start_on, cycle_end_on, due_on } = statement
@@ -1998,7 +2020,7 @@ const metricCards = computed(() => {
         <template v-else-if="view === 'credit'">
           <section class="greeting"><div><h1>信用账单</h1><p>信用消费增加负债但不减现金；还款只结算负债。</p></div></section>
           <div class="actions-bar">
-            <button v-if="canWrite" type="button" class="ghost" @click="openPanel('create')">＋ 新增信用工具</button>
+            <button v-if="canWrite" type="button" class="ghost" @click="openCreditForm()">＋ 新增信用工具</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('pay')">账单还款</button>
             <button type="button" class="ghost" @click="openArchivedStatements()">已归档账单</button>
             <button type="button" class="ghost" @click="openPanel('creditMail')">账单邮箱</button>
@@ -2020,17 +2042,31 @@ const metricCards = computed(() => {
             <p>有记账权限的家庭成员可以配置账单邮箱。</p>
           </section>
           <form v-if="panel === 'create'" class="panel formpanel" @submit.prevent="createCredit">
-            <div class="paneltitle"><div><h2>新增信用工具</h2><span class="subinfo">支持 28/29/30/31 月末规则</span></div>
+            <div class="paneltitle"><div><h2>{{ creditEditID ? '修改信用工具' : '新增信用工具' }}</h2><span class="subinfo">{{ creditEditID ? '周期设置适用于后续归集，历史账单保留原日期' : '支持 28/29/30/31 月末规则' }}</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <div class="formgrid">
-              <label>类型<SearchableSelect><select v-model="f.credit.kind"><option value="credit_card">信用卡</option><option value="huabei">花呗</option><option value="meituan">美团月付</option><option value="douyin">抖音月付</option><option value="custom">自定义</option></select></SearchableSelect></label>
-              <label>名称<input v-model="f.credit.name" /></label>
+              <label v-if="!creditEditID">类型<SearchableSelect><select v-model="f.credit.kind"><option value="credit_card">信用卡</option><option value="huabei">花呗</option><option value="meituan">美团月付</option><option value="douyin">抖音月付</option><option value="custom">自定义</option></select></SearchableSelect></label>
+              <label>名称<input v-model.trim="f.credit.name" required /></label>
+              <template v-if="f.credit.kind === 'credit_card'">
+                <label>发卡银行<input v-model.trim="f.credit.issuer" placeholder="如：招商银行" /></label>
+                <label>银行图标
+                  <span class="credit-logo-picker">
+                    <AccountIcon :name="f.credit.name" :subtype="f.credit.issuer" :logo-key="f.credit.logo_key" mark-only />
+                    <select v-model="f.credit.logo_key" aria-label="银行图标">
+                      <option value="">按银行名称自动匹配</option>
+                      <option v-for="mark in creditBankMarks" :key="mark.id" :value="mark.id">{{ mark.name }}</option>
+                      <option value="generic">通用图标</option>
+                    </select>
+                  </span>
+                </label>
+              </template>
               <label>账单开始日<input type="number" min="1" max="31" v-model.number="f.credit.cycle_start_day" /></label>
               <label>账单结束日<input type="number" min="1" max="31" v-model.number="f.credit.cycle_end_day" /></label>
               <label>还款日<input type="number" min="1" max="31" v-model.number="f.credit.due_day" /></label>
               <label>还款月偏移<input type="number" min="0" max="12" v-model.number="f.credit.due_month_offset" /></label>
               <label>信用额度（元，留空=未配置）<input v-model="f.credit.credit_limit" inputmode="decimal" placeholder="如 20000" /></label>
-            </div><button class="primary" type="submit">创建</button>
+              <label>备注<input v-model.trim="f.credit.note" /></label>
+            </div><button class="primary" type="submit" :disabled="loading">{{ creditEditID ? '保存修改' : '创建' }}</button>
           </form>
           <form v-if="panel === 'pay'" class="panel formpanel" @submit.prevent="payStatement">
             <div class="paneltitle"><div><h2>账单还款</h2></div>
@@ -2047,11 +2083,12 @@ const metricCards = computed(() => {
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>信用工具</h2></div></div>
             <div class="ranklist"><div v-for="c in creditInstruments" :key="c.id" class="rankrow credit-tool-row">
               <span class="credit-tool-identity">
-                <AccountIcon :name="c.name" :subtype="c.issuer" :kind="c.kind" :mark-only="c.kind === 'credit_card'" />
+                <AccountIcon :name="c.name" :subtype="c.issuer" :kind="c.kind" :logo-key="c.logo_key" :mark-only="c.kind === 'credit_card'" />
                 <span>{{ c.name }}<small>{{ recordLabel(c.kind) }} · {{ recordLabel(c.status) }}</small></span>
               </span>
               <b v-if="creditDash">{{ instrumentUsage(c.id) }}</b>
               <span v-if="canWrite" class="rowacts">
+                <button type="button" class="ghost" @click="openCreditForm(c)">修改</button>
                 <button v-if="c.status === 'active'" type="button" class="ghost" @click="deactivateInstrument(c.id)">停用</button>
                 <button type="button" class="ghost" @click="deleteCreditInstrument(c)">删除</button>
               </span>
@@ -2676,6 +2713,8 @@ form label, form :deep(.category-icon-field) { margin-bottom: 13px; }
 .credit-tool-row { gap: 12px; flex-wrap: wrap; }
 .credit-tool-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .credit-tool-identity small { display: block; }
+.credit-logo-picker { display: flex; gap: 8px; align-items: center; }
+.credit-logo-picker select { flex: 1; min-width: 0; }
 @media (max-width: 560px) {
   .ledger-transaction { flex-wrap: wrap; }
   .ledger-transaction .rowacts { flex: 0 0 100%; flex-wrap: wrap; }

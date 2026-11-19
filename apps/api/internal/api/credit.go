@@ -114,12 +114,22 @@ func (a *API) refreshPendingStatementAmount(ctx context.Context, tx *sql.Tx, hou
 	return err
 }
 
+func validCreditLogo(key string) bool {
+	switch key {
+	case "", "generic", "spdb", "ceb", "cmb", "citic":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *API) handleCreateInstrument(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
 		Kind             string  `json:"kind"`
 		Name             string  `json:"name"`
 		Issuer           *string `json:"issuer"`
+		LogoKey          string  `json:"logo_key"`
 		CreditLimitMinor *int64  `json:"credit_limit_minor"`
 		CycleStartDay    int     `json:"cycle_start_day"`
 		CycleEndDay      int     `json:"cycle_end_day"`
@@ -127,7 +137,7 @@ func (a *API) handleCreateInstrument(w http.ResponseWriter, r *http.Request) {
 		DueMonthOffset   int     `json:"due_month_offset"`
 		Note             *string `json:"note"`
 	}
-	if err := decode(r, &in); err != nil || in.Name == "" {
+	if err := decode(r, &in); err != nil || in.Name == "" || !validCreditLogo(in.LogoKey) {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
@@ -158,10 +168,10 @@ func (a *API) handleCreateInstrument(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.Context(), `
 			INSERT INTO credit_instruments(id,household_id,kind,name,issuer,credit_limit_minor,
-			  cycle_start_day,cycle_end_day,due_day,due_month_offset,ledger_code,note)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			  cycle_start_day,cycle_end_day,due_day,due_month_offset,ledger_code,note,logo_key)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, p.HouseholdID, in.Kind, in.Name, in.Issuer, in.CreditLimitMinor,
-			in.CycleStartDay, in.CycleEndDay, in.DueDay, in.DueMonthOffset, code, in.Note); err != nil {
+			in.CycleStartDay, in.CycleEndDay, in.DueDay, in.DueMonthOffset, code, in.Note, in.LogoKey); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(r.Context(),
@@ -179,7 +189,7 @@ func (a *API) handleCreateInstrument(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id,kind,name,issuer,credit_limit_minor,cycle_start_day,cycle_end_day,due_day,due_month_offset,ledger_code,status
+		`SELECT id,kind,name,issuer,credit_limit_minor,cycle_start_day,cycle_end_day,due_day,due_month_offset,ledger_code,status,logo_key,note
 		 FROM credit_instruments WHERE household_id=? AND status<>'deleted' ORDER BY created_at`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
@@ -188,13 +198,15 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 	type instrumentRow struct {
 		id, kind, name, code, status string
 		issuer                       *string
+		logo                         string
+		note                         *string
 		limit                        *int64
 		sd, ed, dd, off              int
 	}
 	var list []instrumentRow
 	for rows.Next() {
 		var v instrumentRow
-		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.issuer, &v.limit, &v.sd, &v.ed, &v.dd, &v.off, &v.code, &v.status); err != nil {
+		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.issuer, &v.limit, &v.sd, &v.ed, &v.dd, &v.off, &v.code, &v.status, &v.logo, &v.note); err != nil {
 			_ = rows.Close()
 			internalErr(w, err)
 			return
@@ -216,6 +228,7 @@ func (a *API) handleListInstruments(w http.ResponseWriter, r *http.Request) {
 			"id": v.id, "kind": v.kind, "name": v.name, "issuer": v.issuer, "credit_limit_minor": v.limit,
 			"cycle_start_day": v.sd, "cycle_end_day": v.ed, "due_day": v.dd, "due_month_offset": v.off,
 			"status": v.status, "outstanding_minor": -bal,
+			"logo_key": v.logo, "note": v.note,
 		}
 		// V0.1.1: used/available/usage are derived from the posted journal, not a
 		// cached balance. An unconfigured limit never produces a fake percentage.

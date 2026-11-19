@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Landmark, TrendingUp, Wallet } from 'lucide-vue-next'
-import { accountBrand } from '../services/accountBrand'
+import { accountBrand, creditBankMarks } from '../services/accountBrand'
 
-const props = defineProps<{ name: string; subtype?: string | null; kind?: string; markOnly?: boolean }>()
-const brand = computed(() => accountBrand(props.subtype, props.name, props.kind === 'huabei' ? 'alipay' : props.kind))
+const props = defineProps<{ name: string; subtype?: string | null; kind?: string; markOnly?: boolean; logoKey?: string }>()
+const brand = computed(() => props.logoKey || accountBrand(props.subtype, props.name, props.kind === 'huabei' ? 'alipay' : props.kind))
 const artwork = computed(() => {
   if (!props.markOnly) return brand.value
-  return brand.value === 'ceb' || brand.value === 'spdb' ? brand.value + '-mark' : null
+  return creditBankMarks.some(mark => mark.id === brand.value) ? brand.value + '-mark' : null
 })
 </script>
 
