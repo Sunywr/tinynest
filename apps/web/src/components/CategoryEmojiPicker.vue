@@ -59,9 +59,9 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
       <summary :aria-labelledby="labelId">
         <CategoryIcon v-if="emoji" :value="emoji" />
         <span v-else class="unset">未设置</span>
-        <span class="icon-caret" aria-hidden="true">▾</span>
+        <span class="icon-caret select-caret" aria-hidden="true">▾</span>
       </summary>
-      <div class="emoji-popover" :class="{ above: opensAbove }">
+      <div class="emoji-popover select-popover" :class="{ above: opensAbove }">
         <input v-model="query" class="icon-search" type="search" aria-label="搜索图标"
           placeholder="搜索图标" @keydown.enter.prevent />
         <div class="emoji-groups" role="group" aria-label="选择分类图标">
@@ -89,7 +89,8 @@ summary::-webkit-details-marker { display: none; }
 .icon-caret { color: var(--primary-deep); font-size: 12px; }
 details[open] .icon-caret { transform: rotate(180deg); }
 .emoji-popover { position: absolute; z-index: 60; inset-inline: 0; top: calc(100% + 6px); padding: 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); box-shadow: 0 14px 34px rgba(120, 90, 70, .20); }
-.emoji-popover.above { top: auto; bottom: calc(100% + 6px); }
+.emoji-picker:not([open]) .emoji-popover { animation: none; }
+.emoji-popover.above { top: auto; bottom: calc(100% + 6px); --select-popover-offset: 6px; }
 .icon-search { width: 100%; border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; background: var(--soft); color: var(--text); font: inherit; font-size: 16px; }
 .emoji-groups { max-height: min(238px, 32dvh); overflow-y: auto; padding: 0 3px 3px; }
 .icon-group-name { margin: 9px 0 5px; color: var(--muted); font-size: 12px; }

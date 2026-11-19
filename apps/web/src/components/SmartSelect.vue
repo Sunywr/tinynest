@@ -110,9 +110,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       <CategoryIcon v-if="selected?.emoji" class="ss-emoji" :value="selected.emoji" />
       <span class="ss-value">{{ selectedName || placeholder || '请选择' }}</span>
       <span v-if="selected?.badge" class="ss-badge" :class="{ income: selected.badge === '收入' }">{{ selected.badge }}</span>
-      <span class="ss-caret">▾</span>
+      <span class="ss-caret select-caret">▾</span>
     </button>
-    <div v-if="isOpen" class="ss-dropdown">
+    <div v-if="isOpen" class="ss-dropdown select-popover">
       <input ref="searchInput" v-model="query" class="ss-search" type="text"
         :placeholder="placeholder || '搜索…'" @input="onInput"
         @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)"
@@ -152,15 +152,14 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 .ss-badge.income { background: #e7f0e0; color: #426242; }
 .ss-trigger:disabled { opacity: .55; cursor: not-allowed; }
 .ss-trigger.placeholder .ss-value { color: #9a8f86; }
-.ss-caret { color: var(--primary-deep); font-size: 12px; transition: transform .16s ease; }
+.ss-caret { color: var(--primary-deep); font-size: 12px; }
 .smart-select.open .ss-caret { transform: rotate(180deg); }
 .ss-dropdown {
   position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60;
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
   box-shadow: 0 14px 34px rgba(120, 90, 70, .20); padding: 6px; max-height: 290px;
-  display: flex; flex-direction: column; overflow: hidden; animation: ss-pop .16s ease both;
+  display: flex; flex-direction: column; overflow: hidden;
 }
-@keyframes ss-pop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .ss-search {
   width: 100%; min-height: 38px; margin-bottom: 6px; padding: 8px 10px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
@@ -179,5 +178,4 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 .ss-create { color: var(--primary-deep); font-weight: 600; }
 .ss-create .ss-plus { font-size: 16px; }
 .ss-empty { padding: 12px; color: #9a8f86; text-align: center; font-size: 14px; }
-@media (prefers-reduced-motion: reduce) { .ss-dropdown { animation: none; } .ss-caret { transition: none; } }
 </style>

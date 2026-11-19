@@ -134,3 +134,17 @@ body.dialog-open{overflow:hidden;}
  .sidebar .brand, .sidebar .navlabel { display:none; }
  .sidebar .nav button { padding:5px 12px; }
 }
+
+/* Shared motion for selectable popovers and their disclosure carets. */
+.select-caret { transition: transform .16s ease; }
+.select-popover { animation: select-pop .16s ease both; }
+
+@keyframes select-pop {
+  from { opacity: 0; transform: translateY(var(--select-popover-offset, -6px)); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select-caret { transition: none; }
+  .select-popover { animation: none; }
+}
