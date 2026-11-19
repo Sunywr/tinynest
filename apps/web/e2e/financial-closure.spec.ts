@@ -97,6 +97,25 @@ test('01 受控初始化：公开页无初始化入口，运维 API 单次创建
   expect(again.status()).toBe(409)
 })
 
+test('信用账单显示邮箱入口并说明管理员权限', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '信用账单' }).click()
+  await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
+  await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
+
+  await page.route('**/api/v1/auth/me', async route => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...await response.json(), role: 'member' } })
+  })
+  await page.reload()
+  await page.getByRole('button', { name: '信用账单' }).click()
+  await page.getByRole('button', { name: '账单邮箱', exact: true }).click({ timeout: 2000 })
+  await expect(page.getByText('请由家庭管理员配置账单邮箱。')).toBeVisible()
+  await expect(page.getByLabel('IMAP 主机（TLS 993）')).toHaveCount(0)
+  await page.getByRole('button', { name: '返回列表' }).click()
+  await expect(page.getByRole('heading', { name: '信用工具' })).toBeVisible()
+})
+
 test('02 登录', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: '家的每一笔，都值得被温柔记录。' })).toBeVisible()

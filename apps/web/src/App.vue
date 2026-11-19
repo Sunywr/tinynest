@@ -1982,11 +1982,18 @@ const metricCards = computed(() => {
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('create')">＋ 新增信用工具</button>
             <button v-if="canWrite" type="button" class="ghost" @click="openPanel('pay')">账单还款</button>
             <button type="button" class="ghost" @click="openArchivedStatements()">已归档账单</button>
-            <button v-if="me?.role === 'admin'" type="button" class="ghost" @click="openPanel('creditMail')">账单邮箱</button>
+            <button type="button" class="ghost" @click="openPanel('creditMail')">账单邮箱</button>
           </div>
           <CreditMailSettings v-if="panel === 'creditMail' && me?.role === 'admin'"
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active')"
             :categories="expenseCategories" @close="closePanel()" />
+          <section v-else-if="panel === 'creditMail'" class="panel formpanel">
+            <div class="paneltitle">
+              <h2>账单邮箱</h2>
+              <button type="button" class="ghost" @click="closePanel()">返回列表</button>
+            </div>
+            <p>请由家庭管理员配置账单邮箱。</p>
+          </section>
           <form v-if="panel === 'create'" class="panel formpanel" @submit.prevent="createCredit">
             <div class="paneltitle"><div><h2>新增信用工具</h2><span class="subinfo">支持 28/29/30/31 月末规则</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
