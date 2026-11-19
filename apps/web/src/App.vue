@@ -129,13 +129,25 @@ const categoryEdit = ref<{ id: string; name: string; sort: number; active: boole
 const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense' && c.active === 1))
 const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income' && c.active === 1))
 
+const defaultCategoryEmoji = new Map([
+  ['饮食', '🍙'], ['零食', '🍓'], ['运动', '🏸'], ['服饰', '🎀'], ['交通', '🚃'],
+  ['生活', '🧺'], ['家具', '🏠'], ['玩具', '🧸'], ['游戏', '🎮'], ['娱乐', '🎨'],
+  ['教育', '📚'], ['育儿', '🐰'], ['工作', '💼'], ['旅行', '🧳'], ['住房', '🏠'],
+  ['汽车', '🚗'], ['工资', '💼'], ['报销', '💌'], ['红包', '🎁'], ['利息', '🪙'],
+  ['投资分红', '💰'],
+])
+
+function categoryEmoji(category: { name: string; kind: string; emoji?: string }) {
+  return category.emoji || defaultCategoryEmoji.get(category.name) || (category.kind === 'income' ? '🪙' : '🧺')
+}
+
 // —— 记账表单：关联项的可搜索 + 可即时新建选项 ——
 const txCategoryOptions = computed(() => {
-  const base = (f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value).map(c => ({ id: c.id, name: c.name, emoji: c.emoji }))
+  const base = (f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value).map(c => ({ id: c.id, name: c.name, emoji: categoryEmoji(c) }))
   const cur = f.tx.category_id
   if (cur) {
     const sel = categories.value.find(c => c.id === cur)
-    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: sel.name + '（已停用）', emoji: sel.emoji })
+    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: sel.name + '（已停用）', emoji: categoryEmoji(sel) })
   }
   return base
 })
