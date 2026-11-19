@@ -79,20 +79,20 @@ function saveBinding() {
 </script>
 
 <template>
-  <section class="panel formpanel">
+  <section class="panel formpanel credit-mail-settings">
     <div class="paneltitle">
       <h2>账单邮箱</h2>
       <button type="button" class="ghost" @click="$emit('close')">返回列表</button>
     </div>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="notice" role="status">{{ notice }}</p>
+    <p v-if="error" class="err" role="alert">{{ error }}</p>
+    <p v-if="notice" class="subinfo" role="status">{{ notice }}</p>
     <button v-if="!loaded && !busy" type="button" class="ghost" @click="run(load)">重试</button>
     <p v-if="loaded && !keyReady" role="status">服务器尚未配置账单邮箱加密密钥。</p>
     <template v-if="loaded">
       <form @submit.prevent="saveMailbox()">
         <fieldset :disabled="busy">
           <legend>{{ box.id ? '编辑邮箱' : '新增邮箱' }}</legend>
-          <div class="actions-bar">
+          <div v-if="boxes.length" class="actions-bar">
             <button type="button" class="ghost" @click="edit()">新增邮箱</button>
             <button v-for="item in boxes" :key="item.id" type="button" class="ghost" @click="edit(item)">
               {{ item.username }} · {{ item.enabled ? '已启用' : '已停用' }}
@@ -106,7 +106,7 @@ function saveBinding() {
           </div>
           <p v-if="box.tested_at">上次连接通过 {{ new Date(box.tested_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
           <div class="actions-bar">
-            <button type="submit" :disabled="!keyReady">测试并保存</button>
+            <button class="primary" type="submit" :disabled="!keyReady">测试并保存</button>
             <button v-if="box.id && box.enabled" type="button" class="ghost" @click="saveMailbox(false)">停用邮箱</button>
           </div>
         </fieldset>
@@ -129,7 +129,7 @@ function saveBinding() {
               </select></label>
             </template>
           </div>
-          <div class="actions-bar"><button type="submit" :disabled="!binding.instrument_id">保存绑定</button></div>
+          <button class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
         </fieldset>
       </form>
     </template>
@@ -139,5 +139,7 @@ function saveBinding() {
 <style scoped>
 fieldset { min-width: 0; border: 0; margin: 0 0 1rem; padding: 0; }
 legend { font-weight: 700; padding: 0; }
-.actions-bar { flex-wrap: wrap; }
+form + form { padding-top: 18px; border-top: 1px solid var(--border); }
+.actions-bar button { max-width: 100%; overflow-wrap: anywhere; }
+.actions-bar .primary { width: auto; margin-top: 0; }
 </style>

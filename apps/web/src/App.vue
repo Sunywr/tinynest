@@ -2543,15 +2543,15 @@ const metricCards = computed(() => {
 .authtabs { display: flex; gap: 6px; background: var(--soft); padding: 4px; border-radius: 12px; margin-bottom: 18px; }
 .authtabs button { flex: 1; border: 0; background: transparent; padding: 9px; border-radius: 9px; font-size: 12px; color: var(--muted); }
 .authtabs button.active { background: var(--card); color: var(--primary-deep); font-weight: 700; }
-form label, .formgrid label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
-input, select { font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; width: 100%; }
-input:focus-visible, select:focus-visible { outline: 3px solid var(--primary); outline-offset: 1px; }
+form label, .formgrid label, .credit-mail-settings :deep(form label) { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+input, select, .credit-mail-settings :deep(input), .credit-mail-settings :deep(select) { font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; width: 100%; }
+input:focus-visible, select:focus-visible, .credit-mail-settings :deep(:is(input, select):focus-visible) { outline: 3px solid var(--primary); outline-offset: 1px; }
 form label { margin-bottom: 13px; }
-.primary { width: 100%; border: 0; background: var(--primary); color: #fff; border-radius: 12px; padding: 12px; font-weight: 700; font-size: 13px; margin-top: 6px; }
-.primary:disabled { opacity: .55; }
-.ghost { border: 1px solid var(--border); background: var(--soft); color: var(--primary-deep); border-radius: 10px; padding: 8px 12px; font-size: 12px; }
+.primary, .credit-mail-settings :deep(.primary) { width: 100%; border: 0; background: var(--primary); color: #fff; border-radius: 12px; padding: 12px; font-weight: 700; font-size: 13px; margin-top: 6px; }
+.primary:disabled, .credit-mail-settings :deep(.primary:disabled) { opacity: .55; }
+.ghost, .credit-mail-settings :deep(.ghost) { border: 1px solid var(--border); background: var(--soft); color: var(--primary-deep); border-radius: 10px; padding: 8px 12px; font-size: 12px; }
 .ghost + .ghost { margin-left: 8px; }
-.err { color: #b4493f; font-size: 12px; margin: 0 0 10px; }
+.err, .credit-mail-settings :deep(.err) { color: #b4493f; font-size: 12px; margin: 0 0 10px; }
 .authhint { font-size: 11px; color: var(--muted); text-align: center; margin: 16px 0 0; line-height: 1.6; }
 .rangebar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 18px; }
 .rangebar label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--muted); }
@@ -2559,10 +2559,10 @@ form label { margin-bottom: 13px; }
 .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .metrics .statamount { font-size: 20px; }
 .formpanel { margin-bottom: 18px; }
-.actions-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.actions-bar, .credit-mail-settings :deep(.actions-bar) { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
 .actions-bar .ghost { padding: 11px 18px; font-size: 15px; }
 .quick-entry { width: auto; align-self: center; white-space: nowrap; }
-.formgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 16px 0; }
+.formgrid, .credit-mail-settings :deep(.formgrid) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 16px 0; }
 .tx-primary-fields, .tx-extra-fields { display: grid; gap: 12px; margin-block: 16px; }
 .tx-primary-fields {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2649,8 +2649,8 @@ form label { margin-bottom: 13px; }
   .ledger-transaction .rowacts { flex: 0 0 100%; flex-wrap: wrap; }
   .ledger-transaction .rowacts .ghost { min-height: 36px; }
 }
-@media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .formgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px) { .formgrid { grid-template-columns: 1fr; } .rankrow { flex-direction: column; align-items: flex-start; gap: 4px; } .rowacts { margin-left: 0; } }
+@media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .formgrid, .credit-mail-settings :deep(.formgrid) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .formgrid, .credit-mail-settings :deep(.formgrid) { grid-template-columns: 1fr; } .rankrow { flex-direction: column; align-items: flex-start; gap: 4px; } .rowacts { margin-left: 0; } }
 
 /* ---------- Public landing (A · Cream Mochi) ---------- */
 .stage.landing-stage{padding:0;background:var(--bg);min-height:100dvh;}
@@ -2788,9 +2788,9 @@ form label { margin-bottom: 13px; }
 .website .greeting p, .website .rankrow, .website .txname,
 .website .txamount, .website .nav button { font-size: 15px; }
 .website .statlabel, .website .subinfo, .website .txcat { font-size: 13px; }
-form label, .formgrid label { font-size: 14px; }
-input, select { font-size: 16px; min-height: 44px; }
-.website .primary, .website .ghost, .login-dialog .btn-primary {
+form label, .formgrid label, .credit-mail-settings :deep(form label) { font-size: 14px; }
+input, select, .credit-mail-settings :deep(input), .credit-mail-settings :deep(select) { font-size: 16px; min-height: 44px; }
+.website .primary, .website .ghost, .login-dialog .btn-primary, .credit-mail-settings :deep(:is(.primary, .ghost)) {
   font-size: 15px;
   min-height: 44px;
 }

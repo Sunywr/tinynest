@@ -102,6 +102,16 @@ test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page 
   await page.getByRole('button', { name: '信用账单' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
+  const mailPanel = page.locator('section.panel', { has: page.getByRole('heading', { name: '账单邮箱', exact: true }) })
+  const host = mailPanel.getByLabel('IMAP 主机（TLS 993）')
+  await expect(host).toHaveCSS('border-radius', '11px')
+  await expect(mailPanel.getByRole('combobox', { name: /^信用卡/ })).toHaveCSS('min-height', '44px')
+  await expect(mailPanel.getByRole('button', { name: '返回列表' })).toHaveCSS('border-radius', '10px')
+  await expect(mailPanel.locator('.formgrid').first()).toHaveCSS('display', 'grid')
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await mailPanel.locator('.formgrid').first().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(1)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.setViewportSize({ width: 1280, height: 720 })
 
   let role = 'member'
   await page.route('**/api/v1/auth/me', async route => {
