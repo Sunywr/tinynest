@@ -1,9 +1,46 @@
 package api
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"net/netip"
 	"testing"
+	"time"
 )
+
+func TestCreditIMAPIdentifiesClientBeforeExaminingFolder(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+		fmt.Fprint(server, "* OK ready\r\n")
+		for _, step := range []struct{ command, reply string }{
+			{`A001 LOGIN "user" "secret"`, "A001 OK login\r\n"},
+			{"A002 CAPABILITY", "* CAPABILITY IMAP4rev1 ID\r\nA002 OK capability\r\n"},
+			{`A003 ID ("name" "TinyNest" "version" "1.0" "vendor" "TinyNest")`, "* ID NIL\r\nA003 OK identified\r\n"},
+			{`A004 EXAMINE "INBOX"`, "A004 OK [READ-ONLY] opened\r\n"},
+		} {
+			line, err := reader.ReadString('\n')
+			if err != nil || line != step.command+"\r\n" {
+				done <- fmt.Errorf("expected %q, got %q (%v)", step.command, line, err)
+				server.Close()
+				return
+			}
+			fmt.Fprint(server, step.reply)
+		}
+		done <- nil
+	}()
+	if err := probeCreditIMAPSession(client, `"user"`, `"secret"`, `"INBOX"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestPublicIMAPAddress(t *testing.T) {
 	tests := map[string]bool{

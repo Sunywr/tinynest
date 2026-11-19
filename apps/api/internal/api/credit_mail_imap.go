@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"strings"
@@ -134,12 +135,16 @@ func probeCreditIMAP(ctx context.Context, host, username, password, folder strin
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 
+	return probeCreditIMAPSession(conn, user, secret, mailbox)
+}
+
+func probeCreditIMAPSession(conn io.ReadWriter, user, secret, mailbox string) error {
 	reader := bufio.NewReaderSize(conn, 16*1024)
 	greeting, err := reader.ReadSlice('\n')
 	if err != nil || !strings.HasPrefix(strings.ToUpper(string(greeting)), "* OK ") {
 		return errors.New("invalid IMAP greeting")
 	}
-	command := func(tag, value string) bool {
+	command := func(tag, value string, observe func(string)) bool {
 		if _, err := fmt.Fprintf(conn, "%s %s\r\n", tag, value); err != nil {
 			return false
 		}
@@ -154,14 +159,37 @@ func probeCreditIMAP(ctx context.Context, host, username, password, folder strin
 			if !strings.HasPrefix(string(line), "* ") {
 				return false
 			}
+			if observe != nil {
+				observe(string(line))
+			}
 		}
 		return false
 	}
-	if !command("A001", "LOGIN "+user+" "+secret) {
-		return errors.New("IMAP authentication failed")
+	if !command("A001", "LOGIN "+user+" "+secret, nil) {
+		return errCreditIMAPAuth
 	}
-	if !command("A002", "EXAMINE "+mailbox) {
-		return errors.New("IMAP folder access failed")
+	supportsID := false
+	if !command("A002", "CAPABILITY", func(line string) {
+		fields := strings.Fields(strings.ToUpper(line))
+		if len(fields) > 2 && fields[1] == "CAPABILITY" {
+			for _, field := range fields[2:] {
+				supportsID = supportsID || field == "ID"
+			}
+		}
+	}) {
+		return errors.New("IMAP capability check failed")
+	}
+	if supportsID && !command("A003", `ID ("name" "TinyNest" "version" "1.0" "vendor" "TinyNest")`, nil) {
+		return errCreditIMAPIdentity
+	}
+	if !command("A004", "EXAMINE "+mailbox, nil) {
+		return errCreditIMAPFolder
 	}
 	return nil
 }
+
+var (
+	errCreditIMAPAuth     = errors.New("IMAP authentication failed")
+	errCreditIMAPIdentity = errors.New("IMAP client identification failed")
+	errCreditIMAPFolder   = errors.New("IMAP folder access failed")
+)

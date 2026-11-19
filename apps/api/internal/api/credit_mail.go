@@ -187,7 +187,16 @@ func (a *API) saveCreditMailbox(w http.ResponseWriter, r *http.Request) {
 			probe = probeCreditIMAP
 		}
 		if err := probe(ctx, in.Host, in.Username, password, in.Folder); err != nil {
-			writeErr(w, 502, "imap_test_failed", "IMAP 测试失败，请检查服务器、授权码和文件夹（TLS 993）")
+			message := "IMAP 测试失败，请检查服务器地址和 TLS 993 连通性"
+			switch {
+			case errors.Is(err, errCreditIMAPAuth):
+				message = "IMAP 登录失败，请检查邮箱账号、客户端授权码及邮箱是否已启用 IMAP"
+			case errors.Is(err, errCreditIMAPIdentity):
+				message = "IMAP 登录成功，但服务器拒绝了客户端身份声明"
+			case errors.Is(err, errCreditIMAPFolder):
+				message = "IMAP 登录成功，但无法打开所选邮件文件夹"
+			}
+			writeErr(w, 502, "imap_test_failed", message)
 			return
 		}
 		var err error
