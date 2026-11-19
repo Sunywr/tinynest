@@ -10,7 +10,8 @@ const emit = defineEmits<{ (e: 'create', q: string): void }>()
 
 const root = ref<HTMLElement>()
 const displayValue = ref('')
-const options = ref<{ id: string; name: string }[]>([])
+type Option = { id: string; name: string; emoji?: string; badge?: string }
+const options = ref<Option[]>([])
 const placeholder = ref('请选择')
 let observer: MutationObserver | null = null
 
@@ -27,18 +28,18 @@ function trapProp(sel: HTMLSelectElement, prop: string) {
 function getSelect(): HTMLSelectElement | null {
   return (root.value?.querySelector('select')) as HTMLSelectElement | null
 }
-function sameOptions(a: { id: string; name: string }[], b: { id: string; name: string }[]) {
-  return a.length === b.length && a.every((o, i) => o.id === b[i].id && o.name === b[i].name)
+function sameOptions(a: Option[], b: Option[]) {
+  return a.length === b.length && a.every((o, i) => o.id === b[i].id && o.name === b[i].name && o.emoji === b[i].emoji && o.badge === b[i].badge)
 }
 function syncOptions() {
   const sel = getSelect()
   if (!sel) return
-  const opts: { id: string; name: string }[] = []
+  const opts: Option[] = []
   let ph = ''
   for (const o of Array.from(sel.options)) {
     const val = (o.value ?? '').toString()
     if (val === '') { if (!ph) ph = o.text.trim(); continue }
-    opts.push({ id: val, name: o.text.trim() })
+    opts.push({ id: val, name: o.text.trim(), emoji: o.dataset.emoji, badge: o.dataset.badge })
   }
   // Skip unchanged writes: Vue re-invokes this slot on every SmartSelect
   // re-render and unconditionally re-sets each option's value attribute;
@@ -73,7 +74,7 @@ onMounted(() => {
   // ATTRIBUTE mutations are intentionally ignored: Vue re-sets them on every
   // slot re-invocation, and observing them creates a render↔observer loop.
   observer = new MutationObserver(() => { syncOptions(); syncValue() })
-  observer.observe(sel, { childList: true, subtree: true, characterData: true })
+  observer.observe(sel, { childList: true, subtree: true, characterData: true, attributeFilter: ['data-emoji', 'data-badge'] })
   syncOptions()
   syncValue()
 })

@@ -5,7 +5,7 @@ import { activeOpenId, nextUid } from './dropdownState'
 // 模块级共享状态：保证全站任意时刻只有一个下拉浮层展开（互斥）。
 const uid = nextUid()
 
-interface Option { id: string; name: string; hint?: string }
+interface Option { id: string; name: string; hint?: string; emoji?: string; badge?: string }
 const props = defineProps<{
   modelValue: string
   options: Option[]
@@ -25,10 +25,8 @@ const root = ref<HTMLElement>()
 const searchInput = ref<HTMLInputElement>()
 const highlighted = ref(0)
 
-const selectedName = computed(() => {
-  const found = props.options.find(o => o.id === props.modelValue)
-  return found ? found.name : ''
-})
+const selected = computed(() => props.options.find(o => o.id === props.modelValue))
+const selectedName = computed(() => selected.value?.name ?? '')
 
 const filtered = computed(() => {
   const kw = query.value.trim().toLocaleLowerCase()
@@ -108,7 +106,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   <div ref="root" class="smart-select" :class="{ open: isOpen }">
     <button type="button" class="ss-trigger" :class="{ placeholder: !selectedName }"
       :disabled="disabled" @click.stop="toggle()">
+      <span v-if="selected?.emoji" class="ss-emoji" aria-hidden="true">{{ selected.emoji }}</span>
       <span class="ss-value">{{ selectedName || placeholder || '请选择' }}</span>
+      <span v-if="selected?.badge" class="ss-badge" :class="{ income: selected.badge === '收入' }">{{ selected.badge }}</span>
       <span class="ss-caret">▾</span>
     </button>
     <div v-if="isOpen" class="ss-dropdown">
@@ -122,7 +122,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           <li v-if="r.kind === 'option'" class="ss-option" :class="{ hl: i === highlighted, sel: r.option.id === modelValue }"
             role="option" :aria-selected="r.option.id === modelValue"
             @mouseenter="highlighted = i" @mousedown.prevent="selectOption(r.option)">
+            <span v-if="r.option.emoji" class="ss-emoji" aria-hidden="true">{{ r.option.emoji }}</span>
             <span class="ss-name">{{ r.option.name }}</span>
+            <span v-if="r.option.badge" class="ss-badge" :class="{ income: r.option.badge === '收入' }">{{ r.option.badge }}</span>
             <span v-if="r.option.hint" class="ss-hint">{{ r.option.hint }}</span>
             <span v-if="r.option.id === modelValue" class="ss-check">✓</span>
           </li>
@@ -143,6 +145,10 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   padding: 8px 12px; border: 1px solid var(--border); border-radius: 11px;
   background: var(--card); color: var(--text); font: inherit; font-size: 16px; cursor: pointer; text-align: left;
 }
+.ss-trigger .ss-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-emoji { flex: none; font-size: 19px; }
+.ss-badge { flex: none; padding: 2px 8px; border-radius: 999px; background: #f9e8df; color: #944d3c; font-size: 12px; }
+.ss-badge.income { background: #e7f0e0; color: #426242; }
 .ss-trigger:disabled { opacity: .55; cursor: not-allowed; }
 .ss-trigger.placeholder .ss-value { color: #9a8f86; }
 .ss-caret { color: var(--primary-deep); font-size: 12px; transition: transform .16s ease; }

@@ -5,6 +5,7 @@ import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiErr
 import AccountIcon from './components/AccountIcon.vue'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
+import CategoryEmojiPicker from './components/CategoryEmojiPicker.vue'
 import DatePicker from './components/DatePicker.vue'
 import MailSettings from './components/MailSettings.vue'
 import CreditMailSettings from './components/CreditMailSettings.vue'
@@ -123,18 +124,18 @@ const feePreview = ref<any>(null)
 const netWorth = ref<any>(null)
 const dividendHistory = ref<any>(null)
 
-const categoryDraft = reactive({ name: '', kind: 'expense' })
-const categoryEdit = ref<{ id: string; name: string; sort: number; active: boolean } | null>(null)
+const categoryDraft = reactive({ name: '', kind: 'expense', emoji: '' })
+const categoryEdit = ref<{ id: string; name: string; sort: number; active: boolean; emoji: string } | null>(null)
 const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense' && c.active === 1))
 const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income' && c.active === 1))
 
 // —— 记账表单：关联项的可搜索 + 可即时新建选项 ——
 const txCategoryOptions = computed(() => {
-  const base = (f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value).map(c => ({ id: c.id, name: c.name }))
+  const base = (f.tx.type === 'income' ? incomeCategories.value : expenseCategories.value).map(c => ({ id: c.id, name: c.name, emoji: c.emoji }))
   const cur = f.tx.category_id
   if (cur) {
     const sel = categories.value.find(c => c.id === cur)
-    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: sel.name + '（已停用）' })
+    if (sel && !base.some(o => o.id === cur)) base.unshift({ id: sel.id, name: sel.name + '（已停用）', emoji: sel.emoji })
   }
   return base
 })
@@ -186,6 +187,7 @@ type CreateEntity = 'category' | 'project' | 'member' | 'account' | 'instrument'
 const createModal = reactive({
   open: false,
   entity: '' as CreateEntity,
+  emoji: '',
   name: '',
   accountKind: 'cash',
   instrumentKind: 'credit_card',
@@ -202,6 +204,7 @@ function openCreate(entity: CreateEntity, suggestedName: string, onCreated: (id:
   createDone = onCreated
   createModal.entity = entity
   createModal.name = suggestedName
+  createModal.emoji = ''
   createModal.accountKind = 'cash'
   createModal.instrumentKind = 'credit_card'
   createModal.assetCode = ''
@@ -249,7 +252,7 @@ async function confirmCreate() {
   try {
     let id = ''
     if (createModal.entity === 'category') {
-      const r: any = await api.createCategory({ name, kind: createModal.meta.kind || (f.tx.type === 'income' ? 'income' : 'expense') })
+      const r: any = await api.createCategory({ name, emoji: createModal.emoji, kind: createModal.meta.kind || (f.tx.type === 'income' ? 'income' : 'expense') })
       id = r.id
     } else if (createModal.entity === 'project') {
       const r: any = await api.createProject(name); id = r.id
@@ -339,7 +342,7 @@ function clearPrivateState() {
   users.value = [];
   household.value = null; members.value = []; memberName.value = ''; selectedMember.value = ''; memberResolving.value = false
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
-  Object.assign(categoryDraft, { name: '', kind: 'expense' })
+  Object.assign(categoryDraft, { name: '', kind: 'expense', emoji: '' })
   creditInstruments.value = []; statements.value = []; installments.value = []
   paymentHistory.value = null; paymentHistoryLoading.value = false
   archivedStatements.value = null; archivedStatementsLoading.value = false
@@ -685,7 +688,7 @@ function selectCategory(event: Event) {
   const id = (event.target as HTMLSelectElement).value
   const category = categories.value.find(c => c.id === id)
   categoryEdit.value = category
-    ? { id, name: category.name, sort: category.sort, active: category.active === 1 }
+    ? { id, name: category.name, sort: category.sort, active: category.active === 1, emoji: category.emoji ?? '' }
     : null
 }
 
@@ -693,8 +696,9 @@ async function addCategory() {
   const name = categoryDraft.name.trim()
   if (!name || loading.value) return
   await run(async () => {
-    await api.createCategory({ name, kind: categoryDraft.kind })
+    await api.createCategory({ name, kind: categoryDraft.kind, emoji: categoryDraft.emoji })
     categoryDraft.name = ''
+    categoryDraft.emoji = ''
   }, '分类已新增')
 }
 
@@ -720,9 +724,9 @@ function deleteCategory() {
 async function saveCategory() {
   const category = categoryEdit.value
   if (loading.value || !category || !category.name.trim() || !Number.isInteger(category.sort)) return
-  const { id, name, sort, active } = category
+  const { id, name, sort, active, emoji } = category
   await run(async () => {
-    await api.updateCategory(id, { name, sort, active })
+    await api.updateCategory(id, { name, sort, active, emoji })
     if (!active && f.tx.category_id === id) f.tx.category_id = ''
     if (!active && f.installment.category_id === id) f.installment.category_id = ''
   }, '分类已更新')
@@ -1881,6 +1885,7 @@ const metricCards = computed(() => {
             <form @submit.prevent="addCategory">
               <div class="formgrid">
                 <label>新分类名称<input v-model="categoryDraft.name" required /></label>
+                <CategoryEmojiPicker v-model="categoryDraft.emoji" />
                 <label>分类方向<SearchableSelect><select v-model="categoryDraft.kind">
                   <option value="expense">支出</option><option value="income">收入</option>
                 </select></SearchableSelect></label>
@@ -1891,12 +1896,14 @@ const metricCards = computed(() => {
               <div class="formgrid">
                 <label>编辑分类<SearchableSelect><select :value="categoryEdit?.id ?? ''" @change="selectCategory">
                   <option value="">请选择</option>
-                  <option v-for="c in categories" :key="c.id" :value="c.id">
-                    {{ c.kind === 'income' ? '收入' : '支出' }} · {{ c.name }}{{ c.active ? '' : '（已停用）' }}
+                  <option v-for="c in categories" :key="c.id" :value="c.id" :data-emoji="c.emoji"
+                    :data-badge="c.kind === 'income' ? '收入' : '支出'">
+                    {{ c.name }}{{ c.active ? '' : '（已停用）' }}
                   </option>
                 </select></SearchableSelect></label>
                 <template v-if="categoryEdit">
                   <label>分类名称<input v-model="categoryEdit.name" required /></label>
+                  <CategoryEmojiPicker v-model="categoryEdit.emoji" />
                   <label>分类排序<input v-model.number="categoryEdit.sort" type="number" step="1" required /></label>
                   <label>分类状态<SearchableSelect><select v-model="categoryEdit.active">
                     <option :value="true">启用</option><option :value="false">停用</option>
@@ -2197,7 +2204,7 @@ const metricCards = computed(() => {
             <div class="formgrid">
               <label>名称<input v-model="f.installment.name" placeholder="如：客厅装修" /></label>
               <label>消费分类<SearchableSelect :allow-create="true" @create="(q) => openCreate('category', q, (id) => f.installment.category_id = id, { kind: 'expense' })"><select v-model="f.installment.category_id"><option value="">请选择</option>
-                <option v-for="c in expenseCategories" :key="c.id" :value="c.id">{{ c.name }}</option></select></SearchableSelect></label>
+                <option v-for="c in expenseCategories" :key="c.id" :value="c.id" :data-emoji="c.emoji">{{ c.name }}</option></select></SearchableSelect></label>
               <label>本金（元）<input v-model="f.installment.principal" inputmode="decimal" /></label>
               <label>总手续费（元）<input v-model="f.installment.fee" inputmode="decimal" /></label>
               <label>期数<input type="number" min="1" v-model.number="f.installment.periods" /></label>
@@ -2511,6 +2518,7 @@ const metricCards = computed(() => {
           <p class="confirm-msg">{{ createHint }}</p>
           <div class="formgrid" style="margin-top:8px">
             <label>名称<input v-model="createModal.name" :placeholder="createPlaceholder" /></label>
+            <CategoryEmojiPicker v-if="createModal.entity === 'category'" v-model="createModal.emoji" class="create-category-emoji" />
             <label v-if="createModal.entity === 'account'">类型
               <SmartSelect v-model="createModal.accountKind" :options="accountKindOptions" placeholder="请选择类型" />
             </label>
@@ -2754,6 +2762,7 @@ form label { margin-bottom: 13px; }
 /* ---------- Cute confirm dialog ---------- */
 .confirm-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(74,52,48,.30);backdrop-filter:blur(3px);}
 .confirm-card{width:100%;max-width:360px;background:var(--card);border:1px solid var(--border);border-radius:24px;padding:26px 24px 22px;text-align:center;box-shadow:0 22px 55px rgba(120,80,70,.28);}
+.create-category-emoji { grid-column: 1 / -1; text-align: start; }
 .confirm-card.danger{border-color:rgba(217,140,122,.5);}
 .confirm-emoji{font-size:34px;line-height:1;margin-bottom:8px;}
 .confirm-title{margin:0 0 8px;font-size:18px;color:var(--text);}

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"tinynest/api/internal/auth"
 	"tinynest/api/internal/db"
@@ -301,7 +303,7 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(),
-		`SELECT id, kind, name, sort, active FROM categories
+		`SELECT id, kind, name, sort, active, emoji FROM categories
 		 WHERE household_id=? AND active>=0 ORDER BY kind, sort, name`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
@@ -314,11 +316,12 @@ func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 		Name   string `json:"name"`
 		Sort   int    `json:"sort"`
 		Active int    `json:"active"`
+		Emoji  string `json:"emoji"`
 	}
 	out := []cat{}
 	for rows.Next() {
 		var c cat
-		if err := rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Sort, &c.Active); err != nil {
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Sort, &c.Active, &c.Emoji); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -327,10 +330,15 @@ func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"items": out, "total": len(out)})
 }
 
+func validCategoryEmoji(emoji string) bool {
+	return utf8.RuneCountInString(emoji) <= 16 && strings.IndexFunc(emoji, unicode.IsControl) < 0
+}
+
 func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
 		ParentID *string `json:"parent_id"`
+		Emoji    string  `json:"emoji"`
 		Kind     string  `json:"kind"`
 		Name     string  `json:"name"`
 	}
@@ -346,14 +354,18 @@ func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "分类不支持设置上级")
 		return
 	}
+	if !validCategoryEmoji(in.Emoji) {
+		writeErr(w, 400, "invalid_request", "分类表情格式不正确")
+		return
+	}
 	id := newID("cat")
-	_, err := a.DB.ExecContext(r.Context(), `INSERT INTO categories(id,household_id,kind,name) VALUES(?,?,?,?)`,
-		id, p.HouseholdID, in.Kind, in.Name)
+	_, err := a.DB.ExecContext(r.Context(), `INSERT INTO categories(id,household_id,kind,name,emoji) VALUES(?,?,?,?,?)`,
+		id, p.HouseholdID, in.Kind, in.Name, in.Emoji)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]string{"id": id, "name": in.Name, "kind": in.Kind})
+	writeJSON(w, 201, map[string]string{"id": id, "name": in.Name, "kind": in.Kind, "emoji": in.Emoji})
 }
 
 func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
@@ -362,8 +374,9 @@ func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 		Name   *string `json:"name"`
 		Sort   *int    `json:"sort"`
 		Active *bool   `json:"active"`
+		Emoji  *string `json:"emoji"`
 	}
-	if err := decode(r, &in); err != nil || (in.Name == nil && in.Sort == nil && in.Active == nil) {
+	if err := decode(r, &in); err != nil || (in.Name == nil && in.Sort == nil && in.Active == nil && in.Emoji == nil) {
 		writeErr(w, 400, "invalid_request", "请提供要更新的分类字段")
 		return
 	}
@@ -374,10 +387,14 @@ func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.Emoji != nil && !validCategoryEmoji(*in.Emoji) {
+		writeErr(w, 400, "invalid_request", "分类表情格式不正确")
+		return
+	}
 	id := r.PathValue("id")
 	result, err := a.DB.ExecContext(r.Context(),
-		`UPDATE categories SET name=COALESCE(?,name), sort=COALESCE(?,sort), active=COALESCE(?,active)
-		 WHERE id=? AND household_id=? AND active>=0`, in.Name, in.Sort, in.Active, id, p.HouseholdID)
+		`UPDATE categories SET name=COALESCE(?,name), sort=COALESCE(?,sort), active=COALESCE(?,active), emoji=COALESCE(?,emoji)
+		 WHERE id=? AND household_id=? AND active>=0`, in.Name, in.Sort, in.Active, in.Emoji, id, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return

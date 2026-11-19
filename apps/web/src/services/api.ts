@@ -87,7 +87,7 @@ export const api = {
   categories: () => get('/categories'),
   createCategory: (body: any) => post('/categories', body),
   deleteCategory: (id: string) => request(`/categories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  updateCategory: (id: string, body: { name: string; sort: number; active: boolean }) =>
+  updateCategory: (id: string, body: { name: string; sort: number; active: boolean; emoji?: string }) =>
     request(`/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   projects: () => get('/projects'),
   createProject: (name: string) => post('/projects', { name }),

@@ -60,8 +60,8 @@
 
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（单层，新增仅需 `name` 和 `kind`） |
-| PATCH | `/categories/{id}` | IMPLEMENTED | 传入任一字段：`name`（非空）、`sort`（整数）、`active`（布尔值）；仅更新本家庭分类。停用后不可用于新流水，历史关联保留 |
+| GET/POST | `/categories` | IMPLEMENTED | 分类列表 / 新增（单层，新增需 `name` 和 `kind`，可选 `emoji`，列表返回 `emoji`） |
+| PATCH | `/categories/{id}` | IMPLEMENTED | 传入任一字段：`name`（非空）、`sort`（整数）、`active`（布尔值）、`emoji`（空字符串清除表情）；仅更新本家庭分类。停用后不可用于新流水，历史关联保留 |
 | DELETE | `/categories/{id}` | IMPLEMENTED | 从管理列表和记账选项移除，保留历史关联。重复删除返回 200 |
 | GET/POST | `/projects` | IMPLEMENTED | 项目列表 / 新建 |
 | GET | `/projects/{id}/summary` | IMPLEMENTED | 累计收支、退款、净支出、分类构成与最近 100 条拆分流水 |
