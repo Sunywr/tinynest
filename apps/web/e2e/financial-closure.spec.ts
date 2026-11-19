@@ -104,6 +104,7 @@ test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page 
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
   const mailPanel = page.locator('section.panel', { has: page.getByRole('heading', { name: '账单邮箱', exact: true }) })
   const host = mailPanel.getByLabel('IMAP 主机（TLS 993）')
+  await expect(mailPanel.getByLabel('文件夹')).toHaveValue('收件箱')
   await expect(host).toHaveCSS('border-radius', '11px')
   await expect(mailPanel.getByRole('combobox', { name: /^信用卡/ })).toHaveCSS('min-height', '44px')
   await expect(mailPanel.getByRole('button', { name: '返回列表' })).toHaveCSS('border-radius', '10px')

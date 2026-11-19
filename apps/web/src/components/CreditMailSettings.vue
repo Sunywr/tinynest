@@ -14,7 +14,8 @@ type Binding = {
 
 defineProps<{ cards: Option[]; categories: Option[] }>()
 defineEmits<{ close: [] }>()
-const fresh = () => ({ id: '', host: '', username: '', folder: 'INBOX', enabled: true, version: 0, tested_at: '', password: '' })
+const inboxLabel = '收件箱'
+const fresh = () => ({ id: '', host: '', username: '', folder: inboxLabel, enabled: true, version: 0, tested_at: '', password: '' })
 const box = ref(fresh())
 const boxes = ref<Mailbox[]>([])
 const bindings = ref<Binding[]>([])
@@ -44,15 +45,20 @@ async function load() {
 onMounted(() => void run(load))
 
 function edit(item?: Mailbox) {
-  box.value = item ? { ...item, password: '' } : fresh()
+  box.value = item ? { ...item, folder: item.folder.toUpperCase() === 'INBOX' ? inboxLabel : item.folder, password: '' } : fresh()
 }
 
 function saveMailbox(enabled = true) {
   void run(async () => {
     const id = box.value.id
+    const savedFolder = boxes.value.find(item => item.id === id)?.folder
+    const displayFolder = box.value.folder
+    const folder = displayFolder === inboxLabel && savedFolder !== inboxLabel
+      ? (savedFolder?.toUpperCase() === 'INBOX' ? savedFolder : 'INBOX')
+      : displayFolder
     const item = await request<Mailbox>(id ? '/credit-mail/mailboxes/' + encodeURIComponent(id) : '/credit-mail/mailboxes', {
       method: id ? 'PUT' : 'POST',
-      body: JSON.stringify({ ...box.value, enabled, password: enabled ? box.value.password : '' }),
+      body: JSON.stringify({ ...box.value, folder, enabled, password: enabled ? box.value.password : '' }),
     })
     edit(item)
     await load()
@@ -101,7 +107,7 @@ function saveBinding() {
           <div class="formgrid">
             <label>IMAP 主机（TLS 993）<input v-model.trim="box.host" required maxlength="253" placeholder="imap.example.com"></label>
             <label>邮箱账号<input v-model.trim="box.username" required maxlength="320" autocomplete="off"></label>
-            <label>文件夹<input v-model.trim="box.folder" maxlength="255" placeholder="INBOX"></label>
+            <label>文件夹<input v-model.trim="box.folder" maxlength="255" :placeholder="inboxLabel"></label>
             <label>授权码<input v-model="box.password" type="password" autocomplete="new-password" maxlength="1024" :required="!box.id" :placeholder="box.id ? '留空沿用已保存的授权码' : ''"></label>
           </div>
           <p v-if="box.tested_at">上次连接通过 {{ new Date(box.tested_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
