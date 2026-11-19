@@ -85,7 +85,7 @@ SQL
 `LoadCredential=credit-mail-key:/etc/tinynest/credentials/credit-mail-key` 加载，
 也可通过 `TINYNEST_CREDIT_MAIL_KEY_FILE` 指定受保护的 32 字节随机密钥文件。
 保留密钥的受限备份，后续部署沿用同一密钥。
-家庭管理员在「信用账单 → 账单邮箱」测试并保存配置。后端须能出站访问邮箱的 TCP 993 端口。
+有记账权限的家庭成员可以在「信用账单 → 账单邮箱」测试并保存家庭共享配置。后端须能出站访问邮箱的 TCP 993 端口。
 
 ## 托管邮箱 SMTP 服务
 

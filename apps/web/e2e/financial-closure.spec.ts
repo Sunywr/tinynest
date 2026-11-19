@@ -97,20 +97,26 @@ test('01 受控初始化：公开页无初始化入口，运维 API 单次创建
   expect(again.status()).toBe(409)
 })
 
-test('信用账单显示邮箱入口并说明管理员权限', async ({ page }) => {
+test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
 
+  let role = 'member'
   await page.route('**/api/v1/auth/me', async route => {
     const response = await route.fetch()
-    await route.fulfill({ response, json: { ...await response.json(), role: 'member' } })
+    await route.fulfill({ response, json: { ...await response.json(), role } })
   })
   await page.reload()
   await page.getByRole('button', { name: '信用账单' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click({ timeout: 2000 })
-  await expect(page.getByText('请由家庭管理员配置账单邮箱。')).toBeVisible()
+  await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()
+  role = 'viewer'
+  await page.reload()
+  await page.getByRole('button', { name: '信用账单' }).click()
+  await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
+  await expect(page.getByText('有记账权限的家庭成员可以配置账单邮箱。')).toBeVisible()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toHaveCount(0)
   await page.getByRole('button', { name: '返回列表' }).click()
   await expect(page.getByRole('heading', { name: '信用工具' })).toBeVisible()

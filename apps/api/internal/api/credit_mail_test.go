@@ -13,6 +13,9 @@ func TestCreditMailConfiguration(t *testing.T) {
 	ts, c, database := newTestServer(t)
 	defer database.Close()
 	defer ts.Close()
+	if _, err := database.Exec(`UPDATE users SET role='member' WHERE username='admin'`); err != nil {
+		t.Fatal(err)
+	}
 	c.mailAPI.opts.CreditMailKey = bytes.Repeat([]byte{9}, 32)
 	c.mailAPI.opts.CreditIMAPProbe = func(_ context.Context, host, user, password, folder string) error {
 		if host == "imap.example.com" && user == "test@example.com" && password == "test-authorization-code" && folder == "INBOX" {
@@ -30,6 +33,21 @@ func TestCreditMailConfiguration(t *testing.T) {
 		t.Fatal("failed test persisted a mailbox")
 	}
 	box := c.mustOK("POST", base+"/mailboxes", input)
+	if _, err := database.Exec(`UPDATE users SET role='viewer' WHERE username='admin'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"GET", "POST"} {
+		target := base
+		if method == "POST" {
+			target += "/mailboxes"
+		}
+		if status, _ := c.do(method, target, input); status != 403 {
+			t.Fatalf("read-only mailbox access: %s returned %d", method, status)
+		}
+	}
+	if _, err := database.Exec(`UPDATE users SET role='member' WHERE username='admin'`); err != nil {
+		t.Fatal(err)
+	}
 	id := box["id"].(string)
 	path := base + "/mailboxes/" + id
 	listed := c.mustOK("GET", base, nil)

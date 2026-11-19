@@ -30,10 +30,20 @@ type creditMailBinding struct {
 }
 
 func (a *API) registerCreditMail(m *http.ServeMux) {
-	a.adminRoute(m, "GET /api/v1/credit-mail", a.listCreditMail)
-	a.adminRoute(m, "POST /api/v1/credit-mail/mailboxes", a.saveCreditMailbox)
-	a.adminRoute(m, "PUT /api/v1/credit-mail/mailboxes/{id}", a.saveCreditMailbox)
-	a.adminRoute(m, "PUT /api/v1/credit-mail/bindings/{id}", a.saveCreditMailBinding)
+	register := func(pattern string, handler http.HandlerFunc) {
+		a.route(m, pattern, func(w http.ResponseWriter, r *http.Request) {
+			p, _ := principal(r)
+			if p.Role != "admin" && p.Role != "member" {
+				writeErr(w, 403, "forbidden", "仅有记账权限的家庭成员可配置账单邮箱")
+				return
+			}
+			handler(w, r)
+		})
+	}
+	register("GET /api/v1/credit-mail", a.listCreditMail)
+	register("POST /api/v1/credit-mail/mailboxes", a.saveCreditMailbox)
+	register("PUT /api/v1/credit-mail/mailboxes/{id}", a.saveCreditMailbox)
+	register("PUT /api/v1/credit-mail/bindings/{id}", a.saveCreditMailBinding)
 }
 
 func (a *API) listCreditMail(w http.ResponseWriter, r *http.Request) {
