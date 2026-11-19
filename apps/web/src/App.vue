@@ -1891,7 +1891,7 @@ const metricCards = computed(() => {
               <p v-else-if="projectTotals.transactions.length === projectTotals.detail_limit" class="subinfo">显示最近 {{ projectTotals.detail_limit }} 条拆分明细</p>
             </template>
           </section>
-          <section v-if="panel === 'category'" class="panel formpanel">
+          <section v-if="panel === 'category'" class="panel formpanel category-panel">
             <div class="paneltitle"><div><h2>分类管理</h2><span class="subinfo">支持改名、排序与停用</span></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
             <form @submit.prevent="addCategory">
@@ -2568,10 +2568,10 @@ const metricCards = computed(() => {
 .authtabs { display: flex; gap: 6px; background: var(--soft); padding: 4px; border-radius: 12px; margin-bottom: 18px; }
 .authtabs button { flex: 1; border: 0; background: transparent; padding: 9px; border-radius: 9px; font-size: 12px; color: var(--muted); }
 .authtabs button.active { background: var(--card); color: var(--primary-deep); font-weight: 700; }
-form label, .formgrid label, .credit-mail-settings :deep(form label) { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+form label, .formgrid label, .formgrid :deep(.category-icon-field), .credit-mail-settings :deep(form label) { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
 input, select, .credit-mail-settings :deep(input), .credit-mail-settings :deep(select) { font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; width: 100%; }
 input:focus-visible, select:focus-visible, .credit-mail-settings :deep(:is(input, select):focus-visible) { outline: 3px solid var(--primary); outline-offset: 1px; }
-form label { margin-bottom: 13px; }
+form label, form :deep(.category-icon-field) { margin-bottom: 13px; }
 .primary, .credit-mail-settings :deep(.primary) { width: 100%; border: 0; background: var(--primary); color: #fff; border-radius: 12px; padding: 12px; font-weight: 700; font-size: 13px; margin-top: 6px; }
 .primary:disabled, .credit-mail-settings :deep(.primary:disabled) { opacity: .55; }
 .ghost, .credit-mail-settings :deep(.ghost) { border: 1px solid var(--border); background: var(--soft); color: var(--primary-deep); border-radius: 10px; padding: 8px 12px; font-size: 12px; }
@@ -2774,6 +2774,7 @@ form label { margin-bottom: 13px; }
 /* ---------- Cute confirm dialog ---------- */
 .confirm-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(74,52,48,.30);backdrop-filter:blur(3px);}
 .confirm-card{width:100%;max-width:360px;background:var(--card);border:1px solid var(--border);border-radius:24px;padding:26px 24px 22px;text-align:center;box-shadow:0 22px 55px rgba(120,80,70,.28);}
+.category-panel .formgrid input, .category-panel .formgrid :deep(.ss-trigger), .category-panel .formgrid :deep(summary) { height: 46px; }
 .create-category-emoji { grid-column: 1 / -1; text-align: start; }
 .confirm-card.danger{border-color:rgba(217,140,122,.5);}
 .confirm-emoji{font-size:34px;line-height:1;margin-bottom:8px;}
@@ -2817,7 +2818,7 @@ form label { margin-bottom: 13px; }
 .website .greeting p, .website .rankrow, .website .txname,
 .website .txamount, .website .nav button { font-size: 15px; }
 .website .statlabel, .website .subinfo, .website .txcat { font-size: 13px; }
-form label, .formgrid label, .credit-mail-settings :deep(form label) { font-size: 14px; }
+form label, .formgrid label, .formgrid :deep(.category-icon-field), .credit-mail-settings :deep(form label) { font-size: 14px; }
 input, select, .credit-mail-settings :deep(input), .credit-mail-settings :deep(select) { font-size: 16px; min-height: 44px; }
 .website .primary, .website .ghost, .login-dialog .btn-primary, .credit-mail-settings :deep(:is(.primary, .ghost)) {
   font-size: 15px;

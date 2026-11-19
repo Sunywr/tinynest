@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, ref, useId } from 'vue'
 
 const emoji = defineModel<string>({ required: true })
+const labelId = useId()
 const picker = ref<HTMLDetailsElement>()
 const opensAbove = ref(false)
 const choices = [
@@ -46,22 +47,32 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 </script>
 
 <template>
-  <details ref="picker" class="emoji-picker" @toggle="onToggle" @keydown.esc="onEscape">
-    <summary>分类表情 <span aria-hidden="true">{{ emoji }}</span><span v-if="!emoji">未设置</span></summary>
-    <div class="emoji-popover" :class="{ above: opensAbove }">
-      <div class="emoji-grid" role="group" aria-label="选择分类表情">
-        <button v-for="[value, label] in choices" :key="value" type="button"
-          :aria-label="label" :title="label" :aria-pressed="emoji === value" @click="select(value)">{{ value }}</button>
+  <div class="category-icon-field">
+    <span :id="labelId">分类图标</span>
+    <details ref="picker" class="emoji-picker" @toggle="onToggle" @keydown.esc="onEscape">
+      <summary :aria-labelledby="labelId">
+        <span :class="{ unset: !emoji }">{{ emoji || '未设置' }}</span>
+        <span class="icon-caret" aria-hidden="true">▾</span>
+      </summary>
+      <div class="emoji-popover" :class="{ above: opensAbove }">
+        <div class="emoji-grid" role="group" aria-label="选择分类图标">
+          <button v-for="[value, label] in choices" :key="value" type="button"
+            :aria-label="label" :title="label" :aria-pressed="emoji === value" @click="select(value)">{{ value }}</button>
+        </div>
+        <button v-if="emoji" type="button" class="emoji-clear" @click="select('')">清除图标</button>
       </div>
-      <button v-if="emoji" type="button" class="emoji-clear" @click="select('')">清除表情</button>
-    </div>
-  </details>
+    </details>
+  </div>
 </template>
 
 <style scoped>
-.emoji-picker { position: relative; min-width: 0; align-self: start; }
-summary { cursor: pointer; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
-summary span { margin-inline-start: 6px; color: var(--primary-deep); }
+.category-icon-field { min-width: 0; text-align: start; }
+.emoji-picker { position: relative; min-width: 0; }
+summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: pointer; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--card); color: var(--text); font-size: 16px; }
+summary::-webkit-details-marker { display: none; }
+.unset { color: var(--muted); }
+.icon-caret { color: var(--primary-deep); font-size: 12px; }
+details[open] .icon-caret { transform: rotate(180deg); }
 .emoji-popover { position: absolute; z-index: 60; inset-inline: 0; top: calc(100% + 6px); padding: 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); box-shadow: 0 14px 34px rgba(120, 90, 70, .20); }
 .emoji-popover.above { top: auto; bottom: calc(100% + 6px); }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(42px, 1fr)); gap: 5px; padding: 8px 2px; max-height: min(212px, 35dvh); overflow-y: auto; }
