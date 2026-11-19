@@ -1267,17 +1267,51 @@ test('项目和分类可从各自的管理页删除', async ({ page }) => {
     await page.getByRole('button', { name: entry.create }).click()
     await expect(page.getByText(`${entry.type}已新增`)).toBeVisible()
 
-    await management.click()
+    const heading = page.getByRole('heading', { name: `${entry.type}管理` })
+    if (entry.type === '分类') await expect(heading).toBeVisible()
+    else await management.click()
     const select = page.locator('label').filter({ hasText: `编辑${entry.type}` }).locator('select')
     const option = select.locator('option').filter({ hasText: name })
-    await select.selectOption(await option.getAttribute('value') ?? '')
-    await page.getByRole('button', { name: `删除${entry.type}` }).click()
+    const id = await option.getAttribute('value') ?? ''
+    await select.selectOption(id)
+    if (entry.type === '分类') {
+      await page.getByLabel('分类名称', { exact: true }).fill(`${name}（已改名）`)
+      await page.getByRole('button', { name: '保存分类' }).click()
+      await expect(page.getByText('分类已更新')).toBeVisible()
+      await expect(heading).toBeVisible()
+      await expect(select.locator(`option[value="${id}"]`)).toContainText('（已改名）')
+    }
+    await page.getByRole('button', { name: `删除${entry.type}`, exact: true }).click()
     await page.locator('.confirm-card').getByRole('button', { name: '删除', exact: true }).click()
     await expect(page.getByText(`${entry.type}已删除`)).toBeVisible()
 
-    await management.click()
+    if (entry.type === '分类') await expect(heading).toBeVisible()
+    else await management.click()
     await expect(option).toHaveCount(0)
     await page.getByRole('button', { name: '返回列表' }).click()
+  }
+})
+
+test('记账选择器显示父子分类路径并允许分别选择', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '记账流水' }).click()
+  await page.getByRole('button', { name: '分类管理' }).click()
+  const name = page.getByLabel('新分类名称')
+  const create = page.getByRole('button', { name: '新增分类' })
+  const parent = page.getByLabel('上级分类')
+  await name.fill('E2E 一级分类')
+  await create.click()
+  await expect(parent.locator('option').filter({ hasText: /^E2E 一级分类$/ })).toHaveCount(1)
+  await parent.selectOption({ label: 'E2E 一级分类' })
+  await name.fill('E2E 二级分类')
+  await create.click()
+  await expect(page.locator('option').filter({ hasText: 'E2E 一级分类 › E2E 二级分类' })).toHaveCount(1)
+  await page.getByRole('button', { name: '返回列表' }).click()
+  await page.locator('.actions-bar').getByRole('button', { name: '＋ 记一笔' }).click()
+  const form = page.locator('form.formpanel')
+  for (const category of ['E2E 一级分类', 'E2E 一级分类 › E2E 二级分类']) {
+    await pickSmartOption(form, '分类', new RegExp(`^${category}$`))
+    await expect(smartValue(form, '分类')).toHaveText(category)
   }
 })
 
