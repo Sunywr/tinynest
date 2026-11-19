@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiError, type ManagedUser, type UserProfile } from './services/api'
 
 import AccountIcon from './components/AccountIcon.vue'
-import { creditBankMarks } from './services/accountBrand'
+import { creditBrandOptions } from './services/accountBrand'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
 import {
@@ -2049,12 +2049,12 @@ const metricCards = computed(() => {
               <label>名称<input v-model.trim="f.credit.name" required /></label>
               <template v-if="f.credit.kind === 'credit_card'">
                 <label>发卡银行<input v-model.trim="f.credit.issuer" placeholder="如：招商银行" /></label>
-                <label>银行图标
+                <label>品牌图标
                   <span class="credit-logo-picker">
                     <AccountIcon :name="f.credit.name" :subtype="f.credit.issuer" :logo-key="f.credit.logo_key" mark-only />
-                    <select v-model="f.credit.logo_key" aria-label="银行图标">
-                      <option value="">按银行名称自动匹配</option>
-                      <option v-for="mark in creditBankMarks" :key="mark.id" :value="mark.id">{{ mark.name }}</option>
+                    <select v-model="f.credit.logo_key" aria-label="品牌图标">
+                      <option value="">按名称自动匹配</option>
+                      <option v-for="mark in creditBrandOptions" :key="mark.id" :value="mark.id">{{ mark.name }}</option>
                       <option value="generic">通用图标</option>
                     </select>
                   </span>

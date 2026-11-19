@@ -240,6 +240,16 @@ test('06 新建信用工具（额度 20000）', async ({ page }) => {
   await page.getByRole('button', { name: '信用账单' }).click()
   await page.locator('.actions-bar').getByRole('button', { name: '＋ 新增信用工具' }).click()
   await page.getByLabel('名称').fill('E2E 信用卡')
+  for (const [issuer, logo] of [
+    ['建设银行', 'ccb-mark'], ['农业银行', 'abc-mark'], ['工商银行', 'icbc-mark'],
+    ['上海农商行', 'shrcb'], ['支付宝', 'alipay'], ['微信', 'wechat'],
+    ['美团', 'meituan'], ['抖音', 'douyin'],
+  ]) {
+    await page.getByLabel('发卡银行').fill(issuer)
+    const preview = page.locator('.credit-logo-picker img')
+    await expect(preview).toHaveAttribute('src', `/account-brands/${logo}.png`)
+    await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+  }
   await page.getByLabel('发卡银行').fill('招 商 银 行')
   await expect(page.locator('.credit-logo-picker img')).toHaveAttribute('src', '/account-brands/cmb-mark.png')
   await page.getByLabel('账单开始日').fill('1')
@@ -255,11 +265,11 @@ test('06 新建信用工具（额度 20000）', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '修改信用工具' })).toBeVisible()
   await page.getByLabel('发卡银行').fill('中信银行')
   await expect(page.locator('.credit-logo-picker img')).toHaveAttribute('src', '/account-brands/citic-mark.png')
-  await page.getByLabel('银行图标', { exact: true }).selectOption('cmb')
+  await page.getByLabel('品牌图标', { exact: true }).selectOption('ccb')
   await page.getByLabel('备注').fill('测试修改备注')
   await page.getByRole('button', { name: '保存修改' }).click()
   await expect(page.getByText('信用工具已修改')).toBeVisible()
-  await expect(card.locator('img')).toHaveAttribute('src', '/account-brands/cmb-mark.png')
+  await expect(card.locator('img')).toHaveAttribute('src', '/account-brands/ccb-mark.png')
 })
 
 test('07 信用消费 1000 自动归集成账单', async ({ page }) => {
@@ -1187,10 +1197,13 @@ test('40 投资表单内联新建投资标的并保留已填成交金额', async
   await page.getByRole('button', { name: '家庭账户' }).click()
   await page.locator('.actions-bar').getByRole('button', { name: '＋ 新建账户' }).click()
   await page.getByLabel('类型').selectOption('securities')
-  await page.getByLabel('名称').fill('E2E 内联证券户')
+  await page.getByLabel('名称').fill('E2E 东方财富证券户')
   await page.getByLabel('期初余额（元）').fill('0')
   await page.getByRole('button', { name: '创建账户' }).click()
   await expect(page.getByText('账户已创建')).toBeVisible()
+  const accountIcon = page.locator('.rankrow', { hasText: 'E2E 东方财富证券户' }).locator('img.account-icon')
+  await expect(accountIcon).toHaveAttribute('src', '/account-brands/eastmoney.png')
+  await expect.poll(() => accountIcon.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
 
   await page.getByRole('button', { name: '投资' }).click()
   await page.locator('.actions-bar').getByRole('button', { name: '买入 / 卖出' }).click()
@@ -1205,7 +1218,7 @@ test('40 投资表单内联新建投资标的并保留已填成交金额', async
   await expect(modal.getByLabel('名称')).toHaveValue('E2E 内联标的')
   await modal.getByLabel('代码').fill('E2E999')
   await modal.locator('label').filter({ hasText: '所属投资账户' }).locator('.ss-trigger').click()
-  await modal.locator('.ss-option', { hasText: 'E2E 内联证券户' }).click()
+  await modal.locator('.ss-option', { hasText: 'E2E 东方财富证券户' }).click()
   await modal.getByRole('button', { name: '创建' }).click()
   await expect(modal).toHaveCount(0)
   await expect(assetField.locator('.ss-value')).toContainText('E2E 内联标的')
@@ -1264,7 +1277,7 @@ test('家庭账户可取消删除或确认移出列表', async ({ page }) => {
 
   const row = page.locator('.rankrow').filter({ hasText: 'E2E 工行待删除账户' })
   const icon = row.locator('img.account-icon')
-  await expect(icon).toHaveAttribute('src', '/account-brands/icbc.png')
+  await expect(icon).toHaveAttribute('src', '/account-brands/icbc-mark.png')
   await expect.poll(() => icon.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
   const modal = page.locator('.confirm-card')
   await row.getByRole('button', { name: '删除', exact: true }).click()
@@ -1666,7 +1679,9 @@ test('验收反馈：窄屏各菜单和表单控件均在容器内', async ({ pa
   for (const menu of ['首页概览', '记账流水', '家庭账户', '信用账单', '分期与负债', '投资', '设置']) {
     await page.locator('nav.nav').getByRole('button', { name: menu }).click()
     const check = async () => {
-      const overflow = await page.locator('input:visible, select:visible, textarea:visible, .date-field:visible').evaluateAll(els => els.filter(el => {
+      // SearchableSelect clips its native select and displays a SmartSelect trigger.
+      const controls = page.locator('input:visible, select:visible:not(.ss-native select), textarea:visible, .date-field:visible, .ss-trigger:visible')
+      const overflow = await controls.evaluateAll(els => els.filter(el => {
         const r = el.getBoundingClientRect(), parent = el.parentElement!.getBoundingClientRect()
         return r.right > Math.min(window.innerWidth, parent.right) + 1 || r.left < -1
       }).map(el => el.outerHTML.slice(0, 100)))

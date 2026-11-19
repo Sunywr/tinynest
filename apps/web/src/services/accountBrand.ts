@@ -15,6 +15,7 @@ const brands: Record<string, string> = {
   cib: '兴业银行 兴业信用卡',
   spabank: '平安银行 平安信用卡',
   bjbank: '北京银行',
+  shrcb: '上海农商银行 上海农商行 上海农村商业银行 沪农商行 shrcb srcb',
   shbank: '上海银行',
   jsbank: '江苏银行',
   nbbank: '宁波银行',
@@ -37,15 +38,23 @@ const brands: Record<string, string> = {
   wechat: '微信 零钱通 微粒贷',
   douyin: '抖音',
   meituan: '美团',
+  eastmoney: '东方财富 eastmoney',
 }
 
 const aliases = Object.entries(brands).flatMap(([brand, names]) =>
   names.split(' ').map(name => ({ brand, name })),
 ).sort((a, b) => b.name.length - a.name.length)
 
-export const creditBankMarks = ['spdb', 'ceb', 'cmb', 'citic'].map(id => ({
-  id, name: brands[id].split(' ')[0],
-}))
+const standaloneMarks = new Set(['spdb', 'ceb', 'cmb', 'citic', 'ccb', 'abc', 'icbc'])
+
+export const creditBrandOptions = [
+  ...standaloneMarks, 'shrcb', 'alipay', 'wechat', 'meituan', 'douyin',
+].map(id => ({ id, name: brands[id].split(' ')[0] }))
+
+export function accountBrandArtwork(brand: string | undefined): string | undefined {
+  if (!brand || !Object.hasOwn(brands, brand)) return
+  return standaloneMarks.has(brand) ? brand + '-mark' : brand
+}
 
 export function accountBrand(...fields: (string | null | undefined)[]): string | undefined {
   for (const field of fields) {
