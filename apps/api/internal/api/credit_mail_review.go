@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"tinynest/api/internal/credit"
 )
 
@@ -19,6 +18,7 @@ type everbrightRowReview struct {
 	Key               string                  `json:"key"`
 	Imported          bool                    `json:"imported"`
 	SuggestedCategory string                  `json:"suggested_category,omitempty"`
+	CategorySource    string                  `json:"category_source,omitempty"`
 	Matches           []everbrightLedgerMatch `json:"matches"`
 }
 
@@ -58,7 +58,7 @@ func (a *API) reviewEverbrightStatements(ctx context.Context, household, instrum
 		}
 		matches[identity] = append(matches[identity], item)
 		if item.CategoryID != "" && item.Description != "" {
-			merchant := strings.ToLower(strings.TrimSpace(item.Description))
+			merchant := statementMerchant(item.Description)
 			old, ok := previous[merchant]
 			if !ok {
 				previous[merchant] = item.CategoryID
@@ -68,6 +68,23 @@ func (a *API) reviewEverbrightStatements(ctx context.Context, household, instrum
 		}
 	}
 	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	categories, err := a.DB.QueryContext(ctx, `SELECT id,name FROM categories WHERE household_id=? AND active=1 AND kind='expense'`, household)
+	if err != nil {
+		return err
+	}
+	defer categories.Close()
+	active := make(map[string][]string)
+	for categories.Next() {
+		var id, name string
+		if err := categories.Scan(&id, &name); err != nil {
+			return err
+		}
+		active[statementMerchant(name)] = append(active[statementMerchant(name)], id)
+	}
+	if err := categories.Err(); err != nil {
 		return err
 	}
 	for i := range statements {
@@ -82,9 +99,14 @@ func (a *API) reviewEverbrightStatements(ctx context.Context, household, instrum
 				return err
 			}
 			key := fmt.Sprintf("ceb:%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", instrument, source, occurrences[row]))))
+			var category, categorySource string
+			if row.Amount > 0 && !keys[key] {
+				category, categorySource = suggestStatementCategory(row.Description, previous, active)
+			}
 			statement.Review = append(statement.Review, everbrightRowReview{
 				Key: key, Imported: keys[key],
-				SuggestedCategory: previous[strings.ToLower(strings.TrimSpace(row.Description))],
+				SuggestedCategory: category,
+				CategorySource:    categorySource,
 				Matches:           matches[everbrightLedgerIdentity{Date: row.TransactionDate, Amount: int64(row.Amount)}],
 			})
 		}

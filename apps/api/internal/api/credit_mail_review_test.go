@@ -6,6 +6,23 @@ import (
 	"tinynest/api/internal/credit"
 )
 
+func TestStatementCategorySuggestion(t *testing.T) {
+	active := map[string][]string{"饮食": {"food"}, "交通": {"transport"}}
+	for _, tc := range []struct{ description, want, source string }{
+		{"支付宝-星巴克咖啡", "food", "rule"},
+		{"微信支付-滴滴出行", "transport", "rule"},
+		{"支付宝", "", ""},
+		{"星巴克餐厅与地铁联名", "", ""},
+		{"测试商户", "transport", "history"},
+		{"瑞幸", "", ""},
+	} {
+		got, source := suggestStatementCategory(tc.description, map[string]string{"测试商户": "transport", "瑞幸": ""}, active)
+		if got != tc.want || source != tc.source {
+			t.Errorf("%q: got (%s,%s), want (%s,%s)", tc.description, got, source, tc.want, tc.source)
+		}
+	}
+}
+
 func TestEverbrightReviewReconcilesExistingLedger(t *testing.T) {
 	ts, c, db := newTestServer(t)
 	defer db.Close()

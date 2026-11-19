@@ -19,7 +19,7 @@ type StatementPreview = {
 }
 type StatementRow = { TransactionDate: string; PostingDate: string; Description: string; Amount: number }
 type LedgerMatch = { id: string; description: string; category_id: string }
-type RowReview = { key: string; imported: boolean; suggested_category?: string; matches: LedgerMatch[] | null }
+type RowReview = { key: string; imported: boolean; suggested_category?: string; category_source?: 'history' | 'rule'; matches: LedgerMatch[] | null }
 
 const props = defineProps<{ cards: Option[]; categories?: Option[]; syncOnly?: boolean }>()
 const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: [] }>()
@@ -40,6 +40,19 @@ const previewBusy = ref(false)
 const selectedCategory = ref<Record<string, string>>({})
 const pendingDelete = ref('')
 const completed = ref<Record<string, boolean>>({})
+const confirmBatch = ref(false)
+const batchRows = computed(() => {
+  const unique = new Map<string, { row: StatementRow; review: RowReview; category: string }>()
+  for (const statement of preview.value ?? []) {
+    statement.transactions?.forEach((row, index) => {
+      const review = statement.review?.[index]
+      if (!review || row.Amount <= 0 || review.imported || completed.value[review.key] || review.matches?.length) return
+      const category = selectedCategory.value[review.key] ?? review.suggested_category
+      if (category) unique.set(review.key, { row, review, category })
+    })
+  }
+  return [...unique.values()]
+})
 const canPreview = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const saved = bindings.value.find(item => item.instrument_id === card?.id)
@@ -91,6 +104,7 @@ function saveMailbox(enabled = true) {
 
 function selectCard() {
   preview.value = null
+  confirmBatch.value = false
   const id = binding.value.instrument_id
   const current = bindings.value.find(item => item.instrument_id === id)
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
@@ -99,6 +113,7 @@ function selectCard() {
 function previewStatements() {
   if (!canPreview.value || busy.value) return
   preview.value = null
+  confirmBatch.value = false
   previewBusy.value = true
   void run(async () => {
     const id = encodeURIComponent(binding.value.instrument_id)
@@ -114,6 +129,13 @@ function createFromPreview(row: StatementRow, review: RowReview) {
   const category = selectedCategory.value[review.key] ?? review.suggested_category
   if (!category || row.Amount <= 0 || review.imported || completed.value[review.key]) return
   void run(async () => {
+    const result = await postPreviewRow(row, review, category)
+    emit('ledgerChanged')
+    notice.value = result.replayed ? '这笔明细此前已处理' : '流水已创建'
+  })
+}
+
+async function postPreviewRow(row: StatementRow, review: RowReview, category: string) {
     const result = await api.createTransaction({
       type: 'expense', amount_minor: row.Amount, currency: 'CNY', occurred_on: row.TransactionDate,
       payment_kind: 'credit', credit_instrument_id: binding.value.instrument_id, merchant: row.Description,
@@ -130,8 +152,26 @@ function createFromPreview(row: StatementRow, review: RowReview) {
         })
       }
     }
-    emit('ledgerChanged')
-    notice.value = result.replayed ? '这笔明细此前已处理' : '流水已创建'
+    return result
+}
+
+function createBatch() {
+  if (busy.value || !confirmBatch.value) return
+  const pending = batchRows.value
+  confirmBatch.value = false
+  void run(async () => {
+    let done = 0
+    try {
+      for (const item of pending) {
+        await postPreviewRow(item.row, item.review, item.category)
+        done++
+      }
+    } catch (err) {
+      if (done) emit('ledgerChanged')
+      throw new Error(`已处理 ${done} 笔，批量操作已暂停。${err instanceof Error ? err.message : '请重试'}`)
+    }
+    if (done) emit('ledgerChanged')
+    notice.value = `已处理 ${done} 笔流水`
   })
 }
 
@@ -217,7 +257,17 @@ function saveBinding() {
       <section v-if="preview !== null && canPreview" class="preview-statements">
         <h3>光大账单预览</h3>
         <p v-if="!preview.length">未找到符合标题关键字的光大账单。</p>
-        <p v-else>找到 {{ preview.length }} 封账单。请逐笔核对分类和已有流水后确认操作。</p>
+        <p v-else>找到 {{ preview.length }} 封账单。已分类且无疑似重复的明细可批量确认。</p>
+        <div v-if="syncOnly && batchRows.length" class="review-actions">
+          <template v-if="confirmBatch">
+            <span>将按当前分类创建 {{ batchRows.length }} 笔流水。</span>
+            <button type="button" class="ghost" :disabled="busy" @click="createBatch">确认批量创建</button>
+            <button type="button" class="ghost" @click="confirmBatch = false">取消</button>
+          </template>
+          <button v-else type="button" class="ghost" :disabled="busy" @click="confirmBatch = true">
+            批量创建已分类的 {{ batchRows.length }} 笔
+          </button>
+        </div>
         <details v-for="(statement, index) in preview" :key="index">
           <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
           <ul v-if="statement.transactions">
@@ -237,6 +287,9 @@ function saveBinding() {
                         <option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
                       </select>
                     </label>
+                    <small v-if="review.category_source && selectedCategory[review.key] === undefined">
+                      {{ review.category_source === 'history' ? '沿用同商户历史分类' : '根据交易摘要建议' }}
+                    </small>
                     <button type="button" class="ghost" :disabled="!(selectedCategory[review.key] ?? review.suggested_category)"
                       @click="createFromPreview(row, review)">{{ review.matches?.length ? '确认另建流水' : '确认创建流水' }}</button>
                   </div>
