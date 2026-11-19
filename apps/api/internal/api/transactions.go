@@ -462,21 +462,20 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 	if n, err := res.RowsAffected(); err != nil || n != 1 {
 		return errTransactionNotPosted
 	}
-	for _, query := range []string{
-		`SELECT r.id ` + refundJournalJoin + ` WHERE r.transaction_id=? AND r.household_id=? AND e.status='posted' LIMIT 1`,
-		`SELECT id FROM installment_contracts WHERE source_transaction_id=? AND household_id=? LIMIT 1`,
-	} {
-		if a.DB.IsMySQL() {
-			query += " FOR UPDATE"
-		}
-		var linkedID string
-		err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&linkedID)
-		if err == nil {
-			return errors.New("已关联退款或分期的流水不能直接删除或修改")
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
+	query := `SELECT id FROM installment_contracts WHERE source_transaction_id=? AND household_id=? LIMIT 1`
+	if a.DB.IsMySQL() {
+		query += " FOR UPDATE"
+	}
+	var linkedID string
+	err = tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&linkedID)
+	if err == nil {
+		return errors.New("分期流水请在分期合同中撤销")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err := a.handleTransactionRefundsOnReversal(tx, r, p, id, deleting); err != nil {
+		return err
 	}
 	var entryID string
 	var instrument *string
@@ -546,6 +545,51 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 		return err
 	}
 	return audit(r.Context(), tx, p, action, "transaction", id, revID)
+}
+
+// The caller holds the original transaction lock, which also serializes refund creation.
+func (a *API) handleTransactionRefundsOnReversal(tx *sql.Tx, r *http.Request, p Principal, id string, deleting bool) error {
+	type linkedRefund struct {
+		id, entryID, destination, destinationID string
+		amount                                  int64
+	}
+	query := `SELECT r.id,r.entry_id,r.destination_type,r.destination_id,r.amount_minor ` + refundJournalJoin +
+		` WHERE r.household_id=? AND r.transaction_id=? AND e.status='posted' ORDER BY r.destination_id,r.id`
+	if a.DB.IsMySQL() {
+		query += " FOR UPDATE"
+	}
+	rows, err := tx.QueryContext(r.Context(), query, p.HouseholdID, id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var refunds []linkedRefund
+	for rows.Next() {
+		if !deleting {
+			return errors.New("已关联退款的流水不能直接修改")
+		}
+		var refund linkedRefund
+		if err := rows.Scan(&refund.id, &refund.entryID, &refund.destination, &refund.destinationID, &refund.amount); err != nil {
+			return err
+		}
+		refunds = append(refunds, refund)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, refund := range refunds {
+		reversalID, err := a.reverseRefundEntry(r, tx, p, refund.id, refund.entryID, refund.destination, refund.destinationID, refund.amount)
+		if err != nil {
+			return err
+		}
+		if err := audit(r.Context(), tx, p, "delete_transaction_refund", "refund", refund.id, reversalID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *API) handleCreateRefund(w http.ResponseWriter, r *http.Request) {

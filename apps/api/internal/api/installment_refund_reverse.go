@@ -113,28 +113,8 @@ func (a *API) handleReverseInstallmentRefund(w http.ResponseWriter, r *http.Requ
 				return err
 			}
 		}
-		original, err := loadEntry(tx, r, entryID)
+		reversalID, err = a.reverseRefundEntry(r, tx, p, refundID, entryID, destination, destinationID, amount)
 		if err != nil {
-			return err
-		}
-		if original.BizType != ledger.BizRefund || original.BizID != refundID {
-			return errRefundRecordUnavailable
-		}
-		reversalID = newID("je")
-		reversal, err := original.Reverse(reversalID, original.OccurredOn)
-		if err != nil {
-			return err
-		}
-		if err := db.SaveEntry(ctx, tx, reversal, p.HouseholdID, "", p.Username); err != nil {
-			return err
-		}
-		if destination == "credit" {
-			if err := a.restoreCreditRefund(r, tx, p.HouseholdID, destinationID, refundID, reversalID, amount); err != nil {
-				return err
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE journal_entries SET status='reversed' WHERE household_id=? AND id=?`,
-			p.HouseholdID, entryID); err != nil {
 			return err
 		}
 		payload, err := json.Marshal(in)
@@ -153,6 +133,35 @@ func (a *API) handleReverseInstallmentRefund(w http.ResponseWriter, r *http.Requ
 	default:
 		writeJSON(w, 200, map[string]string{"id": refundID, "status": "reversed", "reversal_entry_id": reversalID})
 	}
+}
+
+func (a *API) reverseRefundEntry(r *http.Request, tx *sql.Tx, p Principal, refundID, entryID, destination, destinationID string, amount int64) (string, error) {
+	ctx := r.Context()
+	original, err := loadEntry(tx, r, entryID)
+	if err != nil {
+		return "", err
+	}
+	if original.BizType != ledger.BizRefund || original.BizID != refundID {
+		return "", errRefundRecordUnavailable
+	}
+	reversalID := newID("je")
+	reversal, err := original.Reverse(reversalID, original.OccurredOn)
+	if err != nil {
+		return "", err
+	}
+	if err := db.SaveEntry(ctx, tx, reversal, p.HouseholdID, "", p.Username); err != nil {
+		return "", err
+	}
+	if destination == "credit" {
+		if err := a.restoreCreditRefund(r, tx, p.HouseholdID, destinationID, refundID, reversalID, amount); err != nil {
+			return "", err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE journal_entries SET status='reversed' WHERE household_id=? AND id=?`,
+		p.HouseholdID, entryID); err != nil {
+		return "", err
+	}
+	return reversalID, nil
 }
 
 func (a *API) restoreCreditRefund(r *http.Request, tx *sql.Tx, householdID, instrumentID, refundID, reversalID string, amount int64) error {

@@ -212,3 +212,35 @@ func TestRefundReplay20Times(t *testing.T) {
 		t.Fatalf("refund records = %d, error = %v", count, err)
 	}
 }
+
+func TestDeleteFullyRefundedTransaction(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer ts.Close()
+	defer database.Close()
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "退款删除测试", "opening_balance_minor": 1000,
+	})["id"].(string)
+	id := c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 100, "occurred_on": "2026-11-18",
+		"payment_kind": "cash", "account_id": cash,
+		"splits": []any{map[string]any{"category_id": c.firstCategory("expense"), "amount_minor": 100}},
+	})["id"].(string)
+	for _, amount := range []int{40, 60} {
+		c.mustOK("POST", "/api/v1/refunds", map[string]any{
+			"transaction_id": id, "amount_minor": amount, "refund_on": "2026-11-19",
+			"destination_type": "cash", "destination_id": cash,
+		})
+	}
+	for range 2 {
+		if status, body := c.do("DELETE", "/api/v1/transactions/"+id, nil); status != http.StatusNoContent {
+			t.Fatalf("delete status = %d: %v", status, body)
+		}
+	}
+	if status, _ := c.do("GET", "/api/v1/transactions/"+id, nil); status != http.StatusNotFound {
+		t.Fatalf("deleted transaction status = %d", status)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM journal_entries WHERE reversal_of IS NOT NULL`).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("reversal count = %d: %v", count, err)
+	}
+}
