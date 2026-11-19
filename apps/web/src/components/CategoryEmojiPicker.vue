@@ -1,18 +1,23 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, useId } from 'vue'
+import { computed, onBeforeUnmount, ref, useId } from 'vue'
 import CategoryIcon from './CategoryIcon.vue'
+import { categoryIconGroups } from './categoryIcons'
 
 const emoji = defineModel<string>({ required: true })
 const labelId = useId()
 const picker = ref<HTMLDetailsElement>()
 const opensAbove = ref(false)
-const choices = [
-  ['🍓', '草莓'], ['🍙', '饭团'], ['🧁', '蛋糕'], ['🧋', '奶茶'], ['🍵', '热茶'], ['🥐', '可颂'],
-  ['🐰', '兔兔'], ['🐻', '小熊'], ['🐱', '猫咪'], ['🌷', '郁金香'], ['🌱', '幼苗'], ['☁️', '云朵'],
-  ['🏠', '小家'], ['🧺', '篮子'], ['🧸', '玩偶'], ['🎀', '蝴蝶结'], ['🎁', '礼物'], ['🛍️', '购物'],
-  ['🚲', '骑行'], ['🚃', '出行'], ['🏸', '运动'], ['📚', '书本'], ['🎨', '画板'], ['💊', '药品'],
-  ['💌', '信封'], ['🪙', '金币'], ['💰', '钱袋'], ['💼', '工作'], ['⭐', '星星'], ['🍀', '幸运草'],
-]
+const query = ref('')
+const visibleGroups = computed(() => {
+  const term = query.value.trim().toLowerCase()
+  if (!term) return categoryIconGroups
+  return categoryIconGroups.map(group => ({
+    ...group,
+    entries: group.name.includes(term)
+      ? group.entries
+      : group.entries.filter(([value, label]) => label.includes(term) || value.toLowerCase().includes(term)),
+  })).filter(group => group.entries.length > 0)
+})
 
 function close(restoreFocus = false) {
   if (!picker.value?.open) return
@@ -32,10 +37,10 @@ function onEscape(event: KeyboardEvent) {
 
 function onToggle() {
   document.removeEventListener('pointerdown', onOutside)
-  if (!picker.value?.open) return
+  if (!picker.value?.open) { query.value = ''; return }
   const { top, bottom } = picker.value.getBoundingClientRect()
   const below = window.innerHeight - bottom
-  opensAbove.value = below < 270 && top > below
+  opensAbove.value = below < 320 && top > below
   document.addEventListener('pointerdown', onOutside)
 }
 
@@ -57,9 +62,17 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
         <span class="icon-caret" aria-hidden="true">▾</span>
       </summary>
       <div class="emoji-popover" :class="{ above: opensAbove }">
-        <div class="emoji-grid" role="group" aria-label="选择分类图标">
-          <button v-for="[value, label] in choices" :key="value" type="button"
-            :aria-label="label" :title="label" :aria-pressed="emoji === value" @click="select(value)"><CategoryIcon :value="value" /></button>
+        <input v-model="query" class="icon-search" type="search" aria-label="搜索图标"
+          placeholder="搜索图标" @keydown.enter.prevent />
+        <div class="emoji-groups" role="group" aria-label="选择分类图标">
+          <p v-if="!visibleGroups.length" class="icon-group-name">未找到图标</p>
+          <section v-for="group in visibleGroups" :key="group.name" :aria-label="group.name">
+            <h4 class="icon-group-name">{{ group.name }}</h4>
+            <div class="emoji-grid">
+              <button v-for="[value, label] in group.entries" :key="value" type="button"
+                :aria-label="label" :title="label" :aria-pressed="emoji === value" @click="select(value)"><CategoryIcon :value="value" /></button>
+            </div>
+          </section>
         </div>
         <button v-if="emoji" type="button" class="emoji-clear" @click="select('')">清除图标</button>
       </div>
@@ -77,7 +90,10 @@ summary::-webkit-details-marker { display: none; }
 details[open] .icon-caret { transform: rotate(180deg); }
 .emoji-popover { position: absolute; z-index: 60; inset-inline: 0; top: calc(100% + 6px); padding: 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); box-shadow: 0 14px 34px rgba(120, 90, 70, .20); }
 .emoji-popover.above { top: auto; bottom: calc(100% + 6px); }
-.emoji-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(42px, 1fr)); gap: 5px; padding: 8px 2px; max-height: min(212px, 35dvh); overflow-y: auto; }
+.icon-search { width: 100%; border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; background: var(--soft); color: var(--text); font: inherit; font-size: 16px; }
+.emoji-groups { max-height: min(238px, 32dvh); overflow-y: auto; padding: 0 3px 3px; }
+.icon-group-name { margin: 9px 0 5px; color: var(--muted); font-size: 12px; }
+.emoji-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(42px, 1fr)); gap: 5px; }
 .emoji-grid button { min-height: 44px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 12px; background: var(--soft); color: var(--primary-deep); cursor: pointer; }
 .emoji-grid button[aria-pressed="true"], .emoji-grid button:hover { border-color: var(--primary-deep); }
 .emoji-clear { padding: 6px 10px; border: 0; background: transparent; color: var(--primary-deep); cursor: pointer; }
