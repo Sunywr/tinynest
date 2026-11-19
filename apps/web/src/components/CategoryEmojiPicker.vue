@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, useId } from 'vue'
+import CategoryIcon from './CategoryIcon.vue'
 
 const emoji = defineModel<string>({ required: true })
 const labelId = useId()
@@ -51,13 +52,14 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
     <span :id="labelId">分类图标</span>
     <details ref="picker" class="emoji-picker" @toggle="onToggle" @keydown.esc="onEscape">
       <summary :aria-labelledby="labelId">
-        <span :class="{ unset: !emoji }">{{ emoji || '未设置' }}</span>
+        <CategoryIcon v-if="emoji" :value="emoji" />
+        <span v-else class="unset">未设置</span>
         <span class="icon-caret" aria-hidden="true">▾</span>
       </summary>
       <div class="emoji-popover" :class="{ above: opensAbove }">
         <div class="emoji-grid" role="group" aria-label="选择分类图标">
           <button v-for="[value, label] in choices" :key="value" type="button"
-            :aria-label="label" :title="label" :aria-pressed="emoji === value" @click="select(value)">{{ value }}</button>
+            :aria-label="label" :title="label" :aria-pressed="emoji === value" @click="select(value)"><CategoryIcon :value="value" /></button>
         </div>
         <button v-if="emoji" type="button" class="emoji-clear" @click="select('')">清除图标</button>
       </div>
@@ -76,7 +78,7 @@ details[open] .icon-caret { transform: rotate(180deg); }
 .emoji-popover { position: absolute; z-index: 60; inset-inline: 0; top: calc(100% + 6px); padding: 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); box-shadow: 0 14px 34px rgba(120, 90, 70, .20); }
 .emoji-popover.above { top: auto; bottom: calc(100% + 6px); }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(42px, 1fr)); gap: 5px; padding: 8px 2px; max-height: min(212px, 35dvh); overflow-y: auto; }
-.emoji-grid button { min-height: 44px; padding: 0; border: 1px solid transparent; border-radius: 12px; background: var(--soft); font-size: 22px; cursor: pointer; }
+.emoji-grid button { min-height: 44px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 12px; background: var(--soft); color: var(--primary-deep); cursor: pointer; }
 .emoji-grid button[aria-pressed="true"], .emoji-grid button:hover { border-color: var(--primary-deep); }
 .emoji-clear { padding: 6px 10px; border: 0; background: transparent; color: var(--primary-deep); cursor: pointer; }
 </style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import CategoryIcon from './CategoryIcon.vue'
 import { activeOpenId, nextUid } from './dropdownState'
 
 // 模块级共享状态：保证全站任意时刻只有一个下拉浮层展开（互斥）。
@@ -106,7 +107,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   <div ref="root" class="smart-select" :class="{ open: isOpen }">
     <button type="button" class="ss-trigger" :class="{ placeholder: !selectedName }"
       :disabled="disabled" @click.stop="toggle()">
-      <span v-if="selected?.emoji" class="ss-emoji" aria-hidden="true">{{ selected.emoji }}</span>
+      <CategoryIcon v-if="selected?.emoji" class="ss-emoji" :value="selected.emoji" />
       <span class="ss-value">{{ selectedName || placeholder || '请选择' }}</span>
       <span v-if="selected?.badge" class="ss-badge" :class="{ income: selected.badge === '收入' }">{{ selected.badge }}</span>
       <span class="ss-caret">▾</span>
@@ -122,7 +123,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           <li v-if="r.kind === 'option'" class="ss-option" :class="{ hl: i === highlighted, sel: r.option.id === modelValue }"
             role="option" :aria-selected="r.option.id === modelValue"
             @mouseenter="highlighted = i" @mousedown.prevent="selectOption(r.option)">
-            <span v-if="r.option.emoji" class="ss-emoji" aria-hidden="true">{{ r.option.emoji }}</span>
+            <CategoryIcon v-if="r.option.emoji" class="ss-emoji" :value="r.option.emoji" />
             <span class="ss-name">{{ r.option.name }}</span>
             <span v-if="r.option.badge" class="ss-badge" :class="{ income: r.option.badge === '收入' }">{{ r.option.badge }}</span>
             <span v-if="r.option.hint" class="ss-hint">{{ r.option.hint }}</span>
@@ -146,7 +147,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   background: var(--card); color: var(--text); font: inherit; font-size: 16px; cursor: pointer; text-align: left;
 }
 .ss-trigger .ss-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ss-emoji { flex: none; font-size: 19px; }
+.ss-emoji { flex: none; color: var(--primary-deep); }
 .ss-badge { flex: none; padding: 2px 8px; border-radius: 999px; background: #f9e8df; color: #944d3c; font-size: 12px; }
 .ss-badge.income { background: #e7f0e0; color: #426242; }
 .ss-trigger:disabled { opacity: .55; cursor: not-allowed; }

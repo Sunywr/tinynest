@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Landmark, TrendingUp, Wallet } from 'lucide-vue-next'
 import { accountBrand } from '../services/accountBrand'
 
 const props = defineProps<{ name: string; subtype?: string | null; kind?: string; markOnly?: boolean }>()
@@ -12,7 +13,7 @@ const artwork = computed(() => {
 
 <template>
   <img v-if="artwork" class="account-icon" :class="{ 'card-mark': markOnly }" :src="`/account-brands/${artwork}.png`" :width="markOnly ? 48 : 24" :height="markOnly ? 48 : 24" alt="" />
-  <span v-else class="account-icon fallback" :class="{ 'card-mark': markOnly }" aria-hidden="true">{{ kind === 'securities' ? '↗' : kind === 'wealth' ? '◈' : '▤' }}</span>
+  <span v-else class="account-icon fallback" :class="{ 'card-mark': markOnly }" aria-hidden="true"><component :is="kind === 'securities' ? TrendingUp : kind === 'wealth' ? Wallet : Landmark" :size="markOnly ? 24 : 16" /></span>
 </template>
 
 <style scoped>

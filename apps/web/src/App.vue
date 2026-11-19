@@ -5,6 +5,10 @@ import { api, formatMinor, parseMinor, today, currentMonth, setCSRFToken, ApiErr
 import AccountIcon from './components/AccountIcon.vue'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
+import {
+  ArrowDownLeft, ArrowLeftRight, ClipboardList, Coffee, CreditCard, Flower2, House,
+  Layers, MessageCircle, PenLine, Settings, Sparkles, TrendingUp, TriangleAlert, Wallet,
+} from 'lucide-vue-next'
 import CategoryEmojiPicker from './components/CategoryEmojiPicker.vue'
 import DatePicker from './components/DatePicker.vue'
 import MailSettings from './components/MailSettings.vue'
@@ -14,14 +18,14 @@ import { request } from './services/api'
 import UserProfileDialog from './components/UserProfileDialog.vue'
 
 type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
-const nav: { key: View; label: string; glyph: string }[] = [
-  { key: 'home', label: '首页概览', glyph: '⌂' },
-  { key: 'ledger', label: '记账流水', glyph: '▤' },
-  { key: 'accounts', label: '家庭账户', glyph: '◉' },
-  { key: 'credit', label: '信用账单', glyph: '◷' },
-  { key: 'debt', label: '分期与负债', glyph: '▥' },
-  { key: 'invest', label: '投资', glyph: '↗' },
-  { key: 'settings', label: '设置', glyph: '⚙' },
+const nav: { key: View; label: string; icon: typeof House }[] = [
+  { key: 'home', label: '首页概览', icon: House },
+  { key: 'ledger', label: '记账流水', icon: ClipboardList },
+  { key: 'accounts', label: '家庭账户', icon: Wallet },
+  { key: 'credit', label: '信用账单', icon: CreditCard },
+  { key: 'debt', label: '分期与负债', icon: Layers },
+  { key: 'invest', label: '投资', icon: TrendingUp },
+  { key: 'settings', label: '设置', icon: Settings },
 ]
 
 const booted = ref(false)
@@ -58,12 +62,12 @@ const range = reactive({ from: currentMonth()[0], to: currentMonth()[1] })
 
 // Only capabilities backed by real APIs are labelled "已支持".
 const features = [
-  { glyph: '✎', title: '日常记账', desc: '收入、支出、账户互转、分类与项目拆分，退款关联原交易。', status: '已支持' },
-  { glyph: '◷', title: '信用账单与分期', desc: '账单周期、部分还款、额度、期次与手续费拆分，都能查看明细。', status: '已支持' },
-  { glyph: '◉', title: '家庭资产', desc: '现金、证券资金、持仓成本与负债结构，用资产减去负债查看净资产。', status: '已支持' },
-  { glyph: '↗', title: '投资与分红', desc: '查看买入成本、交易费用、投资盈亏和手工估值。', status: '已支持' },
-  { glyph: '▤', title: '项目归集', desc: '按项目与分类汇总净支出，支持自定义日期区间下钻明细。', status: '已支持' },
-  { glyph: '✧', title: '更多协作能力', desc: '多成员独立登录、账单导入、预算与实时行情仍在规划。', status: '规划中' },
+  { icon: PenLine, title: '日常记账', desc: '收入、支出、账户互转、分类与项目拆分，退款关联原交易。', status: '已支持' },
+  { icon: CreditCard, title: '信用账单与分期', desc: '账单周期、部分还款、额度、期次与手续费拆分，都能查看明细。', status: '已支持' },
+  { icon: Wallet, title: '家庭资产', desc: '现金、证券资金、持仓成本与负债结构，用资产减去负债查看净资产。', status: '已支持' },
+  { icon: TrendingUp, title: '投资与分红', desc: '查看买入成本、交易费用、投资盈亏和手工估值。', status: '已支持' },
+  { icon: ClipboardList, title: '项目归集', desc: '按项目与分类汇总净支出，支持自定义日期区间下钻明细。', status: '已支持' },
+  { icon: Sparkles, title: '更多协作能力', desc: '多成员独立登录、账单导入、预算与实时行情仍在规划。', status: '规划中' },
 ]
 
 const summary = ref<any>(null)
@@ -1584,7 +1588,7 @@ const metricCards = computed(() => {
           </div>
           <div class="feature-grid">
             <article v-for="feat in features" :key="feat.title" class="feature-card">
-              <span class="feature-glyph" aria-hidden="true">{{ feat.glyph }}</span>
+              <span class="feature-glyph" aria-hidden="true"><component :is="feat.icon" :size="20" /></span>
               <h3>{{ feat.title }}</h3>
               <p>{{ feat.desc }}</p>
               <span class="feature-status" :class="{ planned: feat.status === '规划中' }">{{ feat.status }}</span>
@@ -1640,7 +1644,7 @@ const metricCards = computed(() => {
         <div><div class="navlabel">我的小家</div>
           <nav class="nav">
             <button v-for="n in nav" :key="n.key" :class="{ active: view === n.key }" @click="go(n.key)">
-              <span class="glyph">{{ n.glyph }}</span> {{ n.label }}
+              <span class="glyph" aria-hidden="true"><component :is="n.icon" :size="18" /></span> {{ n.label }}
             </button>
           </nav>
         </div>
@@ -1679,7 +1683,7 @@ const metricCards = computed(() => {
           </div>
           </details><div class="stats metrics home-metrics">
             <div class="stat" v-for="m in metricCards.slice(0, 3)" :key="m.label">
-              <div class="stathead"><span class="statlabel">{{ m.label }}</span><span class="statglyph">✧</span></div>
+              <div class="stathead"><span class="statlabel">{{ m.label }}</span><span class="statglyph"><Sparkles :size="18" aria-hidden="true" /></span></div>
               <div class="statamount">{{ m.value }}</div><div class="statfoot">{{ m.foot }}</div>
             </div>
           </div>
@@ -1692,7 +1696,7 @@ const metricCards = computed(() => {
               <section class="panel transactions"><div class="paneltitle"><div><h2>最近流水</h2></div>
                 <button v-if="canWrite" class="switch" @click="quickEntry()">去记账 →</button></div>
                 <div class="translist"><div class="transaction" v-for="t in transactions.slice(0, 8)" :key="t.id">
-                  <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
+                  <div class="txicon"><component :is="t.type === 'income' ? ArrowDownLeft : t.type === 'transfer' ? ArrowLeftRight : Coffee" :size="19" aria-hidden="true" /></div>
                   <div class="txbody"><div class="txname">{{ t.merchant || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '账户转账' : '支出') }}</div>
                     <div class="txcat">{{ t.occurred_on }} · {{ recordLabel(t.status) }}</div></div>
                   <div class="txamount" :class="{ in: t.type === 'income' }">{{ t.type === 'income' ? '+' : '−' }}{{ formatMinor(t.amount_minor) }}</div>
@@ -1700,7 +1704,7 @@ const metricCards = computed(() => {
               </section>
             </div>
             <div>
-              <section class="panel home-budget"><div class="paneltitle"><div><h2>本月预算</h2><span class="subinfo">慢慢花，也能开心存</span></div><span>🌷</span></div><p class="budgetnote">预算功能未开发</p><div class="note-box">♡ 小家碎碎念<br />记录不是限制生活，而是让我们更自由地选择生活。</div></section>
+              <section class="panel home-budget"><div class="paneltitle"><div><h2>本月预算</h2><span class="subinfo">慢慢花，也能开心存</span></div><Flower2 :size="20" aria-hidden="true" /></div><p class="budgetnote">预算功能未开发</p><div class="note-box">♡ 小家碎碎念<br />记录不是限制生活，而是让我们更自由地选择生活。</div></section>
               <div class="legend-note">° ˖ ✧ 用轻轻柔柔的方式记下每一天 ✧ ˖ °</div>
               <section class="panel"><div class="paneltitle"><div><h2>信用总览</h2><span class="subinfo">按账单到期日 · 额度为实时负债余额</span></div>
                 <button class="switch" @click="go('credit')">管理 →</button></div>
@@ -1767,7 +1771,7 @@ const metricCards = computed(() => {
               </div>
             </form>
             <div class="translist"><div class="transaction ledger-transaction" v-for="t in ledgerTransactions" :key="t.id">
-              <div class="txicon">{{ t.type === 'income' ? '☀' : t.type === 'transfer' ? '⇄' : '☕' }}</div>
+              <div class="txicon"><component :is="t.type === 'income' ? ArrowDownLeft : t.type === 'transfer' ? ArrowLeftRight : Coffee" :size="19" aria-hidden="true" /></div>
               <div class="txbody"><div class="txname">{{ t.category_names || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出') }}</div>
                 <div v-if="t.merchant || t.note" class="txnote">{{ [t.merchant, t.note].filter(Boolean).join(' · ') }}</div>
                 <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已更正' : '已入账' }} <span v-if="t.type === 'expense' && t.status === 'posted'" class="refund-badge">{{ t.refunded_minor >= t.amount_minor ? '已全额退款' : t.refunded_minor > 0 ? '部分退款 ' + formatMinor(t.refunded_minor) : '未退款' }}</span></div></div>
@@ -2511,7 +2515,7 @@ const metricCards = computed(() => {
     <Transition name="dialog">
       <div v-if="confirmState" class="confirm-overlay" @click.self="cancelConfirm()">
         <div class="confirm-card" :class="{ danger: confirmState?.tone === 'danger' }">
-          <div class="confirm-emoji">{{ confirmState?.tone === 'danger' ? '⚠️' : '💭' }}</div>
+          <div class="confirm-emoji"><component :is="confirmState?.tone === 'danger' ? TriangleAlert : MessageCircle" :size="32" aria-hidden="true" /></div>
           <h3 class="confirm-title">{{ confirmState?.title }}</h3>
           <p class="confirm-msg">{{ confirmState?.message }}</p>
           <div class="confirm-actions">
@@ -2525,7 +2529,7 @@ const metricCards = computed(() => {
     <Transition name="dialog">
       <div v-if="createModal.open" class="confirm-overlay" @click.self="closeCreate">
         <div class="confirm-card create-modal">
-          <div class="confirm-emoji">✨</div>
+          <div class="confirm-emoji"><Sparkles :size="32" aria-hidden="true" /></div>
           <h3 class="confirm-title">{{ createTitle }}</h3>
           <p class="confirm-msg">{{ createHint }}</p>
           <div class="formgrid" style="margin-top:8px">
@@ -2777,7 +2781,7 @@ form label, form :deep(.category-icon-field) { margin-bottom: 13px; }
 .category-panel .formgrid input, .category-panel .formgrid :deep(.ss-trigger), .category-panel .formgrid :deep(summary) { height: 46px; }
 .create-category-emoji { grid-column: 1 / -1; text-align: start; }
 .confirm-card.danger{border-color:rgba(217,140,122,.5);}
-.confirm-emoji{font-size:34px;line-height:1;margin-bottom:8px;}
+.confirm-emoji{display:grid;place-items:center;color:var(--primary-deep);margin-bottom:8px;}
 .confirm-title{margin:0 0 8px;font-size:18px;color:var(--text);}
 .confirm-card.danger .confirm-title{color:var(--danger,#d98c7a);}
 .confirm-msg{margin:0 0 20px;font-size:14px;line-height:1.65;color:var(--muted,#8a7a72);}
