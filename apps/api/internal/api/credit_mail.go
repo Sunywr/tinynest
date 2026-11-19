@@ -24,7 +24,6 @@ type creditMailbox struct {
 type creditMailBinding struct {
 	InstrumentID   string `json:"instrument_id"`
 	MailboxID      string `json:"mailbox_id"`
-	CategoryID     string `json:"category_id"`
 	SubjectKeyword string `json:"subject_keyword"`
 	CardTail       string `json:"card_tail"`
 }
@@ -70,7 +69,7 @@ func (a *API) listCreditMail(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 	bindings := []creditMailBinding{}
-	rows, err = a.DB.QueryContext(ctx, `SELECT b.instrument_id,b.mailbox_id,b.category_id,b.subject_keyword,b.card_tail
+	rows, err = a.DB.QueryContext(ctx, `SELECT b.instrument_id,b.mailbox_id,b.subject_keyword,b.card_tail
   FROM credit_mail_bindings b JOIN credit_instruments i ON i.id=b.instrument_id AND i.household_id=b.household_id
   WHERE b.household_id=? AND i.status='active' ORDER BY b.instrument_id`, p.HouseholdID)
 	if err != nil {
@@ -80,7 +79,7 @@ func (a *API) listCreditMail(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	for rows.Next() {
 		var b creditMailBinding
-		if err := rows.Scan(&b.InstrumentID, &b.MailboxID, &b.CategoryID, &b.SubjectKeyword, &b.CardTail); err != nil {
+		if err := rows.Scan(&b.InstrumentID, &b.MailboxID, &b.SubjectKeyword, &b.CardTail); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -269,8 +268,8 @@ func (a *API) saveCreditMailBinding(w http.ResponseWriter, r *http.Request) {
 			return errInvalidCreditMailBinding
 		}
 		if b.MailboxID != "" {
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM credit_mailboxes m JOIN categories c ON c.household_id=m.household_id
-    WHERE m.id=? AND m.household_id=? AND m.enabled=1 AND c.id=? AND c.kind='expense' AND c.active=1`, b.MailboxID, p.HouseholdID, b.CategoryID).Scan(&count); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM credit_mailboxes
+				WHERE id=? AND household_id=? AND enabled=1`, b.MailboxID, p.HouseholdID).Scan(&count); err != nil {
 				return err
 			}
 			if count != 1 {
@@ -281,15 +280,16 @@ func (a *API) saveCreditMailBinding(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if b.MailboxID != "" {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO credit_mail_bindings (instrument_id,household_id,mailbox_id,category_id,subject_keyword,card_tail) VALUES(?,?,?,?,?,?)`,
-				b.InstrumentID, p.HouseholdID, b.MailboxID, b.CategoryID, b.SubjectKeyword, b.CardTail); err != nil {
+			// The legacy category column remains for compatibility with deployed schemas.
+			if _, err := tx.ExecContext(ctx, `INSERT INTO credit_mail_bindings (instrument_id,household_id,mailbox_id,category_id,subject_keyword,card_tail) VALUES(?,?,?,'',?,?)`,
+				b.InstrumentID, p.HouseholdID, b.MailboxID, b.SubjectKeyword, b.CardTail); err != nil {
 				return err
 			}
 		}
 		return audit(ctx, tx, p, "configure", "credit_mail_binding", b.InstrumentID, "{}")
 	})
 	if errors.Is(err, errInvalidCreditMailBinding) {
-		writeErr(w, 400, "invalid_request", "请选择本家庭的有效信用卡、邮箱和支出分类")
+		writeErr(w, 400, "invalid_request", "请选择本家庭的有效信用卡和邮箱")
 		return
 	}
 	if err != nil {

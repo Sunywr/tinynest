@@ -98,7 +98,7 @@ func TestCreditMailConfiguration(t *testing.T) {
 	if status, _ := c.do("PUT", base+"/mailboxes/foreign-mailbox", input); status != 404 {
 		t.Fatalf("foreign mailbox update status %d", status)
 	}
-	binding := map[string]any{"mailbox_id": "foreign-mailbox", "category_id": c.firstCategory("expense"), "subject_keyword": "信用卡账单", "card_tail": "0123"}
+	binding := map[string]any{"mailbox_id": "foreign-mailbox", "subject_keyword": "信用卡账单", "card_tail": "0123"}
 	if status, _ := c.do("PUT", bindPath, binding); status != 400 {
 		t.Fatalf("invalid mailbox binding status %d", status)
 	}

@@ -8,11 +8,11 @@ type Mailbox = {
   enabled: boolean; version: number; tested_at: string
 }
 type Binding = {
-  instrument_id: string; mailbox_id: string; category_id: string
+  instrument_id: string; mailbox_id: string
   subject_keyword: string; card_tail: string
 }
 
-defineProps<{ cards: Option[]; categories: Option[] }>()
+defineProps<{ cards: Option[] }>()
 defineEmits<{ close: [] }>()
 const inboxLabel = '收件箱'
 const fresh = () => ({ id: '', host: '', username: '', folder: inboxLabel, enabled: true, version: 0, tested_at: '', password: '' })
@@ -24,7 +24,7 @@ const loaded = ref(false)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
-const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', category_id: '', subject_keyword: '', card_tail: '' })
+const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keyword: '', card_tail: '' })
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
 
 async function run(action: () => Promise<void>) {
@@ -69,7 +69,7 @@ function saveMailbox(enabled = true) {
 function selectCard() {
   const id = binding.value.instrument_id
   const current = bindings.value.find(item => item.instrument_id === id)
-  binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', category_id: '', subject_keyword: '', card_tail: '' }
+  binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
 }
 
 function saveBinding() {
@@ -130,9 +130,6 @@ function saveBinding() {
             <template v-if="binding.mailbox_id">
               <label>标题关键字<input v-model.trim="binding.subject_keyword" required maxlength="255"></label>
               <label>卡尾号<input v-model.trim="binding.card_tail" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4"></label>
-              <label>默认支出分类<select v-model="binding.category_id" required>
-                <option value="">请选择</option><option v-for="category in categories" :key="category.id" :value="category.id">{{ category.name }}</option>
-              </select></label>
             </template>
           </div>
           <button class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>

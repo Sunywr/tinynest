@@ -1986,7 +1986,7 @@ const metricCards = computed(() => {
           </div>
           <CreditMailSettings v-if="panel === 'creditMail' && canWrite"
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active')"
-            :categories="expenseCategories" @close="closePanel()" />
+            @close="closePanel()" />
           <section v-else-if="panel === 'creditMail'" class="panel formpanel">
             <div class="paneltitle">
               <h2>账单邮箱</h2>
