@@ -139,7 +139,10 @@ func probeCreditIMAP(ctx context.Context, host, username, password, folder strin
 }
 
 func probeCreditIMAPSession(conn io.ReadWriter, user, secret, mailbox string) error {
-	reader := bufio.NewReaderSize(conn, 16*1024)
+	return openCreditIMAPFolder(conn, bufio.NewReaderSize(conn, 16*1024), user, secret, mailbox)
+}
+
+func openCreditIMAPFolder(conn io.Writer, reader *bufio.Reader, user, secret, mailbox string) error {
 	greeting, err := reader.ReadSlice('\n')
 	if err != nil || !strings.HasPrefix(strings.ToUpper(string(greeting)), "* OK ") {
 		return errors.New("invalid IMAP greeting")

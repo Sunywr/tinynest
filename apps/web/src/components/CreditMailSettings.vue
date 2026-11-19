@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { request } from '../services/api'
 
-type Option = { id: string; name: string }
+type Option = { id: string; name: string; issuer?: string }
 type Mailbox = {
   id: string; host: string; username: string; folder: string
   enabled: boolean; version: number; tested_at: string
@@ -12,7 +12,12 @@ type Binding = {
   subject_keyword: string; card_tail: string
 }
 
-defineProps<{ cards: Option[] }>()
+type StatementPreview = {
+  received_on: string; error?: string
+  transactions: { TransactionDate: string; PostingDate: string; Description: string; Amount: number }[] | null
+}
+
+const props = defineProps<{ cards: Option[] }>()
 defineEmits<{ close: [] }>()
 const inboxLabel = '收件箱'
 const fresh = () => ({ id: '', host: '', username: '', folder: inboxLabel, enabled: true, version: 0, tested_at: '', password: '' })
@@ -26,6 +31,17 @@ const error = ref('')
 const notice = ref('')
 const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keyword: '', card_tail: '' })
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
+const preview = ref<StatementPreview[] | null>(null)
+const previewBusy = ref(false)
+const canPreview = computed(() => {
+  const card = props.cards.find(item => item.id === binding.value.instrument_id)
+  const saved = bindings.value.find(item => item.instrument_id === card?.id)
+  return !!card && (card.name.includes('光大') || card.issuer?.includes('光大')) &&
+    !!saved && boxes.value.some(item => item.id === saved.mailbox_id && item.enabled) &&
+    saved.mailbox_id === binding.value.mailbox_id && saved.subject_keyword === binding.value.subject_keyword &&
+    saved.card_tail === binding.value.card_tail
+})
+const amountFormat = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' })
 
 async function run(action: () => Promise<void>) {
   busy.value = true
@@ -67,9 +83,20 @@ function saveMailbox(enabled = true) {
 }
 
 function selectCard() {
+  preview.value = null
   const id = binding.value.instrument_id
   const current = bindings.value.find(item => item.instrument_id === id)
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
+}
+
+function previewStatements() {
+  preview.value = null
+  previewBusy.value = true
+  void run(async () => {
+    const id = encodeURIComponent(binding.value.instrument_id)
+    const data = await request<{ statements: StatementPreview[] }>('/credit-mail/bindings/' + id + '/preview', { method: 'POST' })
+    preview.value = data.statements
+  }).finally(() => { previewBusy.value = false })
 }
 
 function saveBinding() {
@@ -133,8 +160,26 @@ function saveBinding() {
             </template>
           </div>
           <button class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
+          <button v-if="canPreview" class="ghost preview-action" type="button" @click="previewStatements">
+            {{ previewBusy ? '正在读取账单…' : '读取光大账单预览' }}
+          </button>
         </fieldset>
       </form>
+      <section v-if="preview !== null && canPreview" class="preview-statements">
+        <h3>光大账单预览</h3>
+        <p v-if="!preview.length">未找到符合标题关键字的光大账单。</p>
+        <p v-else>找到 {{ preview.length }} 封账单。以下明细仅供预览。</p>
+        <details v-for="(statement, index) in preview" :key="index">
+          <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
+          <ul v-if="statement.transactions">
+            <li v-for="(row, rowIndex) in statement.transactions" :key="rowIndex">
+              <time>{{ row.TransactionDate }}</time>
+              <span>{{ row.Description }}</span>
+              <b>{{ amountFormat.format(row.Amount / 100) }}</b>
+            </li>
+          </ul>
+        </details>
+      </section>
     </template>
   </section>
 </template>
@@ -145,4 +190,9 @@ legend { font-weight: 700; padding: 0; }
 form + form { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar button { max-width: 100%; overflow-wrap: anywhere; }
 .actions-bar .primary { width: auto; margin-top: 0; }
+.preview-action { margin-top: 10px; }
+.preview-statements details { padding: 10px 0; border-top: 1px solid var(--border); }
+.preview-statements summary { cursor: pointer; }
+.preview-statements ul { padding: 0; list-style: none; }
+.preview-statements li { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; overflow-wrap: anywhere; }
 </style>
