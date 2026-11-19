@@ -79,6 +79,14 @@ SQL
 
 证据应分别记录原始备份校验、异地副本校验、隔离恢复、账务比对及 API 验收的结果。未执行的项目记为 UNVERIFIED。合成数据演练可用于验证流程和工具，生产备份由运维单独验收。
 
+## 信用卡账单 IMAP 邮箱
+
+信用卡账单邮箱使用独立的 IMAP 加密密钥。后端通过 systemd
+`LoadCredential=credit-mail-key:/etc/tinynest/credentials/credit-mail-key` 加载，
+也可通过 `TINYNEST_CREDIT_MAIL_KEY_FILE` 指定受保护的 32 字节随机密钥文件。
+保留密钥的受限备份，后续部署沿用同一密钥。
+家庭管理员在「信用账单 → 账单邮箱」测试并保存配置。后端须能出站访问邮箱的 TCP 993 端口。
+
 ## 托管邮箱 SMTP 服务
 
 邮件动态配置、站点管理员授予、密钥备份与上线步骤见 [托管邮箱 SMTP 接入](feishu-mail.md)。代码已部署生产，真实 SMTP 待管理员在设置页配置并测试。

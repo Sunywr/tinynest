@@ -65,6 +65,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerV013(mux)
 	a.registerV014(mux)
 	a.registerMail(mux)
+	a.registerCreditMail(mux)
 }
 
 // --- bootstrap & identity ---------------------------------------------------

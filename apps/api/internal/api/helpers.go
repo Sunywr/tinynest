@@ -68,6 +68,8 @@ type Options struct {
 	// Zero uses the production daily Asia/Shanghai 00:07 boundary.
 	SchedulerInterval time.Duration
 	MailKey           []byte
+	CreditMailKey     []byte
+	CreditIMAPProbe   func(context.Context, string, string, string, string) error
 	MailSender        func(context.Context, MailConfig, string, string, string, string) error
 }
 

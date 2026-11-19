@@ -194,9 +194,25 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	var creditMailKey []byte
+	creditMailKeyPath := os.Getenv("TINYNEST_CREDIT_MAIL_KEY_FILE")
+	if dir := os.Getenv("CREDENTIALS_DIRECTORY"); creditMailKeyPath == "" && dir != "" {
+		candidate := filepath.Join(dir, "credit-mail-key")
+		if _, e := os.Stat(candidate); e == nil {
+			creditMailKeyPath = candidate
+		}
+	}
+	if creditMailKeyPath != "" {
+		creditMailKey, err = os.ReadFile(creditMailKeyPath)
+		if err != nil || len(creditMailKey) != 32 {
+			slog.Error("credit mail key must be a readable 32-byte file")
+			os.Exit(1)
+		}
+	}
 	businessAPI := api.New(database, api.Options{
 		SetupToken:     setupToken,
 		MailKey:        mailKey,
+		CreditMailKey:  creditMailKey,
 		SetupDisabled:  setupDisabled,
 		CookieSecure:   cookieSecure,
 		TrustedProxies: trustedProxies,
