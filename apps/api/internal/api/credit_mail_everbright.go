@@ -452,6 +452,15 @@ func cmbMIMEHTML(header mimeHeader, body io.Reader, date time.Time, tail string)
 			return inline, nil
 		}
 	}
+	acceptDetails := func(candidate string) bool {
+		_, err := credit.ParseBankStatement("cmb", candidate, date, tail)
+		return err == nil
+	}
+	for _, attachmentOnly := range []bool{false, true} {
+		if candidate, err := findMailHTMLPart(header, bytes.NewReader(raw), 0, attachmentOnly, acceptDetails); err == nil {
+			return candidate, nil
+		}
+	}
 	attachment, err := mailHTMLPart(header, bytes.NewReader(raw), 0, true)
 	if err == nil {
 		if _, detailErr := credit.ParseBankStatement("cmb", attachment, date, tail); detailErr == nil ||
@@ -463,6 +472,10 @@ func cmbMIMEHTML(header mimeHeader, body io.Reader, date time.Time, tail string)
 }
 
 func mailHTMLPart(header mimeHeader, body io.Reader, depth int, attachmentOnly bool) (string, error) {
+	return findMailHTMLPart(header, body, depth, attachmentOnly, nil)
+}
+
+func findMailHTMLPart(header mimeHeader, body io.Reader, depth int, attachmentOnly bool, accept func(string) bool) (string, error) {
 	if depth > 6 {
 		return "", errors.New("MIME nesting limit")
 	}
@@ -477,7 +490,7 @@ func mailHTMLPart(header mimeHeader, body io.Reader, depth int, attachmentOnly b
 			if err != nil {
 				return "", err
 			}
-			html, err := mailHTMLPart(mimeHeader(part.Header), part, depth+1, attachmentOnly)
+			html, err := findMailHTMLPart(mimeHeader(part.Header), part, depth+1, attachmentOnly, accept)
 			part.Close()
 			if err == nil {
 				return html, nil
@@ -529,6 +542,9 @@ func mailHTMLPart(header mimeHeader, body io.Reader, depth int, attachmentOnly b
 			!strings.HasPrefix(sniff, "<table") {
 			return "", errors.New("invalid HTML attachment")
 		}
+	}
+	if accept != nil && !accept(string(raw)) {
+		return "", errors.New("HTML part does not contain matching details")
 	}
 	return string(raw), nil
 }

@@ -38,3 +38,13 @@ func TestGuangfaSharedEmailSeparatesCards(t *testing.T) {
 		t.Fatal("unmatched card accepted")
 	}
 }
+func TestCMBHeaderMappedHistory(t *testing.T) {
+	const body = `<table>
+	<tr><th>卡号末四位</th><th>交易日期</th><th>入账日期</th><th>交易说明</th><th>人民币金额</th></tr>
+	<tr><td>0123</td><td>04/16</td><td>04/17</td><td>测试退款</td><td>-28.80</td></tr>
+	</table>`
+	rows, err := ParseBankStatement("cmb", body, time.Date(2015, 5, 17, 0, 0, 0, 0, time.UTC), "0123")
+	if err != nil || len(rows) != 1 || rows[0].Amount != -2880 || rows[0].PostingDate != "2015-04-17" {
+		t.Fatalf("unexpected CMB detail: %v (%v)", rows, err)
+	}
+}

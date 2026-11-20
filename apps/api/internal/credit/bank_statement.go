@@ -24,7 +24,11 @@ func ParseBankStatement(bank, body string, date time.Time, tail string) ([]Everb
 	dec := xml.NewDecoder(strings.NewReader(markup))
 	dec.Strict = false
 	dec.Entity = xml.HTMLEntity
-	var tables []everbrightTable
+	type statementTable struct {
+		everbrightTable
+		cmbColumns []int
+	}
+	var tables []statementTable
 	var result []EverbrightTransaction
 	var section string
 	var anchors [][]int
@@ -42,7 +46,7 @@ func ParseBankStatement(bank, body string, date time.Time, tail string) ([]Everb
 			return nil, errors.New("invalid statement HTML")
 		}
 		if element, ok := token.(xml.StartElement); ok && element.Name.Local == "table" {
-			tables = append(tables, everbrightTable{})
+			tables = append(tables, statementTable{})
 			continue
 		}
 		if len(tables) == 0 {
@@ -94,24 +98,40 @@ func ParseBankStatement(bank, body string, date time.Time, tail string) ([]Everb
 						continue
 					}
 					occurred, posted, description, amount = row[1], row[2], row[4], strings.TrimPrefix(row[6], "CNY ")
-				case bank == "cmb" && (len(row) == 7 || len(row) == 8):
-					if len(row) == 8 {
-						row = row[1:]
-					}
-					if !cmbRMBValue(row[3]) || len(row[4]) != 4 || strings.Trim(row[4], "0123456789") != "" {
+				case bank == "cmb":
+					if columns := cmbRMBColumns(row); columns != nil {
+						table.cmbColumns = columns
 						continue
 					}
-					if _, err := bankStatementDate(row[1], date); err != nil {
-						if row[4] == tail {
+					card := ""
+					if table.cmbColumns != nil {
+						columns := table.cmbColumns
+						if len(row) != columns[5] {
+							continue
+						}
+						occurred, posted, description, amount, card = row[columns[0]], row[columns[1]], row[columns[2]], row[columns[3]], row[columns[4]]
+					} else {
+						if len(row) == 8 {
+							row = row[1:]
+						}
+						if len(row) != 7 || !cmbRMBValue(row[3]) {
+							continue
+						}
+						occurred, posted, description, amount, card = row[0], row[1], row[2], row[3], row[4]
+					}
+					if len(card) != 4 || strings.Trim(card, "0123456789") != "" {
+						continue
+					}
+					if _, err := bankStatementDate(posted, date); err != nil {
+						if card == tail {
 							return nil, err
 						}
 						continue
 					}
-					if row[4] != tail {
+					if card != tail {
 						cmbOtherCard = true
 						continue
 					}
-					occurred, posted, description, amount = row[0], row[1], row[2], row[3]
 				default:
 					continue
 				}
@@ -154,4 +174,29 @@ func bankStatementDate(raw string, upper time.Time) (time.Time, error) {
 		raw = raw[:2] + "/" + raw[2:]
 	}
 	return everbrightDate(raw, upper)
+}
+
+// cmbRMBColumns recognizes tables that explicitly label the booked amount as RMB.
+func cmbRMBColumns(row []string) []int {
+	columns := []int{-1, -1, -1, -1, -1, len(row)}
+	for i, label := range row {
+		switch strings.Join(strings.Fields(label), "") {
+		case "交易日", "交易日期":
+			columns[0] = i
+		case "记账日", "记账日期", "入账日", "入账日期":
+			columns[1] = i
+		case "交易摘要", "交易说明", "交易描述":
+			columns[2] = i
+		case "人民币金额":
+			columns[3] = i
+		case "卡号末四位", "卡号后四位", "卡号末4位", "卡号后4位":
+			columns[4] = i
+		}
+	}
+	for _, index := range columns[:5] {
+		if index < 0 {
+			return nil
+		}
+	}
+	return columns
 }

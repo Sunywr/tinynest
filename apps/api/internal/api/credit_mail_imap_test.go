@@ -25,6 +25,7 @@ func TestCMBReadsHTMLAttachmentWhenInlineHasNoDetails(t *testing.T) {
 	const table = "<table><tr><td>0416</td><td>0417</td><td>测试消费</td><td>￥28.80</td><td>0123</td><td>CN</td><td>28.80</td></tr></table>"
 	header := mimeHeader{"Content-Type": {`multipart/mixed; boundary="legacy"`}}
 	body := "--legacy\r\nContent-Type: text/html; charset=utf8\r\n\r\n<html>账单通知</html>\r\n" +
+		"--legacy\r\nContent-Type: text/html; name=cover.htm\r\nContent-Disposition: attachment\r\n\r\n<html>cover</html>\r\n" +
 		"--legacy\r\nContent-Type: application/octet-stream; name=statement.htm\r\n" +
 		"Content-Disposition: attachment\r\n\r\n" + table + "\r\n--legacy--\r\n"
 	date := time.Date(2023, 5, 17, 0, 0, 0, 0, time.UTC)
