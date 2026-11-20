@@ -282,10 +282,14 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 			}
 			seen[sum] = true
 			amounts := credit.ParseStatementAmounts(html)
+			matchesCard := bank != "gdb" && credit.StatementSummaryMatchesCard(html, tail)
+			if bank == "citic" {
+				amounts, matchesCard = credit.ParseCITICStatementAmounts(html, tail)
+			}
 			if amounts.NewCharges != nil || amounts.AmountDue != nil {
 				item.Amounts = &amounts
 				item.Provision = "review"
-				if bank != "gdb" && credit.StatementSummaryMatchesCard(html, tail) {
+				if matchesCard {
 					item.Provision = "eligible"
 				}
 			}

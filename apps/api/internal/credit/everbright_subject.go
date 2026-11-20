@@ -39,7 +39,7 @@ func MatchBankStatementHeader(bank, from, subject, keyword string) bool {
 		}
 	case "citic":
 		switch strings.ToLower(domain) {
-		case "citiccard.com", "citicibank.com", "ecitic.com", "citicbank.com":
+		case "bill.citiccard.com", "citiccard.com", "citicibank.com", "ecitic.com", "citicbank.com":
 		default:
 			return false
 		}

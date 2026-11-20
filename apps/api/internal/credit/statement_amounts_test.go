@@ -2,6 +2,32 @@ package credit
 
 import "testing"
 
+func TestCITICStatementSummaryUsesMatchingRMBAccount(t *testing.T) {
+	body := `<tr><td>本期应还款总额</td><td></td><td>CNY 400.00</td></tr>
+	<tr><td>账单日</td><td>2026年11月07日</td></tr>
+	<tr><td>Card Number</td><td>New Charge</td><td>Acct. Statement Balance</td></tr>
+	<tr><td><td>1234-56**-****-9876</td><td>CNY</td><td>10.00</td><td><td>2.00</td><td><td>30.00</td><td><td>38.00</td><td><td>4.00</td><td></tr>
+	<tr><td><td>1234-56**-****-0123</td><td>CNY</td><td>20.00</td><td><td>5.00</td><td><td>40.00</td><td><td>55.00</td><td><td>5.00</td><td></tr>`
+	got, matched := ParseCITICStatementAmounts(body, "0123")
+	if !matched || got.NewCharges == nil || *got.NewCharges != 4000 || got.AmountDue == nil || *got.AmountDue != 5500 || got.StatementDate != "2026-11-07" {
+		t.Fatalf("unexpected account summary: %+v, matched=%v", got, matched)
+	}
+	got, matched = ParseCITICStatementAmounts(body, "0000")
+	if matched || got.NewCharges != nil || got.AmountDue == nil || *got.AmountDue != 40000 {
+		t.Fatalf("unexpected unmatched summary: %+v, matched=%v", got, matched)
+	}
+}
+
+func TestCITICStatementSender(t *testing.T) {
+	const subject = "中信银行信用卡电子账单"
+	if !MatchBankStatementHeader("citic", "statement@bill.citiccard.com", subject, "信用卡电子账单") {
+		t.Fatal("CITIC statement subdomain rejected")
+	}
+	if MatchBankStatementHeader("citic", "statement@bill.citiccard.com.example.org", subject, "信用卡电子账单") {
+		t.Fatal("unrelated sender domain accepted")
+	}
+}
+
 func TestStatementAmountsRecognizesCreditBalance(t *testing.T) {
 	got := ParseStatementAmounts("<table><tr><td>本期应还款总额：</td><td>￥-25.00</td></tr>" +
 		"<tr><td>到期还款日：您无需还款</td></tr></table>")
