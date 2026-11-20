@@ -56,6 +56,7 @@ const visiblePreview = computed(() => {
 })
 const previewBusy = ref(false)
 const workbook = ref<File | null>(null)
+const workbookInput = ref<HTMLInputElement>()
 const workbookTail = ref('')
 const workbookBank = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
@@ -82,6 +83,9 @@ const batchRows = computed(() => {
 const hasPostableSummary = computed(() => (visiblePreview.value ?? []).some(statement =>
   statement.provision === 'eligible' && !!statement.amounts?.statement_date &&
   statement.amounts.new_charges_minor !== undefined))
+const needsSPDBWorkbook = computed(() => workbookBank.value === '浦发银行' &&
+  (visiblePreview.value ?? []).some(statement => statement.amounts?.amount_due_minor !== undefined &&
+    statement.amounts.new_charges_minor === undefined))
 const canPreview = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const saved = bindings.value.find(item => item.instrument_id === card?.id)
@@ -402,7 +406,7 @@ function saveBinding() {
             <h3>{{ workbookBank }}明细补录</h3>
             <div class="formgrid">
               <label>卡尾号<input v-model.trim="workbookTail" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" :readonly="!!binding.card_tail"></label>
-              <label>银行下载的账单<input :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel"
+              <label>银行下载的账单<input ref="workbookInput" :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel"
                 @change="workbook = ($event.target as HTMLInputElement).files?.[0] ?? null"></label>
             </div>
             <button type="button" class="ghost" :disabled="busy" @click="importWorkbook">导入并预览</button>
@@ -422,14 +426,19 @@ function saveBinding() {
         </div>
         <p v-if="!rangeReady">请选择完整的日期范围。</p>
         <p v-else-if="!visiblePreview.length">该日期范围内暂无账单。</p>
-        <p v-else>显示 {{ visiblePreview.length }} 期账单。已分类且无疑似重复的明细可批量确认。</p>
-        <div v-if="syncOnly && (batchRows.length || hasPostableSummary)" class="review-actions">
-          <button type="button" class="primary" :disabled="busy" @click="createBatch">
+        <p v-else>显示 {{ visiblePreview.length }} 期账单。</p>
+        <div v-if="syncOnly && needsSPDBWorkbook" class="mail-history-note">
+          <p>浦发邮件的应还总额用于核对。导入银行下载的 XLS 明细后，可在此一键记入符合条件的流水。</p>
+          <button type="button" class="ghost" :disabled="busy" @click="workbookInput?.focus()">前往明细补录</button>
+        </div>
+        <div v-if="syncOnly && visiblePreview.length" class="review-actions">
+          <button type="button" class="primary" :disabled="busy || (!batchRows.length && !hasPostableSummary)" @click="createBatch">
             一键记入流水
           </button>
+          <span v-if="!batchRows.length && !hasPostableSummary" class="subinfo">当前没有可入账项目。</span>
         </div>
         <details v-for="(statement, index) in visiblePreview" :key="index">
-          <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
+          <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || (statement.transactions?.length ? `${statement.transactions.length} 笔明细` : '邮件摘要') }}</summary>
           <p v-if="statement.amounts" class="subinfo">
             邮件账单摘要
             <template v-if="statement.amounts.statement_date"> · 账单日 {{ statement.amounts.statement_date }}</template>
