@@ -34,16 +34,15 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 24*time.Second)
 	defer cancel()
-	var host, user, folder, cipher, mailboxID, keyword, tail string
-	err := a.DB.QueryRowContext(ctx, `SELECT m.host,m.username,m.folder,m.password_cipher,m.id,b.subject_keyword,b.card_tail
+	var host, user, folder, cipher, mailboxID, keyword, tail, name, issuer string
+	err := a.DB.QueryRowContext(ctx, `SELECT m.host,m.username,m.folder,m.password_cipher,m.id,b.subject_keyword,b.card_tail,i.name,COALESCE(i.issuer,'')
   FROM credit_mail_bindings b
   JOIN credit_mailboxes m ON m.id=b.mailbox_id AND m.household_id=b.household_id
   JOIN credit_instruments i ON i.id=b.instrument_id AND i.household_id=b.household_id
-  WHERE b.household_id=? AND b.instrument_id=? AND m.enabled=1 AND i.status='active'
-  AND (i.issuer LIKE '%光大%' OR i.name LIKE '%光大%')`, p.HouseholdID, r.PathValue("id")).
-		Scan(&host, &user, &folder, &cipher, &mailboxID, &keyword, &tail)
+  WHERE b.household_id=? AND b.instrument_id=? AND m.enabled=1 AND i.status='active' AND i.kind='credit_card'`, p.HouseholdID, r.PathValue("id")).
+		Scan(&host, &user, &folder, &cipher, &mailboxID, &keyword, &tail, &name, &issuer)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeErr(w, 404, "missing_binding", "请选择已绑定邮箱的光大信用卡")
+		writeErr(w, 404, "missing_binding", "请选择已绑定邮箱的信用卡")
 		return
 	}
 	if err != nil {
@@ -51,6 +50,11 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card := r.PathValue("id")
+	bank := statementBank(issuer, name)
+	if bank == "" {
+		writeErr(w, 400, "unsupported_statement_bank", "该银行尚未支持邮件明细解析")
+		return
+	}
 	saved, err := readSavedCreditPreview(ctx, a.DB, p.HouseholdID, card)
 	if err != nil {
 		internalErr(w, err)
@@ -61,7 +65,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 503, "mail_key_unavailable", "无法读取授权码，请重新测试并保存邮箱")
 		return
 	}
-	statements, err := readEverbrightPreview(ctx, host, user, password, folder, keyword, tail)
+	statements, err := readBankPreview(ctx, bank, host, user, password, folder, keyword, tail)
 	if err != nil {
 		writeErr(w, 502, "credit_mail_preview_failed", "读取账单失败，请检查邮箱连接后重试")
 		return
@@ -109,7 +113,18 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 var imapFetchUID = regexp.MustCompile(`(?i)\bUID ([0-9]+)\b`)
 var imapLiteralLength = regexp.MustCompile(`\{([0-9]+)\}\r?\n$`)
 
-func readEverbrightPreview(ctx context.Context, host, username, password, folder, keyword, tail string) ([]everbrightPreviewStatement, error) {
+func statementBank(issuer, name string) string {
+	for _, text := range []string{issuer, name} {
+		for _, item := range []struct{ name, key string }{{"光大", "ceb"}, {"广发", "gdb"}, {"交通", "comm"}, {"招商", "cmb"}} {
+			if strings.Contains(text, item.name) {
+				return item.key
+			}
+		}
+	}
+	return ""
+}
+
+func readBankPreview(ctx context.Context, bank, host, username, password, folder, keyword, tail string) ([]everbrightPreviewStatement, error) {
 	user, err := quoteIMAPProbeValue(username)
 	if err != nil {
 		return nil, err
@@ -200,7 +215,7 @@ func readEverbrightPreview(ctx context.Context, host, username, password, folder
 			}
 			uid := imapFetchUID.FindStringSubmatch(line)
 			msg, err := mail.ReadMessage(bytes.NewReader(body))
-			if uid != nil && err == nil && credit.MatchEverbrightStatementHeader(msg.Header.Get("From"), msg.Header.Get("Subject"), keyword) {
+			if uid != nil && err == nil && credit.MatchBankStatementHeader(bank, msg.Header.Get("From"), msg.Header.Get("Subject"), keyword) {
 				matches = append(matches, uid[1])
 			}
 		})
@@ -213,15 +228,21 @@ func readEverbrightPreview(ctx context.Context, host, username, password, folder
 	}
 	statements := make([]everbrightPreviewStatement, 0, len(matches))
 	seen := make(map[[32]byte]bool)
-	for _, uid := range matches {
-		item := everbrightPreviewStatement{Error: "邮件没有可解析的光大账单正文"}
-		var duplicate bool
-		err := command("UID FETCH "+uid+" (BODY.PEEK[])", func(_ string, body []byte) {
+	for start := 0; start < len(matches); start += 12 {
+		batch := strings.Join(matches[start:min(start+12, len(matches))], ",")
+		err := command("UID FETCH "+batch+" (BODY.PEEK[])", func(_ string, body []byte) {
 			if len(body) == 0 {
 				return
 			}
+			item := everbrightPreviewStatement{Error: "邮件没有可解析的账单正文"}
+			duplicate := false
+			defer func() {
+				if !duplicate {
+					statements = append(statements, item)
+				}
+			}()
 			msg, err := mail.ReadMessage(bytes.NewReader(body))
-			if err != nil || !credit.MatchEverbrightStatementHeader(msg.Header.Get("From"), msg.Header.Get("Subject"), keyword) {
+			if err != nil || !credit.MatchBankStatementHeader(bank, msg.Header.Get("From"), msg.Header.Get("Subject"), keyword) {
 				return
 			}
 			received, err := msg.Header.Date()
@@ -240,7 +261,7 @@ func readEverbrightPreview(ctx context.Context, host, username, password, folder
 				return
 			}
 			seen[sum] = true
-			rows, err := credit.ParseEverbrightHTML(html, received, tail)
+			rows, err := credit.ParseBankStatement(bank, html, received, tail)
 			if err != nil {
 				item.Error = "账单明细格式或日期未通过校验"
 				return
@@ -254,9 +275,6 @@ func readEverbrightPreview(ctx context.Context, host, username, password, folder
 		})
 		if err != nil {
 			return nil, err
-		}
-		if !duplicate {
-			statements = append(statements, item)
 		}
 	}
 	return statements, nil

@@ -59,7 +59,7 @@ const batchRows = computed(() => {
 const canPreview = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const saved = bindings.value.find(item => item.instrument_id === card?.id)
-  return !!card && (card.name.includes('光大') || card.issuer?.includes('光大')) &&
+  return !!card && /光大|广发|交通|招商/.test(card.issuer + ' ' + card.name) &&
     !!saved && boxes.value.some(item => item.id === saved.mailbox_id && item.enabled) &&
     saved.mailbox_id === binding.value.mailbox_id && saved.subject_keyword === binding.value.subject_keyword &&
     saved.card_tail === binding.value.card_tail
@@ -301,12 +301,12 @@ function saveBinding() {
           </div>
           <button v-if="!syncOnly" class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
           <button v-if="canPreview" class="ghost preview-action" type="button" @click="previewStatements">
-            {{ previewBusy ? '正在读取账单…' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取光大账单预览' }}
+            {{ previewBusy ? '正在读取账单…' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取账单预览' }}
           </button>
         </fieldset>
       </form>
       <section v-if="preview !== null && (syncOnly || canPreview)" class="preview-statements">
-        <h3>光大账单预览</h3>
+        <h3>信用卡账单预览</h3>
         <p v-if="synchronizedAt">上次同步 {{ new Date(synchronizedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
         <div v-if="syncOnly && synchronizedAt" class="review-actions">
           <template v-if="confirmClear">
@@ -316,7 +316,7 @@ function saveBinding() {
           </template>
           <button v-else type="button" class="ghost" :disabled="busy" @click="confirmClear = true">清空预览</button>
         </div>
-        <p v-if="!preview.length">未找到符合标题关键字的光大账单。</p>
+        <p v-if="!preview.length">未找到符合标题关键字的账单。</p>
         <p v-else>找到 {{ preview.length }} 封账单。已分类且无疑似重复的明细可批量确认。</p>
         <div v-if="syncOnly && batchRows.length" class="review-actions">
           <template v-if="confirmBatch">

@@ -143,7 +143,7 @@ test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page 
   expect(syncRequests).toBe(1)
   await page.getByRole('button', { name: '清空预览', exact: true }).click()
   await page.getByRole('button', { name: '确认清空预览' }).click()
-  await expect(page.getByRole('heading', { name: '光大账单预览' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '信用卡账单预览' })).toHaveCount(0)
   await page.getByRole('button', { name: '返回列表' }).click()
   await page.getByRole('button', { name: '账单邮箱', exact: true }).click()
   await expect(page.getByLabel('IMAP 主机（TLS 993）')).toBeVisible()

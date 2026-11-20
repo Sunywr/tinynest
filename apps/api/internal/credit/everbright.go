@@ -40,8 +40,15 @@ func ParseEverbrightHTML(body string, statementDate time.Time, cardTail string) 
 	}
 	// Keep table structure while dropping presentation markup and its attributes.
 	// Some templates contain unbalanced quotes in inline styles.
+	dec := xml.NewDecoder(strings.NewReader(statementTableMarkup(body)))
+	dec.Strict = false
+	dec.Entity = xml.HTMLEntity
+	return parseEverbrightTable(dec, statementDate, cardTail)
+}
+
+func statementTableMarkup(body string) string {
 	body = everbrightNonContent.ReplaceAllString(body, "")
-	body = everbrightHTMLTag.ReplaceAllStringFunc(body, func(tag string) string {
+	return everbrightHTMLTag.ReplaceAllStringFunc(body, func(tag string) string {
 		parts := everbrightHTMLTag.FindStringSubmatch(tag)
 		switch name := strings.ToLower(parts[2]); name {
 		case "table", "tr", "td", "th":
@@ -52,9 +59,9 @@ func ParseEverbrightHTML(body string, statementDate time.Time, cardTail string) 
 			return ""
 		}
 	})
-	dec := xml.NewDecoder(strings.NewReader(body))
-	dec.Strict = false
-	dec.Entity = xml.HTMLEntity
+}
+
+func parseEverbrightTable(dec *xml.Decoder, statementDate time.Time, cardTail string) ([]EverbrightTransaction, error) {
 	var tables []everbrightTable
 	var transactions []EverbrightTransaction
 	found := false

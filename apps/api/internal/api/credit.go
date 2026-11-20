@@ -117,7 +117,7 @@ func (a *API) refreshPendingStatementAmount(ctx context.Context, tx *sql.Tx, hou
 func validCreditLogo(key string) bool {
 	switch key {
 	case "", "generic", "spdb", "ceb", "cmb", "citic", "ccb", "abc", "icbc",
-		"shrcb", "alipay", "wechat", "meituan", "douyin":
+		"comm", "gdb", "boc", "shrcb", "alipay", "wechat", "meituan", "douyin":
 		return true
 	default:
 		return false

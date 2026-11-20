@@ -45,7 +45,7 @@ const aliases = Object.entries(brands).flatMap(([brand, names]) =>
   names.split(' ').map(name => ({ brand, name })),
 ).sort((a, b) => b.name.length - a.name.length)
 
-const standaloneMarks = new Set(['spdb', 'ceb', 'cmb', 'citic', 'ccb', 'abc', 'icbc'])
+const standaloneMarks = new Set(['spdb', 'ceb', 'cmb', 'citic', 'ccb', 'abc', 'icbc', 'comm', 'gdb', 'boc'])
 
 export const creditBrandOptions = [
   ...standaloneMarks, 'shrcb', 'alipay', 'wechat', 'meituan', 'douyin',

@@ -17,13 +17,18 @@ var everbrightSubjectDate = regexp.MustCompile(`20[0-9]{2}\s*年\s*[0-9]{1,2}\s*
 // MatchEverbrightStatementHeader matches the configured subject after decoding
 // MIME encoded words and removing optional statement dates.
 func MatchEverbrightStatementHeader(from, subject, keyword string) bool {
+	return MatchBankStatementHeader("ceb", from, subject, keyword)
+}
+
+func MatchBankStatementHeader(bank, from, subject, keyword string) bool {
+	domains := map[string]string{"ceb": "cardcenter.cebbank.com", "gdb": "cgbchina.com.cn", "comm": "bocomcc.com", "cmb": "message.cmbchina.com"}
 	decoder := &mime.WordDecoder{CharsetReader: EverbrightCharsetReader}
 	address, err := (&mail.AddressParser{WordDecoder: decoder}).Parse(from)
 	if err != nil {
 		return false
 	}
 	_, domain, ok := strings.Cut(address.Address, "@")
-	if !ok || !strings.EqualFold(domain, "cardcenter.cebbank.com") {
+	if !ok || domains[bank] == "" || !strings.EqualFold(domain, domains[bank]) {
 		return false
 	}
 	decoded, err := decoder.DecodeHeader(subject)
