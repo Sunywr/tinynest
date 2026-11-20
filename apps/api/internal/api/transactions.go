@@ -499,6 +499,7 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 	if err := db.SaveEntry(r.Context(), tx, rev, p.HouseholdID, "", p.Username); err != nil {
 		return err
 	}
+	var statementID string
 	isCredit := false
 	for _, line := range orig.Lines {
 		if instrument != nil && line.Account == ledger.CreditSubject(*instrument) {
@@ -507,7 +508,6 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 		}
 	}
 	if isCredit {
-		var statementID string
 		var amount int64
 		if err := tx.QueryRowContext(r.Context(), `
 				SELECT s.id,i.amount_minor FROM credit_statement_items i
@@ -536,13 +536,18 @@ func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, r
 				VALUES(?,'reversal',?,?,?)`, statementID, revID, -amount, rev.OccurredOn); err != nil {
 			return err
 		}
-		if err := a.refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, statementID); err != nil {
-			return err
-		}
 	}
 	if _, err := tx.ExecContext(r.Context(),
 		`UPDATE journal_entries SET status='reversed' WHERE id=? AND household_id=?`, entryID, p.HouseholdID); err != nil {
 		return err
+	}
+	if isCredit {
+		if err := a.rebalanceStatementProvision(tx, r, p, statementID); err != nil {
+			return err
+		}
+		if err := a.refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, statementID); err != nil {
+			return err
+		}
 	}
 	return audit(r.Context(), tx, p, action, "transaction", id, revID)
 }

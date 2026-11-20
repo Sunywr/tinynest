@@ -28,6 +28,8 @@ type everbrightPreviewStatement struct {
 	Transactions []credit.EverbrightTransaction `json:"transactions"`
 	Review       []everbrightRowReview          `json:"review,omitempty"`
 	Error        string                         `json:"error,omitempty"`
+	Amounts      *credit.StatementAmounts       `json:"amounts,omitempty"`
+	Provision    string                         `json:"provision,omitempty"`
 }
 
 func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +98,11 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		}
 		if current.Generation != saved.Generation {
 			return errConflict
+		}
+		if r.URL.Query().Get("provision") == "true" {
+			if err := a.applyMailProvisions(tx, r.WithContext(ctx), p, card, statements); err != nil {
+				return err
+			}
 		}
 		return a.writeSavedCreditPreview(ctx, tx, p.HouseholdID, card, saved)
 	})
@@ -261,6 +268,14 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 				return
 			}
 			seen[sum] = true
+			amounts := credit.ParseStatementAmounts(html)
+			if amounts.NewCharges != nil || amounts.AmountDue != nil {
+				item.Amounts = &amounts
+				item.Provision = "review"
+				if bank != "gdb" && credit.StatementSummaryMatchesCard(html, tail) {
+					item.Provision = "eligible"
+				}
+			}
 			rows, err := credit.ParseBankStatement(bank, html, received, tail)
 			if err != nil {
 				item.Error = "账单明细格式或日期未通过校验"

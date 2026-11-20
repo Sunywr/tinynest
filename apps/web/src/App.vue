@@ -2098,7 +2098,7 @@ const metricCards = computed(() => {
           <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo">系统应还由明细汇总；点击「还款」直接填入金额</span></div></div>
             <div class="ranklist"><div v-for="s in statements" :key="s.id" class="rankrow">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ recordLabel(s.status) }}</span>
-              <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}</b>
+              <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}<span v-if="s.provision_minor > 0" class="subinfo"> · 含暂记 {{ formatMinor(s.provision_minor) }}</span></b>
               <span class="rowacts">
                 <button v-if="canWrite" type="button" class="ghost" @click="openStatementPay(s)">还款</button>
                 <button type="button" class="ghost" @click="openPaymentHistory(s.id)">还款记录</button>

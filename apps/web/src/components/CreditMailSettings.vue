@@ -14,6 +14,8 @@ type Binding = {
 
 type StatementPreview = {
   received_on: string; error?: string
+  amounts?: { new_charges_minor?: number; amount_due_minor?: number; statement_date?: string }
+  provision?: 'eligible' | 'review' | 'recorded'
   transactions: StatementRow[] | null
   review?: RowReview[]
 }
@@ -40,6 +42,9 @@ const preview = ref<StatementPreview[] | null>(null)
 const previewBusy = ref(false)
 const workbook = ref<File | null>(null)
 const workbookTail = ref('')
+const provisionDay = ref('')
+const provisionCharges = ref('')
+const provisionDue = ref('')
 const workbookBank = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const bank = (card?.issuer ?? '') + ' ' + (card?.name ?? '')
@@ -165,6 +170,9 @@ function saveMailbox(enabled = true) {
 }
 
 function selectCard() {
+  provisionDay.value = ''
+  provisionCharges.value = ''
+  provisionDue.value = ''
   preview.value = null
   synchronizedAt.value = ''
   confirmClear.value = false
@@ -174,6 +182,29 @@ function selectCard() {
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
   resetWorkbook()
   if (props.syncOnly && id) void run(restorePreview)
+}
+
+function useSummary(amounts: NonNullable<StatementPreview['amounts']>) {
+  provisionDay.value = amounts.statement_date ?? ''
+  provisionCharges.value = amounts.new_charges_minor === undefined ? '' : (amounts.new_charges_minor / 100).toFixed(2)
+  provisionDue.value = amounts.amount_due_minor === undefined ? '' : (amounts.amount_due_minor / 100).toFixed(2)
+}
+
+function saveProvision() {
+  if (busy.value) return
+  void run(async () => {
+    const parse = (value: string) => Math.round(Number(value) * 100)
+    await request('/credit-instruments/' + encodeURIComponent(binding.value.instrument_id) + '/statement-provision', {
+      method: 'PUT',
+      body: JSON.stringify({
+        statement_date: provisionDay.value,
+        new_charges_minor: parse(provisionCharges.value),
+        amount_due_minor: provisionDue.value === '' ? undefined : parse(provisionDue.value),
+      }),
+    })
+    notice.value = '已更新账单暂记，补录明细时会自动抵减'
+    emit('ledgerChanged')
+  })
 }
 
 function resetWorkbook() {
@@ -209,7 +240,9 @@ function previewStatements() {
   confirmBatch.value = false
   previewBusy.value = true
   void run(async () => {
-    applyPreview(await request<SavedPreview>(previewPath(), { method: 'POST' }))
+    const path = previewPath() + (props.syncOnly ? '?provision=true' : '')
+    applyPreview(await request<SavedPreview>(path, { method: 'POST' }))
+    if (props.syncOnly && preview.value?.some(statement => statement.provision === 'recorded')) emit('ledgerChanged')
   }).finally(() => { previewBusy.value = false })
 }
 
@@ -351,6 +384,17 @@ function saveBinding() {
           </button>
         </fieldset>
       </form>
+      <form v-if="syncOnly && binding.instrument_id" @submit.prevent="saveProvision">
+        <fieldset>
+          <legend>暂记本期新增消费及费用</legend>
+          <div class="formgrid">
+            <label>账单日<input v-model="provisionDay" required type="date" :disabled="busy"></label>
+            <label>本期新增消费及费用（元）<input v-model="provisionCharges" required type="text" inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" :disabled="busy"></label>
+            <label>本期应还总额（选填，元）<input v-model="provisionDue" type="text" inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" :disabled="busy"></label>
+          </div>
+          <button class="ghost" type="submit" :disabled="busy">确认暂记</button>
+        </fieldset>
+      </form>
       <section v-if="preview !== null && (syncOnly || canPreview)" class="preview-statements">
         <h3>信用卡账单预览</h3>
         <p v-if="synchronizedAt">上次同步 {{ new Date(synchronizedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
@@ -376,6 +420,14 @@ function saveBinding() {
         </div>
         <details v-for="(statement, index) in preview" :key="index">
           <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
+          <p v-if="statement.amounts" class="subinfo">
+            邮件账单摘要
+            <template v-if="statement.amounts.statement_date"> · 账单日 {{ statement.amounts.statement_date }}</template>
+            <template v-if="statement.amounts.new_charges_minor !== undefined"> · 本期新增消费及费用 {{ amountFormat.format(statement.amounts.new_charges_minor / 100) }}</template>
+            <template v-if="statement.amounts.amount_due_minor !== undefined"> · 本期应还总额 {{ amountFormat.format(statement.amounts.amount_due_minor / 100) }}</template>
+            <template v-if="statement.provision === 'recorded'"> · 已暂记</template>
+            <button v-else-if="syncOnly" class="ghost" type="button" :disabled="busy" @click="useSummary(statement.amounts)">待确认 · 填入暂记表单</button>
+          </p>
           <table v-if="statement.transactions" class="statement-table" role="table" aria-label="账单交易明细">
             <thead><tr><th scope="col">交易日</th><th scope="col">交易说明</th><th scope="col" class="statement-amount">金额</th><th v-if="syncOnly" scope="col">分类与操作</th></tr></thead>
             <tbody>

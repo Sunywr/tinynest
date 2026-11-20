@@ -24,6 +24,7 @@ func (a *API) registerCredit(mux *http.ServeMux) {
 	a.route(mux, "POST /api/v1/credit-statements/{id}/payments", a.handleStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/payments/{paymentId}/reverse", a.handleReverseStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/reconcile", a.handleReconcile)
+	a.route(mux, "PUT /api/v1/credit-instruments/{id}/statement-provision", a.handleStatementProvision)
 	a.route(mux, "GET /api/v1/installments", a.handleListInstallments)
 	a.route(mux, "POST /api/v1/installments", a.handleCreateInstallment)
 	a.route(mux, "POST /api/v1/installments/{id}/payments", a.handleInstallmentPayment)
@@ -34,23 +35,34 @@ func (a *API) registerCredit(mux *http.ServeMux) {
 // assignStatement folds a credit-side business event into its billing cycle.
 // Items are keyed by (statement, source_type, source_id), so retries never double count.
 func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrumentID, sourceType, sourceID string, amount int64, occurredOn string) error {
+	stmtID, err := a.ensureStatement(r, tx, p, instrumentID, occurredOn, false)
+	if err != nil {
+		return err
+	}
+	return a.addStatementItem(r, tx, p, stmtID, sourceType, sourceID, amount, occurredOn)
+}
+
+func (a *API) ensureStatement(r *http.Request, tx *sql.Tx, p Principal, instrumentID, occurredOn string, requireClosingDate bool) (string, error) {
 	var startDay, endDay, dueDay, offset int
 	query := `SELECT cycle_start_day,cycle_end_day,due_day,due_month_offset FROM credit_instruments WHERE id=? AND household_id=? AND status<>'deleted'`
 	if a.DB.IsMySQL() {
 		query += " FOR UPDATE"
 	}
 	if err := tx.QueryRowContext(r.Context(), query, instrumentID, p.HouseholdID).Scan(&startDay, &endDay, &dueDay, &offset); err != nil {
-		return fmt.Errorf("信用工具不存在: %w", err)
+		return "", fmt.Errorf("信用工具不存在: %w", err)
 	}
 	anchor, err := time.Parse("2006-01-02", occurredOn)
 	if err != nil {
-		return err
+		return "", err
 	}
 	cycle, err := credit.CycleFor(anchor, startDay, endDay, dueDay, offset)
 	if err != nil {
-		return err
+		return "", err
 	}
 	start, end, due := cycle.Start.Format("2006-01-02"), cycle.End.Format("2006-01-02"), cycle.Due.Format("2006-01-02")
+	if requireClosingDate && end != occurredOn {
+		return "", errConflict
+	}
 	var stmtID string
 	orderColumn := "a.rowid"
 	if a.DB.IsMySQL() {
@@ -71,10 +83,10 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 			VALUES(?,?,?,?,?,?,0,0,'unbilled')`,
 			stmtID, p.HouseholdID, instrumentID, start, end, due)
 	}
-	if err != nil {
-		return err
-	}
+	return stmtID, err
+}
 
+func (a *API) addStatementItem(r *http.Request, tx *sql.Tx, p Principal, stmtID, sourceType, sourceID string, amount int64, occurredOn string) error {
 	insertItem := "INSERT OR IGNORE INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?)"
 	if a.DB.IsMySQL() {
 		insertItem = "INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE statement_id=statement_id"
@@ -82,8 +94,13 @@ func (a *API) assignStatement(r *http.Request, tx *sql.Tx, p Principal, instrume
 	if _, err := tx.ExecContext(r.Context(), insertItem, stmtID, sourceType, sourceID, amount, occurredOn); err != nil {
 		return err
 	}
+	if sourceType == "transaction" {
+		if err := a.rebalanceStatementProvision(tx, r, p, stmtID); err != nil {
+			return err
+		}
+	}
 	// Recompute from items instead of trusting a mutable running total.
-	_, err = tx.ExecContext(r.Context(), `
+	_, err := tx.ExecContext(r.Context(), `
 		UPDATE credit_statements SET system_due_minor =
 		  (SELECT COALESCE(SUM(amount_minor),0) FROM credit_statement_items WHERE statement_id=?)
 		WHERE id=?`, stmtID, stmtID)
@@ -256,8 +273,9 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,s.instrument_id,i.name,s.cycle_start_on,s.cycle_end_on,s.due_on,
-		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status
-		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id
+		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status,COALESCE(p.provision_minor,0)
+		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id AND i.household_id=s.household_id
+		LEFT JOIN credit_statement_provisions p ON p.statement_id=s.id AND p.household_id=s.household_id
 		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)`+filter+`
 		ORDER BY s.cycle_start_on DESC`, p.HouseholdID, from, from, to, to)
 	if err != nil {
@@ -268,9 +286,9 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id, instrID, name, start, end, due, stored string
-		var sysDue, paid int64
+		var sysDue, paid, provision int64
 		var platform *int64
-		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &stored); err != nil {
+		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &stored, &provision); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -285,6 +303,7 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			"status":          derived, "derived_status": derived, "stored_status": stored,
 			"archived":              stored == "archived" && sysDue == paid,
 			"platform_amount_minor": platform,
+			"provision_minor":       provision,
 		}
 		if platform != nil {
 			m["reconcile_diff_minor"] = sysDue - *platform
