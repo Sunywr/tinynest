@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"tinynest/api/internal/credit"
 )
@@ -33,6 +34,8 @@ type everbrightPreviewStatement struct {
 	UseAmountDue bool                           `json:"use_amount_due,omitempty"`
 	Workbook     bool                           `json:"workbook,omitempty"`
 }
+
+const cmbOtherCardMessage = "账单有交易明细，但未找到绑定卡尾号"
 
 func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 	from, to := r.URL.Query().Get("from"), r.URL.Query().Get("to")
@@ -119,7 +122,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range statements {
 			item := &statements[i]
-			if bindings == 1 && item.Error != "" && item.Amounts != nil &&
+			if bindings == 1 && item.Error != "" && item.Error != cmbOtherCardMessage && item.Amounts != nil &&
 				item.Amounts.NewCharges != nil && item.Amounts.StatementDate != "" {
 				item.Provision = "eligible"
 			}
@@ -358,7 +361,12 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 			}
 			received = received.In(time.FixedZone("Asia/Shanghai", 8*3600))
 			item.ReceivedOn = received.Format(time.DateOnly)
-			html, err := everbrightMIMEHTML(mimeHeader(msg.Header), msg.Body, 0)
+			var html string
+			if bank == "cmb" {
+				html, err = cmbMIMEHTML(mimeHeader(msg.Header), msg.Body, received, tail)
+			} else {
+				html, err = everbrightMIMEHTML(mimeHeader(msg.Header), msg.Body, 0)
+			}
 			if err != nil {
 				return
 			}
@@ -392,7 +400,14 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 			}
 			rows, err := credit.ParseBankStatement(bank, html, received, tail)
 			if err != nil {
-				item.Error = "账单明细格式或日期未通过校验"
+				switch {
+				case errors.Is(err, credit.ErrCMBNoMatchingCard):
+					item.Error = cmbOtherCardMessage
+				case errors.Is(err, credit.ErrCMBNoTransactionTable):
+					item.Error = "邮件没有可识别的人民币明细表，可补录 XLS"
+				default:
+					item.Error = "账单明细格式或日期未通过校验"
+				}
 				return
 			}
 			if len(rows) == 0 {
@@ -423,6 +438,31 @@ func (h mimeHeader) get(key string) string {
 }
 
 func everbrightMIMEHTML(header mimeHeader, body io.Reader, depth int) (string, error) {
+	return mailHTMLPart(header, body, depth, false)
+}
+
+func cmbMIMEHTML(header mimeHeader, body io.Reader, date time.Time, tail string) (string, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, (3<<20)+1))
+	if err != nil || len(raw) > 3<<20 {
+		return "", errors.New("mail body exceeds preview limit")
+	}
+	inline, inlineErr := mailHTMLPart(header, bytes.NewReader(raw), 0, false)
+	if inlineErr == nil {
+		if _, err := credit.ParseBankStatement("cmb", inline, date, tail); err == nil {
+			return inline, nil
+		}
+	}
+	attachment, err := mailHTMLPart(header, bytes.NewReader(raw), 0, true)
+	if err == nil {
+		if _, detailErr := credit.ParseBankStatement("cmb", attachment, date, tail); detailErr == nil ||
+			errors.Is(detailErr, credit.ErrCMBNoMatchingCard) || credit.ParseCMBStatementAmounts(attachment).NewCharges != nil {
+			return attachment, nil
+		}
+	}
+	return inline, inlineErr
+}
+
+func mailHTMLPart(header mimeHeader, body io.Reader, depth int, attachmentOnly bool) (string, error) {
 	if depth > 6 {
 		return "", errors.New("MIME nesting limit")
 	}
@@ -437,7 +477,7 @@ func everbrightMIMEHTML(header mimeHeader, body io.Reader, depth int) (string, e
 			if err != nil {
 				return "", err
 			}
-			html, err := everbrightMIMEHTML(mimeHeader(part.Header), part, depth+1)
+			html, err := mailHTMLPart(mimeHeader(part.Header), part, depth+1, attachmentOnly)
 			part.Close()
 			if err == nil {
 				return html, nil
@@ -445,7 +485,18 @@ func everbrightMIMEHTML(header mimeHeader, body io.Reader, depth int) (string, e
 		}
 		return "", errors.New("MIME part limit")
 	}
-	if mediaType != "text/html" || strings.Contains(strings.ToLower(header.get("Content-Disposition")), "attachment") {
+	disposition, dispositionParams, _ := mime.ParseMediaType(header.get("Content-Disposition"))
+	filename := strings.ToLower(dispositionParams["filename"])
+	if filename == "" {
+		filename = strings.ToLower(params["name"])
+	}
+	attachment := disposition == "attachment" || filename != ""
+	if attachmentOnly {
+		if !attachment || (mediaType != "text/html" && mediaType != "application/octet-stream") ||
+			(filename != "" && !strings.HasSuffix(filename, ".htm") && !strings.HasSuffix(filename, ".html")) {
+			return "", errors.New("not an HTML statement attachment")
+		}
+	} else if mediaType != "text/html" || disposition == "attachment" {
 		return "", errors.New("not an HTML body")
 	}
 	switch strings.ToLower(header.get("Content-Transfer-Encoding")) {
@@ -461,6 +512,23 @@ func everbrightMIMEHTML(header mimeHeader, body io.Reader, depth int) (string, e
 	raw, err := io.ReadAll(io.LimitReader(body, (2<<20)+1))
 	if err != nil || len(raw) > 2<<20 {
 		return "", errors.New("HTML body read failed")
+	}
+	if attachmentOnly {
+		if params["charset"] == "" && !utf8.Valid(raw) {
+			decoded, err := credit.EverbrightCharsetReader("gb18030", bytes.NewReader(raw))
+			if err != nil {
+				return "", err
+			}
+			raw, err = io.ReadAll(io.LimitReader(decoded, (2<<20)+1))
+			if err != nil || len(raw) > 2<<20 {
+				return "", errors.New("HTML attachment read failed")
+			}
+		}
+		sniff := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(string(raw), "\ufeff")))
+		if !strings.HasPrefix(sniff, "<html") && !strings.HasPrefix(sniff, "<!doctype html") &&
+			!strings.HasPrefix(sniff, "<table") {
+			return "", errors.New("invalid HTML attachment")
+		}
 	}
 	return string(raw), nil
 }

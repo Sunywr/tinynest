@@ -10,6 +10,8 @@ import (
 )
 
 var maskedGuangfaCard = regexp.MustCompile(`卡号\s*[:：]\s*[0-9]{4}[＊*]{4,12}([0-9]{4})(?:[^0-9]|$)`)
+var ErrCMBNoMatchingCard = errors.New("no CMB RMB details for the bound card")
+var ErrCMBNoTransactionTable = errors.New("no readable CMB RMB transaction table")
 
 func ParseBankStatement(bank, body string, date time.Time, tail string) ([]EverbrightTransaction, error) {
 	if bank == "ceb" {
@@ -30,6 +32,7 @@ func ParseBankStatement(bank, body string, date time.Time, tail string) ([]Everb
 		anchors = maskedGuangfaCard.FindAllStringSubmatchIndex(markup, -1)
 	}
 	guangfaDetails := false
+	cmbOtherCard := false
 	for {
 		token, err := dec.RawToken()
 		if err == io.EOF {
@@ -91,11 +94,24 @@ func ParseBankStatement(bank, body string, date time.Time, tail string) ([]Everb
 						continue
 					}
 					occurred, posted, description, amount = row[1], row[2], row[4], strings.TrimPrefix(row[6], "CNY ")
-				case bank == "cmb" && len(row) == 8 && row[5] == tail:
-					if !strings.HasPrefix(row[4], "¥") && !strings.HasPrefix(row[4], "￥") {
+				case bank == "cmb" && (len(row) == 7 || len(row) == 8):
+					if len(row) == 8 {
+						row = row[1:]
+					}
+					if !cmbRMBValue(row[3]) || len(row[4]) != 4 || strings.Trim(row[4], "0123456789") != "" {
 						continue
 					}
-					occurred, posted, description, amount = row[1], row[2], row[3], row[4]
+					if _, err := bankStatementDate(row[1], date); err != nil {
+						if row[4] == tail {
+							return nil, err
+						}
+						continue
+					}
+					if row[4] != tail {
+						cmbOtherCard = true
+						continue
+					}
+					occurred, posted, description, amount = row[0], row[1], row[2], row[3]
 				default:
 					continue
 				}
@@ -122,6 +138,12 @@ func ParseBankStatement(bank, body string, date time.Time, tail string) ([]Everb
 		}
 	}
 	if len(result) == 0 {
+		if bank == "cmb" {
+			if cmbOtherCard {
+				return nil, ErrCMBNoMatchingCard
+			}
+			return nil, ErrCMBNoTransactionTable
+		}
 		return nil, errors.New("no matching RMB statement details")
 	}
 	return result, nil
