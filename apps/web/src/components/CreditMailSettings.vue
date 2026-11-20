@@ -39,6 +39,8 @@ const error = ref('')
 const notice = ref('')
 const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keyword: '', card_tail: '' })
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
+const usesQQMail = computed(() => boxes.value.some(item =>
+  item.id === binding.value.mailbox_id && item.host.toLowerCase() === 'imap.qq.com'))
 const preview = ref<StatementPreview[] | null>(null)
 const period = ref<'all' | 'range'>('all')
 const from = ref('')
@@ -376,7 +378,7 @@ function saveBinding() {
           </div>
         </fieldset>
       </form>
-      <form @submit.prevent="syncOnly ? (workbookBank ? importWorkbook() : previewStatements()) : saveBinding()">
+      <form class="mail-workflow" @submit.prevent="syncOnly ? previewStatements() : saveBinding()">
         <fieldset :disabled="busy">
           <legend>{{ syncOnly ? '选择已绑定的信用卡' : '信用卡绑定' }}</legend>
           <div class="formgrid">
@@ -392,17 +394,8 @@ function saveBinding() {
             </template>
           </div>
           <button v-if="!syncOnly" class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
-          <template v-if="syncOnly && workbookBank">
-            <h3>{{ workbookBank }}账单导入</h3>
-            <div class="formgrid">
-              <label>卡尾号<input v-model.trim="workbookTail" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4" :readonly="!!binding.card_tail"></label>
-              <label>银行下载的账单<input :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel" required
-                @change="workbook = ($event.target as HTMLInputElement).files?.[0] ?? null"></label>
-            </div>
-            <button type="button" class="ghost" :disabled="busy" @click="importWorkbook">导入并预览</button>
-          </template>
-          <fieldset v-if="syncOnly && binding.instrument_id" :disabled="busy">
-            <legend>账单日期</legend>
+          <section v-if="syncOnly && binding.instrument_id" class="workflow-section">
+            <h3>邮件同步</h3>
             <div class="formgrid">
               <label>时间范围<select v-model="period">
                 <option value="all">全部账期</option>
@@ -413,14 +406,27 @@ function saveBinding() {
                 <label>结束日期<DatePicker v-model="to" :min="from || undefined" :max="today()" open-on-click /></label>
               </template>
             </div>
-          </fieldset>
+            <p v-if="usesQQMail && period === 'all'" class="mail-history-note">
+              同步历史账单前，请在 QQ 邮箱网页版的账户设置中，将「收取选项」设为「全部」。
+            </p>
           <p v-if="syncOnly && workbookBank && !canPreview" class="subinfo">绑定并启用账单邮箱后即可同步邮件金额。明细可稍后上传。</p>
-          <button v-if="canPreview" class="ghost preview-action" type="button" :disabled="busy || !rangeReady" @click="previewStatements">
-            {{ previewBusy ? '正在读取账单…' : syncOnly && workbookBank ? '同步邮件金额' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取账单预览' }}
-          </button>
+            <button v-if="canPreview" class="primary preview-action" type="button" :disabled="busy || !rangeReady" @click="previewStatements">
+              {{ previewBusy ? '正在读取账单…' : workbookBank ? '同步邮件金额' : synchronizedAt ? '重新同步' : '同步并预览' }}
+            </button>
+          </section>
+          <button v-if="!syncOnly && canPreview" class="ghost preview-action" type="button" @click="previewStatements">读取账单预览</button>
+          <section v-if="syncOnly && workbookBank" class="workflow-section">
+            <h3>{{ workbookBank }}明细补录</h3>
+            <div class="formgrid">
+              <label>卡尾号<input v-model.trim="workbookTail" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" :readonly="!!binding.card_tail"></label>
+              <label>银行下载的账单<input :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel"
+                @change="workbook = ($event.target as HTMLInputElement).files?.[0] ?? null"></label>
+            </div>
+            <button type="button" class="ghost" :disabled="busy" @click="importWorkbook">导入并预览</button>
+          </section>
         </fieldset>
       </form>
-      <form v-if="syncOnly && binding.instrument_id" @submit.prevent="saveProvision">
+      <form v-if="syncOnly && binding.instrument_id" class="workflow-section" @submit.prevent="saveProvision">
         <fieldset :disabled="busy">
           <legend>暂记本期新增消费及费用</legend>
           <div class="formgrid">
@@ -431,7 +437,7 @@ function saveBinding() {
           <button class="ghost" type="submit" :disabled="busy">确认暂记</button>
         </fieldset>
       </form>
-      <section v-if="visiblePreview !== null && (syncOnly || canPreview)" class="preview-statements">
+      <section v-if="visiblePreview !== null && (syncOnly || canPreview)" class="workflow-section preview-statements">
         <h3>信用卡账单预览</h3>
         <p v-if="synchronizedAt">上次同步 {{ new Date(synchronizedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
         <div v-if="syncOnly && synchronizedAt" class="review-actions">
@@ -515,7 +521,12 @@ function saveBinding() {
 <style scoped>
 fieldset { min-width: 0; border: 0; margin: 0 0 1rem; padding: 0; }
 legend { font-weight: 700; padding: 0; }
-form + form { padding-top: 18px; border-top: 1px solid var(--border); }
+.workflow-section { margin-block: 18px; padding: clamp(12px, 2vw, 22px); border: 1px solid var(--border); border-radius: 14px; }
+.workflow-section > h3 { margin: 0 0 12px; }
+.workflow-section > fieldset { margin-bottom: 0; }
+.workflow-section .primary { width: auto; }
+.mail-history-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); font-size: .875rem; }
+form + form:not(.workflow-section) { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar button { max-width: 100%; overflow-wrap: anywhere; }
 .actions-bar .primary { width: auto; margin-top: 0; }
 .preview-action { margin-top: 10px; }
