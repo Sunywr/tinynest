@@ -12,8 +12,20 @@ func TestCreditWorkbookPreviewUsesSettlementAndCardTail(t *testing.T) {
 	rows := [][]string{
 		{"本期账单明细(人民币)"},
 		{"交易日期", "入账日期", "交易描述", "卡末四位", "交易币种", "结算币种", "交易金额", "结算金额"},
-		{"2026-11-01", "2026-11-02", "示例饮品店", "0123", "美元", "人民币", "3.00", "20.00"},
-		{"2026-11-01", "2026-11-02", "另一张卡", "1234", "人民币", "人民币", "10.00", "10.00"},
+		{"2023-08-01", "2023-08-02", "示例饮品店", "0123", "美元", "人民币", "3.00", "20.00"},
+		{"2023-08-01", "2023-08-02", "另一张卡", "1234", "人民币", "人民币", "10.00", "10.00"},
+	}
+	c.mustOK("PUT", "/api/v1/credit-instruments/"+id+"/statement-provision", map[string]any{
+		"statement_date": "2023-08-31", "new_charges_minor": 2000,
+	})
+	checkProvision := func(want int64) {
+		t.Helper()
+		var provisional, due int64
+		err := database.QueryRow(`SELECT p.provision_minor,s.system_due_minor FROM credit_statement_provisions p
+			JOIN credit_statements s ON s.id=p.statement_id WHERE s.instrument_id=?`, id).Scan(&provisional, &due)
+		if err != nil || provisional != want || due != 2000 {
+			t.Fatalf("provisional=%d due=%d err=%v", provisional, due, err)
+		}
 	}
 	path := "/api/v1/credit-mail/bindings/" + id
 	input := map[string]any{"card_tail": "0123", "rows": rows}
@@ -31,4 +43,14 @@ func TestCreditWorkbookPreviewUsesSettlementAndCardTail(t *testing.T) {
 	if number(c.mustOK("GET", "/api/v1/transactions", nil)["total"]) != 0 {
 		t.Fatal("preview posted a transaction")
 	}
+	checkProvision(2000)
+	review := got[0].(map[string]any)["review"].([]any)[0].(map[string]any)
+	c.headers = map[string]string{"Idempotency-Key": review["key"].(string)}
+	category := c.firstCategory("expense")
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": 2000, "occurred_on": "2023-08-01", "payment_kind": "credit",
+		"credit_instrument_id": id, "merchant": "示例饮品店",
+		"splits": []map[string]any{{"category_id": category, "amount_minor": 2000}},
+	})
+	checkProvision(0)
 }

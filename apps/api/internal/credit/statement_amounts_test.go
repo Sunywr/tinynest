@@ -2,6 +2,18 @@ package credit
 
 import "testing"
 
+// The historical and current official SPDB mailboxes must both sync.
+func TestSPDBSummarySender(t *testing.T) {
+	for _, sender := range []string{"estmtservice@eb.spdbccc.com.cn", "estmtservice@eb.spdb.com.cn"} {
+		if !MatchBankStatementHeader("spdb", sender, "浦发银行信用卡电子账单", "信用卡电子账单") {
+			t.Fatalf("official address rejected: %s", sender)
+		}
+	}
+	if MatchBankStatementHeader("spdb", "other@eb.spdb.com.cn", "浦发银行信用卡电子账单", "信用卡电子账单") {
+		t.Fatal("unexpected sender accepted")
+	}
+}
+
 func TestStatementAmountsSeparateChargesFromAmountDue(t *testing.T) {
 	const due = "<tr><td>本期应还款总额：</td><td>￥1,234.56</td></tr>"
 	const charges = "<tr><td><b>新签金额 / 其他费用</b></td><td>29.12</td></tr>"

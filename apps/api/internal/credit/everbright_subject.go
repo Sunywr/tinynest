@@ -28,8 +28,25 @@ func MatchBankStatementHeader(bank, from, subject, keyword string) bool {
 		return false
 	}
 	_, domain, ok := strings.Cut(address.Address, "@")
-	if !ok || domains[bank] == "" || !strings.EqualFold(domain, domains[bank]) {
+	if !ok {
 		return false
+	}
+	switch bank {
+	case "spdb":
+		if !strings.EqualFold(address.Address, "estmtservice@eb.spdbccc.com.cn") &&
+			!strings.EqualFold(address.Address, "estmtservice@eb.spdb.com.cn") {
+			return false
+		}
+	case "citic":
+		switch strings.ToLower(domain) {
+		case "citiccard.com", "citicibank.com", "ecitic.com", "citicbank.com":
+		default:
+			return false
+		}
+	default:
+		if domains[bank] == "" || !strings.EqualFold(domain, domains[bank]) {
+			return false
+		}
 	}
 	decoded, err := decoder.DecodeHeader(subject)
 	if err != nil {

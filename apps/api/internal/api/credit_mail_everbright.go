@@ -62,7 +62,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 	}
 	card := r.PathValue("id")
 	bank := statementBank(issuer, name)
-	if bank == "" || bank == "spdb" || bank == "citic" {
+	if bank == "" {
 		writeErr(w, 400, "unsupported_statement_bank", "该银行尚未支持邮件明细解析")
 		return
 	}
@@ -89,8 +89,12 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, statement := range saved.Statements {
-		if statement.Error == "" && !present[statement.ReceivedOn] {
+		workbook := (bank == "spdb" || bank == "citic") && len(statement.Transactions) > 0
+		if statement.Error == "" && (workbook || !present[statement.ReceivedOn]) {
 			statement.Review = nil
+			if statement.Provision == "eligible" {
+				statement.Provision = "review"
+			}
 			statements = append(statements, statement)
 		}
 	}
@@ -284,6 +288,13 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 				if bank != "gdb" && credit.StatementSummaryMatchesCard(html, tail) {
 					item.Provision = "eligible"
 				}
+			}
+			if bank == "spdb" || bank == "citic" {
+				item.Error = "邮件中未识别到账单金额"
+				if item.Amounts != nil {
+					item.Error = ""
+				}
+				return
 			}
 			rows, err := credit.ParseBankStatement(bank, html, received, tail)
 			if err != nil {

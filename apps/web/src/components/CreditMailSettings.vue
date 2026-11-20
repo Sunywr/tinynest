@@ -85,7 +85,7 @@ const batchRows = computed(() => {
 const canPreview = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const saved = bindings.value.find(item => item.instrument_id === card?.id)
-  return !!card && /光大|广发|交通|招商/.test(card.issuer + ' ' + card.name) &&
+  return !!card && /光大|广发|交通|招商|浦发|浦东发展|中信/.test(card.issuer + ' ' + card.name) &&
     !!saved && boxes.value.some(item => item.id === saved.mailbox_id && item.enabled) &&
     saved.mailbox_id === binding.value.mailbox_id && saved.subject_keyword === binding.value.subject_keyword &&
     saved.card_tail === binding.value.card_tail
@@ -229,8 +229,10 @@ function resetWorkbook() {
 
 function importWorkbook() {
   const file = workbook.value
-  if (!file || busy.value || !workbookBank.value) return
+  if (busy.value || !workbookBank.value) return
   void run(async () => {
+    if (!file) throw new Error('请先选择银行下载的 .xls 明细，或点击「同步邮件金额」')
+    if (!/^[0-9]{4}$/.test(workbookTail.value)) throw new Error('请填写四位卡尾号')
     if (!/\.xls$/i.test(file.name) || file.size > 4 * 1024 * 1024) {
       throw new Error('请选择不超过 4 MB 的 .xls 账单文件')
     }
@@ -245,6 +247,7 @@ function importWorkbook() {
     applyPreview(await request<SavedPreview>(previewPath().replace(/\/preview$/, '/workbook'), {
       method: 'POST', body: JSON.stringify({ card_tail: workbookTail.value, rows }),
     }))
+    period.value = 'all'
     notice.value = '账单已解析，请核对预览后确认入账'
   })
 }
@@ -396,7 +399,7 @@ function saveBinding() {
               <label>银行下载的账单<input :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel" required
                 @change="workbook = ($event.target as HTMLInputElement).files?.[0] ?? null"></label>
             </div>
-            <button type="submit" class="ghost" :disabled="!workbook || busy">导入并预览</button>
+            <button type="button" class="ghost" :disabled="busy" @click="importWorkbook">导入并预览</button>
           </template>
           <fieldset v-if="syncOnly && binding.instrument_id" :disabled="busy">
             <legend>账单日期</legend>
@@ -411,8 +414,9 @@ function saveBinding() {
               </template>
             </div>
           </fieldset>
-          <button v-if="canPreview && !workbookBank" class="ghost preview-action" type="button" :disabled="busy || !rangeReady" @click="previewStatements">
-            {{ previewBusy ? '正在读取账单…' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取账单预览' }}
+          <p v-if="syncOnly && workbookBank && !canPreview" class="subinfo">绑定并启用账单邮箱后即可同步邮件金额。明细可稍后上传。</p>
+          <button v-if="canPreview" class="ghost preview-action" type="button" :disabled="busy || !rangeReady" @click="previewStatements">
+            {{ previewBusy ? '正在读取账单…' : syncOnly && workbookBank ? '同步邮件金额' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取账单预览' }}
           </button>
         </fieldset>
       </form>

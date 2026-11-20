@@ -16,7 +16,7 @@ type StatementAmounts struct {
 
 var statementAmountPair = regexp.MustCompile(`<(?:td|th)>\s*(本期新增消费及费用|新签金额\s*[/／]\s*其他费用|本期应还总额|本期应还款总额)[：:]?\s*</(?:td|th)>\s*<(?:td|th)>\s*([^<>]+?)\s*</(?:td|th)>`)
 var statementClosingDate = regexp.MustCompile(`<(?:td|th)>\s*(?:账单日|账单日期)[：:]?\s*</(?:td|th)>\s*<(?:td|th)>\s*([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})\s*</(?:td|th)>`)
-var summaryCardTail = regexp.MustCompile(`(?:卡尾号|卡号后四位|卡号后4位)[：:]?\s*(?:</(?:td|th)>\s*<(?:td|th)>\s*)?([0-9]{4})(?:[^0-9]|$)`)
+var summaryCardTail = regexp.MustCompile(`(?:卡尾号|卡号(?:后|末)(?:四|4)位|卡号[：:]\s*(?:[0-9]{4,6})?[*＊]{4,12})[：:]?\s*(?:</(?:td|th)>\s*<(?:td|th)>\s*)?([0-9]{4})(?:[^0-9]|$)`)
 
 func StatementSummaryMatchesCard(body, tail string) bool {
 	if len(body) > 2<<20 || len(tail) != 4 {
