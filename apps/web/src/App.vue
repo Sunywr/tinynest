@@ -388,8 +388,10 @@ async function boot() {
     authed.value = true
     apiStatus.value = '已连接'
     const savedView = nav.find(item => item.key === window.history.state?.tinynestView)
+    const resumeBillSync = window.history.state?.tinynestBillSync === true
     if (savedView) go(savedView.key)
     await loadAll()
+    if (resumeBillSync && view.value === 'credit' && canWrite.value) openPanel('creditMailSync')
     applyTxPrefs()
   } catch {
     authed.value = false
@@ -598,7 +600,7 @@ function go(v: View) {
   restoreTransactionDraft()
   ledgerNavigation++
   view.value = v
-  window.history.replaceState({ ...window.history.state, tinynestView: v }, '')
+  window.history.replaceState({ ...window.history.state, tinynestView: v, tinynestBillSync: false }, '')
   errorMsg.value = ''
   panel.value = ''
   if (v === 'settings') {
@@ -610,6 +612,7 @@ function openPanel(p: string, prefilled = false) {
   restoreTransactionDraft()
   ledgerNavigation++
   panel.value = p
+  window.history.replaceState({ ...window.history.state, tinynestBillSync: p === 'creditMailSync' }, '')
   errorMsg.value = ''
   if (p === 'tx' && !prefilled) {
     setTxDirection('expense')
@@ -617,7 +620,13 @@ function openPanel(p: string, prefilled = false) {
     void resolveCurrentMember()
   }
 }
-function closePanel() { restoreTransactionDraft(); ledgerNavigation++; panel.value = ''; errorMsg.value = '' }
+function closePanel() {
+  restoreTransactionDraft()
+  ledgerNavigation++
+  panel.value = ''
+  errorMsg.value = ''
+  window.history.replaceState({ ...window.history.state, tinynestBillSync: false }, '')
+}
 
 function setTxDirection(direction: string) {
   f.tx.type = direction
@@ -2028,10 +2037,10 @@ const metricCards = computed(() => {
           </div>
           <CreditMailSettings v-if="panel === 'creditMail' && canWrite"
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active')"
-            @close="closePanel()" @report-error="toast" />
+            @close="closePanel()" @report-error="toast" @report-success="toast" />
           <CreditMailSettings v-if="panel === 'creditMailSync' && canWrite" sync-only
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active' && /光大|广发|交通|招商|中信|浦发|浦东发展/.test(c.issuer + ' ' + c.name))"
-            :categories="expenseCategories" @close="closePanel()" @report-error="toast"
+            :categories="expenseCategories" @close="closePanel()" @report-error="toast" @report-success="toast"
             @edit-transaction="id => { go('ledger'); void openTransactionDraft(id, true) }"
             @ledger-changed="loadAll()" />
           <section v-if="panel === 'creditMail' && !canWrite" class="panel formpanel">

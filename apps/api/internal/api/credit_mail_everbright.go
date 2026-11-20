@@ -302,6 +302,10 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 	if len(matches) > 120 {
 		return nil, errors.New("too many matched statement messages")
 	}
+	progress, _ := ctx.Value(creditMailProgressKey{}).(func(int, int))
+	if progress != nil {
+		progress(0, len(matches))
+	}
 	statements := make([]everbrightPreviewStatement, 0, len(matches))
 	seen := make(map[[32]byte]bool)
 	for start := 0; start < len(matches); start += 12 {
@@ -370,6 +374,9 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 		})
 		if err != nil {
 			return nil, err
+		}
+		if progress != nil {
+			progress(min(start+12, len(matches)), len(matches))
 		}
 	}
 	return statements, nil

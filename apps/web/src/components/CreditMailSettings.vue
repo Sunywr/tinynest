@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api, request, today } from '../services/api'
 import DatePicker from './DatePicker.vue'
 
@@ -27,7 +27,7 @@ type RowReview = { key: string; imported: boolean; suggested_category?: string; 
 type SavedPreview = { statements: StatementPreview[] | null; choices: Record<string, string>; synchronized_at: string }
 
 const props = defineProps<{ cards: Option[]; categories?: Option[]; syncOnly?: boolean }>()
-const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: []; reportError: [message: string] }>()
+const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: []; reportError: [message: string]; reportSuccess: [message: string] }>()
 const inboxLabel = '收件箱'
 const fresh = () => ({ id: '', host: '', username: '', folder: inboxLabel, enabled: true, version: 0, tested_at: '', password: '' })
 const box = ref(fresh())
@@ -38,6 +38,11 @@ const loaded = ref(false)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
+type ImportJob = { id: string; kind: 'sync' | 'workbook' | 'post'; status: string; done: number; total: number; error?: string }
+const job = ref<ImportJob>()
+const lastCardKey = 'tinynest:credit-sync-card'
+let disposed = false
+onUnmounted(() => { disposed = true })
 const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keyword: '', card_tail: '' })
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
 const usesQQMail = computed(() => boxes.value.some(item =>
@@ -118,11 +123,13 @@ async function load() {
 onMounted(() => void run(async () => {
   await load()
   if (props.syncOnly) {
-    const current = props.cards.find(card => bindings.value.some(item => item.instrument_id === card.id))
+    const availableCards = props.cards.filter(card => bindings.value.some(item => item.instrument_id === card.id))
+    const current = availableCards.find(card => card.id === sessionStorage.getItem(lastCardKey)) ?? availableCards[0]
     if (current) {
       binding.value = { ...bindings.value.find(item => item.instrument_id === current.id)! }
       resetWorkbook()
       await restorePreview()
+      await followJob(await request<ImportJob>(jobPath()))
     }
   }
 }))
@@ -198,13 +205,55 @@ function selectCard() {
   const current = bindings.value.find(item => item.instrument_id === id)
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
   resetWorkbook()
-  if (props.syncOnly && id) void run(restorePreview)
+  job.value = undefined
+  if (props.syncOnly && id) {
+    sessionStorage.setItem(lastCardKey, id)
+    void run(async () => {
+      await restorePreview()
+      await followJob(await request<ImportJob>(jobPath()))
+    })
+  }
 }
 
 function resetWorkbook() {
   workbook.value = null
   const name = props.cards.find(item => item.id === binding.value.instrument_id)?.name ?? ''
   workbookTail.value = binding.value.card_tail || name.match(/[（(]([0-9]{4})[）)]\s*$/)?.[1] || ''
+}
+
+function jobPath() {
+  return previewPath().replace(/\/preview$/, '/job')
+}
+
+async function followJob(initial: ImportJob) {
+  if (!initial.id || disposed) return
+  const path = jobPath()
+  let current = initial
+  while (!disposed && path === jobPath()) {
+    job.value = current
+    if (current.status !== 'running') break
+    await new Promise(resolve => setTimeout(resolve, 800))
+    if (disposed || path !== jobPath()) return
+    current = await request<ImportJob>(path)
+  }
+  if (disposed || path !== jobPath()) return
+  if (!current.id) throw new Error('任务状态已失效，请刷新预览后重试')
+  if (current.kind === 'post' && current.done) emit('ledgerChanged')
+  await restorePreview()
+  if (current.status === 'failed') {
+    throw new Error(current.done ? `已处理 ${current.done} 项。${current.error ?? '任务失败'}` : current.error ?? '任务失败')
+  }
+  notice.value = current.kind === 'post' ? `入账完成，已处理 ${current.done} 项`
+    : current.kind === 'sync' ? '账单同步完成' : '账单已解析，请核对预览后确认入账'
+  const noticeKey = 'tinynest:credit-job-notice:' + binding.value.instrument_id
+  if (sessionStorage.getItem(noticeKey) !== current.id) {
+    sessionStorage.setItem(noticeKey, current.id)
+    emit('reportSuccess', notice.value)
+  }
+}
+
+async function startJob(input: object) {
+  await followJob(await request<ImportJob>(jobPath(), { method: 'POST', body: JSON.stringify(input) }))
 }
 
 function importWorkbook() {
@@ -224,11 +273,8 @@ function importWorkbook() {
     const sheet = book.Sheets[book.SheetNames[0]]
     if (!sheet) throw new Error('账单没有可读取的工作表')
     const rows = utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false, defval: '', blankrows: false })
-    applyPreview(await request<SavedPreview>(previewPath().replace(/\/preview$/, '/workbook'), {
-      method: 'POST', body: JSON.stringify({ card_tail: workbookTail.value, rows }),
-    }))
+    await startJob({ kind: 'workbook', workbook: { card_tail: workbookTail.value, rows } })
     period.value = 'all'
-    notice.value = '账单已解析，请核对预览后确认入账'
   })
 }
 
@@ -236,12 +282,10 @@ function previewStatements() {
   if (!canPreview.value || busy.value || !rangeReady.value) return
   previewBusy.value = true
   void run(async () => {
-    const query = new URLSearchParams()
-    if (props.syncOnly && period.value === 'range') {
-      query.set('from', from.value)
-      query.set('to', to.value)
-    }
-    applyPreview(await request<SavedPreview>(previewPath() + (query.size ? '?' + query : ''), { method: 'POST' }))
+    await startJob({
+      kind: 'sync', from: period.value === 'range' ? from.value : '',
+      to: period.value === 'range' ? to.value : '',
+    })
   }).finally(() => { previewBusy.value = false })
 }
 
@@ -252,6 +296,7 @@ function createFromPreview(row: StatementRow, review: RowReview) {
     const result = await postPreviewRow(row, review, category)
     emit('ledgerChanged')
     notice.value = result.replayed ? '这笔明细此前已处理' : '流水已创建'
+    emit('reportSuccess', notice.value)
   })
 }
 
@@ -277,35 +322,20 @@ async function postPreviewRow(row: StatementRow, review: RowReview, category: st
 
 function createBatch() {
   if (busy.value || (!batchRows.value.length && !hasPostableSummary.value)) return
-  const pending = batchRows.value
-  void run(async () => {
-    let done = 0
-    try {
-      for (const item of pending) {
-        await postPreviewRow(item.row, item.review, item.category)
-        done++
-      }
-    } catch (err) {
-      if (done) emit('ledgerChanged')
-      throw new Error(`已处理 ${done} 笔，批量操作已暂停。${err instanceof Error ? err.message : '请重试'}`)
-    }
-    if (done) emit('ledgerChanged')
-    if (hasPostableSummary.value) {
-      await request(previewPath().replace(/\/preview$/, '/post-summaries'), {
-        method: 'POST',
-        body: JSON.stringify({
-          synchronized_at: synchronizedAt.value,
-          from: period.value === 'range' ? from.value : '',
-          to: period.value === 'range' ? to.value : '',
-        }),
-      })
-      emit('ledgerChanged')
-      await restorePreview()
-      notice.value = '已处理可入账的账单汇总和明细'
-    } else {
-      notice.value = `已处理 ${done} 笔流水`
-    }
-  })
+  void run(() => startJob({
+    kind: 'post',
+    synchronized_at: synchronizedAt.value,
+    summaries: hasPostableSummary.value,
+    from: period.value === 'range' ? from.value : '',
+    to: period.value === 'range' ? to.value : '',
+    rows: batchRows.value.map(({ row, review, category }) => ({
+      key: review.key,
+      transaction: {
+        amount_minor: row.Amount, currency: 'CNY', occurred_on: row.TransactionDate, merchant: row.Description,
+        splits: [{ category_id: category, amount_minor: row.Amount }],
+      },
+    })),
+  }))
 }
 
 function deleteFromPreview(id: string) {
@@ -340,7 +370,12 @@ function saveBinding() {
       <button type="button" class="ghost" @click="$emit('close')">返回列表</button>
     </div>
     <p v-if="error" class="err mail-error" role="alert">{{ error }}</p>
-    <p v-if="notice" class="subinfo" role="status">{{ notice }}</p>
+    <p v-if="notice" class="mail-success" role="status">{{ notice }}</p>
+    <div v-if="job?.status === 'running'" class="mail-job" role="status">
+      <span>{{ job.kind === 'post' ? '正在记入流水' : job.kind === 'sync' ? '正在同步并解析邮件' : '正在导入账单明细' }}<template v-if="job.total"> · {{ job.done }} / {{ job.total }}</template></span>
+      <progress v-if="job.total" :value="job.done" :max="job.total" aria-label="账单任务进度"></progress>
+      <progress v-else aria-label="账单任务进行中"></progress>
+    </div>
     <button v-if="!loaded && !busy" type="button" class="ghost" @click="run(load)">重试</button>
     <p v-if="loaded && !keyReady" role="status">服务器尚未配置账单邮箱加密密钥。</p>
     <template v-if="loaded">
@@ -504,6 +539,9 @@ legend { font-weight: 700; padding: 0; }
 .workflow-section > fieldset { margin-bottom: 0; }
 .workflow-section .primary { width: auto; }
 .mail-history-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); font-size: .875rem; }
+.mail-success { color: #276341; background: #eff8ef; border: 1px solid currentColor; border-inline-start-width: 4px; border-radius: 10px; padding: 10px 14px; font-weight: 700; }
+.mail-job { display: grid; gap: 8px; margin-block: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.mail-job progress { width: 100%; accent-color: var(--primary); }
 .mail-error { border: 1px solid currentColor; border-inline-start-width: 4px; border-radius: 10px; padding: 10px 14px; font-weight: 700; overflow-wrap: anywhere; }
 form + form:not(.workflow-section) { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar button { max-width: 100%; overflow-wrap: anywhere; }

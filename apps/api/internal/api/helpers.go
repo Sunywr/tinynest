@@ -74,13 +74,15 @@ type Options struct {
 }
 
 type API struct {
-	DB      *db.DB
-	opts    Options
-	trusted []netip.Prefix
-	limiter *loginLimiter
-	setupMu sync.Mutex
-	schedMu sync.Mutex
-	mailMu  sync.Mutex
+	DB           *db.DB
+	opts         Options
+	trusted      []netip.Prefix
+	limiter      *loginLimiter
+	setupMu      sync.Mutex
+	schedMu      sync.Mutex
+	mailMu       sync.Mutex
+	creditJobsMu sync.Mutex
+	creditJobs   map[[2]string]creditImportJob
 }
 
 // New keeps the historical single-argument form working while allowing the
