@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"tinynest/api/internal/money"
 )
 
 var cmbCycleEnd = regexp.MustCompile(`账单周期\s*(?:Statement Cycle)?\s*</(?:td|th)>\s*<td>\s*[0-9]{4}/[0-9]{2}/[0-9]{2}\s*[-~至－]\s*([0-9]{4}/[0-9]{2}/[0-9]{2})\s*</td>`)
@@ -19,6 +21,8 @@ func ParseCMBStatementAmounts(body string) StatementAmounts {
 		return result
 	}
 	markup := strings.ReplaceAll(html.UnescapeString(statementTableMarkup(body)), "\u00a0", " ")
+	rows := cmbSummaryRows.FindAllStringSubmatch(markup, -1)
+	result.AmountDue = cmbLegacyAmountDue(rows)
 	days := cmbCycleEnd.FindAllStringSubmatch(markup, -1)
 	if len(days) == 0 {
 		return result
@@ -33,7 +37,6 @@ func ParseCMBStatementAmounts(body string) StatementAmounts {
 		}
 	}
 	result.StatementDate = day.Format(time.DateOnly)
-	rows := cmbSummaryRows.FindAllStringSubmatch(markup, -1)
 	for i := 0; i+1 < len(rows); i++ {
 		header := cmbSummaryCells.FindAllStringSubmatch(rows[i][1], -1)
 		values := cmbSummaryCells.FindAllStringSubmatch(rows[i+1][1], -1)
@@ -59,7 +62,7 @@ func ParseCMBStatementAmounts(body string) StatementAmounts {
 		if dueErr != nil || chargeErr != nil || charges < 0 {
 			continue
 		}
-		if result.NewCharges != nil && (*result.NewCharges != charges || *result.AmountDue != due) {
+		if (result.NewCharges != nil && *result.NewCharges != charges) || (result.AmountDue != nil && *result.AmountDue != due) {
 			return StatementAmounts{StatementDate: result.StatementDate}
 		}
 		result.NewCharges = &charges
@@ -70,4 +73,24 @@ func ParseCMBStatementAmounts(body string) StatementAmounts {
 
 func cmbRMBValue(value string) bool {
 	return strings.HasPrefix(value, "¥") || strings.HasPrefix(value, "￥")
+}
+
+func cmbLegacyAmountDue(rows [][]string) *money.Minor {
+	var due *money.Minor
+	for _, row := range rows {
+		cells := cmbSummaryCells.FindAllStringSubmatch(row[1], -1)
+		if len(cells) != 3 || strings.Join(strings.Fields(cells[0][1]), "") != "本期应还金额NewBalance" {
+			continue
+		}
+		value := strings.TrimSpace(cells[1][1])
+		if !cmbRMBValue(value) {
+			continue
+		}
+		amount, err := parseEverbrightAmount(value)
+		if err != nil || (due != nil && *due != amount) {
+			return nil
+		}
+		due = &amount
+	}
+	return due
 }

@@ -77,7 +77,7 @@ func TestPostSavedMailSummariesOnlyOnce(t *testing.T) {
 	state := savedCreditPreview{SynchronizedAt: "2023-09-01T00:00:00Z", Statements: []everbrightPreviewStatement{
 		{ReceivedOn: "2023-09-01", Amounts: &credit.StatementAmounts{AmountDue: &amount}},
 	}}
-	enableSPDBAmountDue(&state.Statements[0], 1, 31, 20, 1)
+	enableMailAmountDue(&state.Statements[0], 1, 31, 20, 1)
 	if item := state.Statements[0]; !item.UseAmountDue || item.Amounts.StatementDate != "2023-08-31" {
 		t.Fatalf("invalid statement date or amount basis: %+v", item)
 	}

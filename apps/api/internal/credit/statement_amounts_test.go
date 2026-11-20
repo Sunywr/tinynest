@@ -83,3 +83,13 @@ func TestStatementAmountsSeparateChargesFromAmountDue(t *testing.T) {
 		t.Fatal("conflicting amounts were accepted")
 	}
 }
+
+func TestCMBLegacyDueSummary(t *testing.T) {
+	const body = `<table><tr><td>&nbsp;</td><td>人民币交易(RMB)</td><td>美金交易(USD)</td></tr>
+	<tr><td>本期应还金额&nbsp;New&nbsp;Balance</td><td>￥123.45</td><td>＄1.00</td></tr>
+	<tr><td>最低还款额 Mini Payment</td><td>￥12.34</td><td>＄0.00</td></tr></table>`
+	got := ParseCMBStatementAmounts(body)
+	if got.AmountDue == nil || *got.AmountDue != 12345 || got.NewCharges != nil {
+		t.Fatalf("unexpected legacy summary: %+v", got)
+	}
+}

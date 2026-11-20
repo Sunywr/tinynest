@@ -106,25 +106,32 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		}
 		if bindings == 1 {
 			for i := range statements {
-				enableSPDBAmountDue(&statements[i], start, end, due, offset)
+				enableMailAmountDue(&statements[i], start, end, due, offset)
 			}
 		}
 	}
 	if bank == "cmb" {
-		var bindings int
-		err = a.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM credit_mail_bindings b
+		var start, end, due, offset, bindings int
+		err = a.DB.QueryRowContext(ctx, `SELECT c.cycle_start_day,c.cycle_end_day,c.due_day,c.due_month_offset,
+			(SELECT COUNT(*) FROM credit_mail_bindings b
 			JOIN credit_instruments i ON i.id=b.instrument_id AND i.household_id=b.household_id
 			WHERE b.household_id=? AND b.mailbox_id=? AND i.status='active'
-			  AND (i.name LIKE '%招商%' OR i.issuer LIKE '%招商%')`, p.HouseholdID, mailboxID).Scan(&bindings)
+			  AND (i.name LIKE '%招商%' OR i.issuer LIKE '%招商%'))
+			FROM credit_instruments c WHERE c.id=? AND c.household_id=?`, p.HouseholdID, mailboxID, card, p.HouseholdID).
+			Scan(&start, &end, &due, &offset, &bindings)
 		if err != nil {
 			internalErr(w, err)
 			return
 		}
 		for i := range statements {
 			item := &statements[i]
-			if bindings == 1 && item.Error != "" && item.Error != cmbOtherCardMessage && item.Amounts != nil &&
-				item.Amounts.NewCharges != nil && item.Amounts.StatementDate != "" {
+			if bindings != 1 || item.Error != cmbNoDetailsMessage || item.Amounts == nil {
+				continue
+			}
+			if item.Amounts.NewCharges != nil && item.Amounts.StatementDate != "" {
 				item.Provision = "eligible"
+			} else {
+				enableMailAmountDue(item, start, end, due, offset)
 			}
 		}
 	}
@@ -172,7 +179,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, saved)
 }
 
-func enableSPDBAmountDue(item *everbrightPreviewStatement, start, end, due, offset int) {
+func enableMailAmountDue(item *everbrightPreviewStatement, start, end, due, offset int) {
 	if item.Amounts == nil || item.Amounts.NewCharges != nil || item.Amounts.AmountDue == nil || *item.Amounts.AmountDue <= 0 {
 		return
 	}
@@ -190,6 +197,8 @@ func enableSPDBAmountDue(item *everbrightPreviewStatement, start, end, due, offs
 	item.UseAmountDue = true
 	item.Provision = "eligible"
 }
+
+const cmbNoDetailsMessage = "邮件没有可识别的人民币明细表，可补录 XLS"
 
 var imapFetchUID = regexp.MustCompile(`(?i)\bUID ([0-9]+)\b`)
 var imapLiteralLength = regexp.MustCompile(`\{([0-9]+)\}\r?\n$`)
@@ -404,7 +413,7 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 				case errors.Is(err, credit.ErrCMBNoMatchingCard):
 					item.Error = cmbOtherCardMessage
 				case errors.Is(err, credit.ErrCMBNoTransactionTable):
-					item.Error = "邮件没有可识别的人民币明细表，可补录 XLS"
+					item.Error = cmbNoDetailsMessage
 				default:
 					item.Error = "账单明细格式或日期未通过校验"
 				}
