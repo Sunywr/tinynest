@@ -33,6 +33,15 @@ type everbrightPreviewStatement struct {
 }
 
 func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
+	from, to := r.URL.Query().Get("from"), r.URL.Query().Get("to")
+	if from != "" || to != "" {
+		start, startErr := time.Parse(time.DateOnly, from)
+		end, endErr := time.Parse(time.DateOnly, to)
+		if startErr != nil || endErr != nil || end.Before(start) {
+			writeErr(w, 400, "invalid_statement_range", "请选择有效的账单日期范围")
+			return
+		}
+	}
 	p, _ := principal(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 24*time.Second)
 	defer cancel()
@@ -100,7 +109,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 			return errConflict
 		}
 		if r.URL.Query().Get("provision") == "true" {
-			if err := a.applyMailProvisions(tx, r.WithContext(ctx), p, card, statements); err != nil {
+			if err := a.applyMailProvisions(tx, r.WithContext(ctx), p, card, statements, from, to); err != nil {
 				return err
 			}
 		}

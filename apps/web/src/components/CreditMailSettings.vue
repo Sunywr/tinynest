@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { api, request } from '../services/api'
+import { computed, onMounted, ref, watch } from 'vue'
+import { api, request, today } from '../services/api'
+import DatePicker from './DatePicker.vue'
 
 type Option = { id: string; name: string; issuer?: string }
 type Mailbox = {
@@ -39,6 +40,18 @@ const notice = ref('')
 const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keyword: '', card_tail: '' })
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
 const preview = ref<StatementPreview[] | null>(null)
+const period = ref<'all' | 'range'>('all')
+const from = ref('')
+const to = ref('')
+const rangeReady = computed(() => period.value === 'all' || (!!from.value && !!to.value && from.value <= to.value))
+const visiblePreview = computed(() => {
+  if (preview.value === null || period.value === 'all') return preview.value
+  if (!rangeReady.value) return []
+  return preview.value.filter(statement => {
+    const day = statement.amounts?.statement_date || statement.received_on
+    return day >= from.value && day <= to.value
+  })
+})
 const previewBusy = ref(false)
 const workbook = ref<File | null>(null)
 const workbookTail = ref('')
@@ -56,9 +69,10 @@ const selectedCategory = ref<Record<string, string>>({})
 const pendingDelete = ref('')
 const completed = ref<Record<string, boolean>>({})
 const confirmBatch = ref(false)
+watch([period, from, to], () => { confirmBatch.value = false })
 const batchRows = computed(() => {
   const unique = new Map<string, { row: StatementRow; review: RowReview; category: string }>()
-  for (const statement of preview.value ?? []) {
+  for (const statement of visiblePreview.value ?? []) {
     statement.transactions?.forEach((row, index) => {
       const review = statement.review?.[index]
       if (!review || row.Amount <= 0 || review.imported || completed.value[review.key] || review.matches?.length) return
@@ -236,12 +250,17 @@ function importWorkbook() {
 }
 
 function previewStatements() {
-  if (!canPreview.value || busy.value) return
+  if (!canPreview.value || busy.value || !rangeReady.value) return
   confirmBatch.value = false
   previewBusy.value = true
   void run(async () => {
-    const path = previewPath() + (props.syncOnly ? '?provision=true' : '')
-    applyPreview(await request<SavedPreview>(path, { method: 'POST' }))
+    const query = new URLSearchParams()
+    if (props.syncOnly) query.set('provision', 'true')
+    if (props.syncOnly && period.value === 'range') {
+      query.set('from', from.value)
+      query.set('to', to.value)
+    }
+    applyPreview(await request<SavedPreview>(previewPath() + (query.size ? '?' + query : ''), { method: 'POST' }))
     if (props.syncOnly && preview.value?.some(statement => statement.provision === 'recorded')) emit('ledgerChanged')
   }).finally(() => { previewBusy.value = false })
 }
@@ -379,23 +398,36 @@ function saveBinding() {
             </div>
             <button type="submit" class="ghost" :disabled="!workbook || busy">导入并预览</button>
           </template>
-          <button v-if="canPreview && !workbookBank" class="ghost preview-action" type="button" @click="previewStatements">
+          <fieldset v-if="syncOnly && binding.instrument_id" :disabled="busy">
+            <legend>账单日期</legend>
+            <div class="formgrid">
+              <label>时间范围<select v-model="period">
+                <option value="all">全部账期</option>
+                <option value="range">自定义范围</option>
+              </select></label>
+              <template v-if="period === 'range'">
+                <label>开始日期<DatePicker v-model="from" :max="to || today()" open-on-click /></label>
+                <label>结束日期<DatePicker v-model="to" :min="from || undefined" :max="today()" open-on-click /></label>
+              </template>
+            </div>
+          </fieldset>
+          <button v-if="canPreview && !workbookBank" class="ghost preview-action" type="button" :disabled="busy || !rangeReady" @click="previewStatements">
             {{ previewBusy ? '正在读取账单…' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取账单预览' }}
           </button>
         </fieldset>
       </form>
       <form v-if="syncOnly && binding.instrument_id" @submit.prevent="saveProvision">
-        <fieldset>
+        <fieldset :disabled="busy">
           <legend>暂记本期新增消费及费用</legend>
           <div class="formgrid">
-            <label>账单日<input v-model="provisionDay" required type="date" :disabled="busy"></label>
+            <label>账单日<DatePicker v-model="provisionDay" required :max="today()" open-on-click /></label>
             <label>本期新增消费及费用（元）<input v-model="provisionCharges" required type="text" inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" :disabled="busy"></label>
             <label>本期应还总额（选填，元）<input v-model="provisionDue" type="text" inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" :disabled="busy"></label>
           </div>
           <button class="ghost" type="submit" :disabled="busy">确认暂记</button>
         </fieldset>
       </form>
-      <section v-if="preview !== null && (syncOnly || canPreview)" class="preview-statements">
+      <section v-if="visiblePreview !== null && (syncOnly || canPreview)" class="preview-statements">
         <h3>信用卡账单预览</h3>
         <p v-if="synchronizedAt">上次同步 {{ new Date(synchronizedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
         <div v-if="syncOnly && synchronizedAt" class="review-actions">
@@ -406,8 +438,9 @@ function saveBinding() {
           </template>
           <button v-else type="button" class="ghost" :disabled="busy" @click="confirmClear = true">清空预览</button>
         </div>
-        <p v-if="!preview.length">未找到符合标题关键字的账单。</p>
-        <p v-else>找到 {{ preview.length }} 封账单。已分类且无疑似重复的明细可批量确认。</p>
+        <p v-if="!rangeReady">请选择完整的日期范围。</p>
+        <p v-else-if="!visiblePreview.length">该日期范围内暂无账单。</p>
+        <p v-else>显示 {{ visiblePreview.length }} 期账单。已分类且无疑似重复的明细可批量确认。</p>
         <div v-if="syncOnly && batchRows.length" class="review-actions">
           <template v-if="confirmBatch">
             <span>将按当前分类创建 {{ batchRows.length }} 笔流水。</span>
@@ -418,7 +451,7 @@ function saveBinding() {
             批量创建已分类的 {{ batchRows.length }} 笔
           </button>
         </div>
-        <details v-for="(statement, index) in preview" :key="index">
+        <details v-for="(statement, index) in visiblePreview" :key="index">
           <summary>{{ statement.received_on || '日期未知' }} · {{ statement.error || `${statement.transactions?.length ?? 0} 笔明细` }}</summary>
           <p v-if="statement.amounts" class="subinfo">
             邮件账单摘要

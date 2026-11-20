@@ -13,7 +13,7 @@ import (
 
 const provisionItem = "statement_provision"
 
-func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card string, statements []everbrightPreviewStatement) error {
+func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card string, statements []everbrightPreviewStatement, from, to string) error {
 	// A conflicting message for the same period requires review.
 	seen := make(map[string]int64)
 	conflict := make(map[string]bool)
@@ -36,7 +36,8 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 		item.Provision = "review"
 		amounts := item.Amounts
 		if amounts == nil || amounts.NewCharges == nil || amounts.StatementDate == "" ||
-			amounts.StatementDate > a.businessDate() || conflict[amounts.StatementDate] {
+			amounts.StatementDate > a.businessDate() || conflict[amounts.StatementDate] ||
+			(from != "" && (amounts.StatementDate < from || amounts.StatementDate > to)) {
 			continue
 		}
 		id, err := a.ensureStatement(r, tx, p, card, amounts.StatementDate, true)

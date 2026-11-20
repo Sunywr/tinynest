@@ -30,7 +30,7 @@ func TestMailProvisionRepeatAndConflictingAmounts(t *testing.T) {
 		t.Helper()
 		r := httptest.NewRequest("POST", "/", nil)
 		if err := c.mailAPI.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-			return c.mailAPI.applyMailProvisions(tx, r, p, card, items)
+			return c.mailAPI.applyMailProvisions(tx, r, p, card, items, "2023-08-01", "2023-08-31")
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -38,6 +38,11 @@ func TestMailProvisionRepeatAndConflictingAmounts(t *testing.T) {
 	}
 	if got := apply(item(100), item(200)); got[0].Provision != "review" || got[1].Provision != "review" {
 		t.Fatal("conflicting summaries were accepted")
+	}
+	outside := item(300)
+	outside.Amounts.StatementDate = "2023-07-31"
+	if got := apply(outside); got[0].Provision != "review" {
+		t.Fatal("summary outside the selected period was accepted")
 	}
 	for range 2 {
 		if got := apply(item(100)); got[0].Provision != "recorded" {
