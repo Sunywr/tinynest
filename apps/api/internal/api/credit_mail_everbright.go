@@ -51,7 +51,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 	}
 	card := r.PathValue("id")
 	bank := statementBank(issuer, name)
-	if bank == "" {
+	if bank == "" || bank == "spdb" || bank == "citic" {
 		writeErr(w, 400, "unsupported_statement_bank", "该银行尚未支持邮件明细解析")
 		return
 	}
@@ -115,7 +115,7 @@ var imapLiteralLength = regexp.MustCompile(`\{([0-9]+)\}\r?\n$`)
 
 func statementBank(issuer, name string) string {
 	for _, text := range []string{issuer, name} {
-		for _, item := range []struct{ name, key string }{{"光大", "ceb"}, {"广发", "gdb"}, {"交通", "comm"}, {"招商", "cmb"}} {
+		for _, item := range []struct{ name, key string }{{"光大", "ceb"}, {"广发", "gdb"}, {"交通", "comm"}, {"招商", "cmb"}, {"浦发", "spdb"}, {"浦东发展", "spdb"}, {"中信", "citic"}} {
 			if strings.Contains(text, item.name) {
 				return item.key
 			}

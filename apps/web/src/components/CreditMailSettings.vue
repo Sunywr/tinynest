@@ -38,6 +38,13 @@ const binding = ref<Binding>({ instrument_id: '', mailbox_id: '', subject_keywor
 const available = computed(() => boxes.value.filter(item => item.enabled || item.id === binding.value.mailbox_id))
 const preview = ref<StatementPreview[] | null>(null)
 const previewBusy = ref(false)
+const workbook = ref<File | null>(null)
+const workbookTail = ref('')
+const workbookBank = computed(() => {
+  const card = props.cards.find(item => item.id === binding.value.instrument_id)
+  const bank = (card?.issuer ?? '') + ' ' + (card?.name ?? '')
+  return /浦发|浦东发展/.test(bank) ? '浦发银行' : /中信/.test(bank) ? '中信银行' : ''
+})
 const synchronizedAt = ref('')
 const confirmClear = ref(false)
 const selectedCategory = ref<Record<string, string>>({})
@@ -87,6 +94,7 @@ onMounted(() => void run(async () => {
     const current = props.cards.find(card => bindings.value.some(item => item.instrument_id === card.id))
     if (current) {
       binding.value = { ...bindings.value.find(item => item.instrument_id === current.id)! }
+      resetWorkbook()
       await restorePreview()
     }
   }
@@ -164,7 +172,36 @@ function selectCard() {
   const id = binding.value.instrument_id
   const current = bindings.value.find(item => item.instrument_id === id)
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
+  resetWorkbook()
   if (props.syncOnly && id) void run(restorePreview)
+}
+
+function resetWorkbook() {
+  workbook.value = null
+  const name = props.cards.find(item => item.id === binding.value.instrument_id)?.name ?? ''
+  workbookTail.value = binding.value.card_tail || name.match(/[（(]([0-9]{4})[）)]\s*$/)?.[1] || ''
+}
+
+function importWorkbook() {
+  const file = workbook.value
+  if (!file || busy.value || !workbookBank.value) return
+  void run(async () => {
+    if (!/\.xls$/i.test(file.name) || file.size > 4 * 1024 * 1024) {
+      throw new Error('请选择不超过 4 MB 的 .xls 账单文件')
+    }
+    const { read, utils } = await import('xlsx')
+    const data = await file.arrayBuffer()
+    const magic = new Uint8Array(data, 0, Math.min(8, data.byteLength))
+    if (magic.join(',') !== '208,207,17,224,161,177,26,225') throw new Error('文件不是 Excel 97–2003 .xls 账单')
+    const book = read(data, { sheetRows: 2001 })
+    const sheet = book.Sheets[book.SheetNames[0]]
+    if (!sheet) throw new Error('账单没有可读取的工作表')
+    const rows = utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false, defval: '', blankrows: false })
+    applyPreview(await request<SavedPreview>(previewPath().replace(/\/preview$/, '/workbook'), {
+      method: 'POST', body: JSON.stringify({ card_tail: workbookTail.value, rows }),
+    }))
+    notice.value = '账单已解析，请核对预览后确认入账'
+  })
 }
 
 function previewStatements() {
@@ -284,7 +321,7 @@ function saveBinding() {
           </div>
         </fieldset>
       </form>
-      <form @submit.prevent="syncOnly ? previewStatements() : saveBinding()">
+      <form @submit.prevent="syncOnly ? (workbookBank ? importWorkbook() : previewStatements()) : saveBinding()">
         <fieldset :disabled="busy">
           <legend>{{ syncOnly ? '选择已绑定的信用卡' : '信用卡绑定' }}</legend>
           <div class="formgrid">
@@ -300,7 +337,16 @@ function saveBinding() {
             </template>
           </div>
           <button v-if="!syncOnly" class="primary" type="submit" :disabled="!binding.instrument_id">保存绑定</button>
-          <button v-if="canPreview" class="ghost preview-action" type="button" @click="previewStatements">
+          <template v-if="syncOnly && workbookBank">
+            <h3>{{ workbookBank }}账单导入</h3>
+            <div class="formgrid">
+              <label>卡尾号<input v-model.trim="workbookTail" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4" :readonly="!!binding.card_tail"></label>
+              <label>银行下载的账单<input :key="binding.instrument_id" type="file" accept=".xls,application/vnd.ms-excel" required
+                @change="workbook = ($event.target as HTMLInputElement).files?.[0] ?? null"></label>
+            </div>
+            <button type="submit" class="ghost" :disabled="!workbook || busy">导入并预览</button>
+          </template>
+          <button v-if="canPreview && !workbookBank" class="ghost preview-action" type="button" @click="previewStatements">
             {{ previewBusy ? '正在读取账单…' : syncOnly ? (synchronizedAt ? '重新同步' : '同步并预览') : '读取账单预览' }}
           </button>
         </fieldset>

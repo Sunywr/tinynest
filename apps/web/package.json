@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "lucide-vue-next": "^0.577.0",
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",

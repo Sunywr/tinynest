@@ -2030,7 +2030,7 @@ const metricCards = computed(() => {
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active')"
             @close="closePanel()" />
           <CreditMailSettings v-if="panel === 'creditMailSync' && canWrite" sync-only
-            :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active' && /光大|广发|交通|招商/.test(c.issuer + ' ' + c.name))"
+            :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active' && /光大|广发|交通|招商|中信|浦发|浦东发展/.test(c.issuer + ' ' + c.name))"
             :categories="expenseCategories" @close="closePanel()"
             @edit-transaction="id => { go('ledger'); void openTransactionDraft(id, true) }"
             @ledger-changed="loadAll()" />
