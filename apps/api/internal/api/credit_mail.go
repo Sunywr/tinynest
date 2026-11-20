@@ -44,6 +44,7 @@ func (a *API) registerCreditMail(m *http.ServeMux) {
 	register("PUT /api/v1/credit-mail/mailboxes/{id}", a.saveCreditMailbox)
 	register("PUT /api/v1/credit-mail/bindings/{id}", a.saveCreditMailBinding)
 	register("POST /api/v1/credit-mail/bindings/{id}/preview", a.previewEverbrightMail)
+	register("POST /api/v1/credit-mail/bindings/{id}/post-summaries", a.postCreditMailSummaries)
 	register("POST /api/v1/credit-mail/bindings/{id}/workbook", a.importCreditWorkbook)
 	register("GET /api/v1/credit-mail/bindings/{id}/preview", a.savedCreditPreview)
 	register("PATCH /api/v1/credit-mail/bindings/{id}/preview", a.savedCreditPreview)

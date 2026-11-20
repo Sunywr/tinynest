@@ -112,11 +112,6 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		if current.Generation != saved.Generation {
 			return errConflict
 		}
-		if r.URL.Query().Get("provision") == "true" {
-			if err := a.applyMailProvisions(tx, r.WithContext(ctx), p, card, statements, from, to); err != nil {
-				return err
-			}
-		}
 		return a.writeSavedCreditPreview(ctx, tx, p.HouseholdID, card, saved)
 	})
 	if errors.Is(err, errConflict) {

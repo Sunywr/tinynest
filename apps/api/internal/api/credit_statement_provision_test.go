@@ -41,7 +41,7 @@ func TestMailProvisionRepeatAndConflictingAmounts(t *testing.T) {
 	}
 	outside := item(300)
 	outside.Amounts.StatementDate = "2023-07-31"
-	if got := apply(outside); got[0].Provision != "review" {
+	if got := apply(outside); got[0].Provision != "eligible" {
 		t.Fatal("summary outside the selected period was accepted")
 	}
 	for range 2 {
@@ -57,6 +57,40 @@ func TestMailProvisionRepeatAndConflictingAmounts(t *testing.T) {
 		JOIN credit_statements s ON s.id=i.statement_id WHERE s.instrument_id=? AND i.source_type='statement_provision'`, card).
 		Scan(&count, &amount); err != nil || count != 1 || amount != 100 {
 		t.Fatalf("count=%d amount=%d err=%v", count, amount, err)
+	}
+}
+
+func TestPostSavedMailSummariesOnlyOnce(t *testing.T) {
+	ts, c, db := newTestServer(t)
+	defer db.Close()
+	defer ts.Close()
+	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
+		"name": "摘要入账测试", "kind": "credit_card", "cycle_start_day": 1, "cycle_end_day": 31,
+		"due_day": 20, "due_month_offset": 1,
+	})["id"].(string)
+	var household string
+	if err := db.QueryRow("SELECT household_id FROM credit_instruments WHERE id=?", card).Scan(&household); err != nil {
+		t.Fatal(err)
+	}
+	ctx := httptest.NewRequest("POST", "/", nil).Context()
+	amount := money.Minor(5000)
+	state := savedCreditPreview{SynchronizedAt: "2023-09-01T00:00:00Z", Statements: []everbrightPreviewStatement{
+		{Provision: "eligible", Amounts: &credit.StatementAmounts{NewCharges: &amount, StatementDate: "2023-08-31"}},
+	}}
+	if err := c.mailAPI.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		return c.mailAPI.writeSavedCreditPreview(ctx, tx, household, card, state)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/credit-mail/bindings/" + card + "/post-summaries"
+	for range 2 {
+		c.mustOK("POST", path, map[string]any{"synchronized_at": state.SynchronizedAt})
+	}
+	var count, total int
+	if err := db.QueryRow(`SELECT COUNT(*),COALESCE(SUM(i.amount_minor),0) FROM credit_statement_items i
+		JOIN credit_statements s ON s.id=i.statement_id WHERE s.instrument_id=? AND i.source_type='statement_provision'`, card).
+		Scan(&count, &total); err != nil || count != 1 || total != int(amount) {
+		t.Fatalf("count=%d total=%d err=%v", count, total, err)
 	}
 }
 

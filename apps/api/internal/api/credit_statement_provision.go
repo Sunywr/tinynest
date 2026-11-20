@@ -13,6 +13,62 @@ import (
 
 const provisionItem = "statement_provision"
 
+func (a *API) postCreditMailSummaries(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	card := r.PathValue("id")
+	ctx := r.Context()
+	var input struct {
+		SynchronizedAt string `json:"synchronized_at"`
+		From           string `json:"from"`
+		To             string `json:"to"`
+	}
+	if decode(r, &input) != nil || input.SynchronizedAt == "" {
+		writeErr(w, 400, "invalid_preview", "请先同步账单")
+		return
+	}
+	if input.From != "" || input.To != "" {
+		start, startErr := time.Parse(time.DateOnly, input.From)
+		end, endErr := time.Parse(time.DateOnly, input.To)
+		if startErr != nil || endErr != nil || end.Before(start) {
+			writeErr(w, 400, "invalid_statement_range", "请选择有效的账单日期范围")
+			return
+		}
+	}
+	var state savedCreditPreview
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		var id string
+		query := `SELECT id FROM credit_instruments WHERE id=? AND household_id=? AND kind='credit_card' AND status='active'`
+		if a.DB.IsMySQL() {
+			query += " FOR UPDATE"
+		}
+		if err := tx.QueryRowContext(ctx, query, card, p.HouseholdID).Scan(&id); err != nil {
+			return err
+		}
+		var err error
+		state, err = readSavedCreditPreview(ctx, tx, p.HouseholdID, card)
+		if err != nil {
+			return err
+		}
+		if state.SynchronizedAt != input.SynchronizedAt {
+			return errConflict
+		}
+		if err := a.applyMailProvisions(tx, r, p, card, state.Statements, input.From, input.To); err != nil {
+			return err
+		}
+		return a.writeSavedCreditPreview(ctx, tx, p.HouseholdID, card, state)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		writeErr(w, 404, "missing_card", "信用卡不存在")
+	case errors.Is(err, errConflict):
+		writeErr(w, 409, "preview_changed", "预览已更新，请重新打开后入账")
+	case err != nil:
+		internalErr(w, err)
+	default:
+		writeJSON(w, 200, map[string]bool{"saved": true})
+	}
+}
+
 func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card string, statements []everbrightPreviewStatement, from, to string) error {
 	// A conflicting message for the same period requires review.
 	seen := make(map[string]int64)
@@ -33,11 +89,14 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 		if item.Provision != "eligible" {
 			continue
 		}
-		item.Provision = "review"
 		amounts := item.Amounts
+		if amounts != nil && amounts.StatementDate != "" && from != "" &&
+			(amounts.StatementDate < from || amounts.StatementDate > to) {
+			continue
+		}
+		item.Provision = "review"
 		if amounts == nil || amounts.NewCharges == nil || amounts.StatementDate == "" ||
-			amounts.StatementDate > a.businessDate() || conflict[amounts.StatementDate] ||
-			(from != "" && (amounts.StatementDate < from || amounts.StatementDate > to)) {
+			amounts.StatementDate > a.businessDate() || conflict[amounts.StatementDate] {
 			continue
 		}
 		id, err := a.ensureStatement(r, tx, p, card, amounts.StatementDate, true)

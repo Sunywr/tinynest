@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, request, today } from '../services/api'
 import DatePicker from './DatePicker.vue'
 
@@ -57,9 +57,6 @@ const visiblePreview = computed(() => {
 const previewBusy = ref(false)
 const workbook = ref<File | null>(null)
 const workbookTail = ref('')
-const provisionDay = ref('')
-const provisionCharges = ref('')
-const provisionDue = ref('')
 const workbookBank = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const bank = (card?.issuer ?? '') + ' ' + (card?.name ?? '')
@@ -70,8 +67,6 @@ const confirmClear = ref(false)
 const selectedCategory = ref<Record<string, string>>({})
 const pendingDelete = ref('')
 const completed = ref<Record<string, boolean>>({})
-const confirmBatch = ref(false)
-watch([period, from, to], () => { confirmBatch.value = false })
 const batchRows = computed(() => {
   const unique = new Map<string, { row: StatementRow; review: RowReview; category: string }>()
   for (const statement of visiblePreview.value ?? []) {
@@ -84,6 +79,9 @@ const batchRows = computed(() => {
   }
   return [...unique.values()]
 })
+const hasPostableSummary = computed(() => (visiblePreview.value ?? []).some(statement =>
+  statement.provision === 'eligible' && !!statement.amounts?.statement_date &&
+  statement.amounts.new_charges_minor !== undefined))
 const canPreview = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const saved = bindings.value.find(item => item.instrument_id === card?.id)
@@ -161,7 +159,6 @@ function clearPreview() {
     await request(previewPath(), { method: 'DELETE' })
     applyPreview({ statements: null, synchronized_at: '', choices: {} })
     confirmClear.value = false
-    confirmBatch.value = false
     notice.value = '已清空这张卡的预览'
   })
 }
@@ -189,41 +186,14 @@ function saveMailbox(enabled = true) {
 }
 
 function selectCard() {
-  provisionDay.value = ''
-  provisionCharges.value = ''
-  provisionDue.value = ''
   preview.value = null
   synchronizedAt.value = ''
   confirmClear.value = false
-  confirmBatch.value = false
   const id = binding.value.instrument_id
   const current = bindings.value.find(item => item.instrument_id === id)
   binding.value = current ? { ...current } : { instrument_id: id, mailbox_id: '', subject_keyword: '', card_tail: '' }
   resetWorkbook()
   if (props.syncOnly && id) void run(restorePreview)
-}
-
-function useSummary(amounts: NonNullable<StatementPreview['amounts']>) {
-  provisionDay.value = amounts.statement_date ?? ''
-  provisionCharges.value = amounts.new_charges_minor === undefined ? '' : (amounts.new_charges_minor / 100).toFixed(2)
-  provisionDue.value = amounts.amount_due_minor === undefined ? '' : (amounts.amount_due_minor / 100).toFixed(2)
-}
-
-function saveProvision() {
-  if (busy.value) return
-  void run(async () => {
-    const parse = (value: string) => Math.round(Number(value) * 100)
-    await request('/credit-instruments/' + encodeURIComponent(binding.value.instrument_id) + '/statement-provision', {
-      method: 'PUT',
-      body: JSON.stringify({
-        statement_date: provisionDay.value,
-        new_charges_minor: parse(provisionCharges.value),
-        amount_due_minor: provisionDue.value === '' ? undefined : parse(provisionDue.value),
-      }),
-    })
-    notice.value = '已更新账单暂记，补录明细时会自动抵减'
-    emit('ledgerChanged')
-  })
 }
 
 function resetWorkbook() {
@@ -259,17 +229,14 @@ function importWorkbook() {
 
 function previewStatements() {
   if (!canPreview.value || busy.value || !rangeReady.value) return
-  confirmBatch.value = false
   previewBusy.value = true
   void run(async () => {
     const query = new URLSearchParams()
-    if (props.syncOnly) query.set('provision', 'true')
     if (props.syncOnly && period.value === 'range') {
       query.set('from', from.value)
       query.set('to', to.value)
     }
     applyPreview(await request<SavedPreview>(previewPath() + (query.size ? '?' + query : ''), { method: 'POST' }))
-    if (props.syncOnly && preview.value?.some(statement => statement.provision === 'recorded')) emit('ledgerChanged')
   }).finally(() => { previewBusy.value = false })
 }
 
@@ -304,9 +271,8 @@ async function postPreviewRow(row: StatementRow, review: RowReview, category: st
 }
 
 function createBatch() {
-  if (busy.value || !confirmBatch.value) return
+  if (busy.value || (!batchRows.value.length && !hasPostableSummary.value)) return
   const pending = batchRows.value
-  confirmBatch.value = false
   void run(async () => {
     let done = 0
     try {
@@ -319,7 +285,21 @@ function createBatch() {
       throw new Error(`已处理 ${done} 笔，批量操作已暂停。${err instanceof Error ? err.message : '请重试'}`)
     }
     if (done) emit('ledgerChanged')
-    notice.value = `已处理 ${done} 笔流水`
+    if (hasPostableSummary.value) {
+      await request(previewPath().replace(/\/preview$/, '/post-summaries'), {
+        method: 'POST',
+        body: JSON.stringify({
+          synchronized_at: synchronizedAt.value,
+          from: period.value === 'range' ? from.value : '',
+          to: period.value === 'range' ? to.value : '',
+        }),
+      })
+      emit('ledgerChanged')
+      await restorePreview()
+      notice.value = '已处理可入账的账单汇总和明细'
+    } else {
+      notice.value = `已处理 ${done} 笔流水`
+    }
   })
 }
 
@@ -429,17 +409,6 @@ function saveBinding() {
           </section>
         </fieldset>
       </form>
-      <form v-if="syncOnly && binding.instrument_id" class="workflow-section" @submit.prevent="saveProvision">
-        <fieldset :disabled="busy">
-          <legend>暂记本期新增消费及费用</legend>
-          <div class="formgrid">
-            <label>账单日<DatePicker v-model="provisionDay" required :max="today()" open-on-click /></label>
-            <label>本期新增消费及费用（元）<input v-model="provisionCharges" required type="text" inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" :disabled="busy"></label>
-            <label>本期应还总额（选填，元）<input v-model="provisionDue" type="text" inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" :disabled="busy"></label>
-          </div>
-          <button class="ghost" type="submit" :disabled="busy">确认暂记</button>
-        </fieldset>
-      </form>
       <section v-if="visiblePreview !== null && (syncOnly || canPreview)" class="workflow-section preview-statements">
         <h3>信用卡账单预览</h3>
         <p v-if="synchronizedAt">上次同步 {{ new Date(synchronizedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</p>
@@ -454,14 +423,9 @@ function saveBinding() {
         <p v-if="!rangeReady">请选择完整的日期范围。</p>
         <p v-else-if="!visiblePreview.length">该日期范围内暂无账单。</p>
         <p v-else>显示 {{ visiblePreview.length }} 期账单。已分类且无疑似重复的明细可批量确认。</p>
-        <div v-if="syncOnly && batchRows.length" class="review-actions">
-          <template v-if="confirmBatch">
-            <span>将按当前分类创建 {{ batchRows.length }} 笔流水。</span>
-            <button type="button" class="ghost" :disabled="busy" @click="createBatch">确认批量创建</button>
-            <button type="button" class="ghost" @click="confirmBatch = false">取消</button>
-          </template>
-          <button v-else type="button" class="ghost" :disabled="busy" @click="confirmBatch = true">
-            批量创建已分类的 {{ batchRows.length }} 笔
+        <div v-if="syncOnly && (batchRows.length || hasPostableSummary)" class="review-actions">
+          <button type="button" class="primary" :disabled="busy" @click="createBatch">
+            一键记入流水
           </button>
         </div>
         <details v-for="(statement, index) in visiblePreview" :key="index">
@@ -471,8 +435,8 @@ function saveBinding() {
             <template v-if="statement.amounts.statement_date"> · 账单日 {{ statement.amounts.statement_date }}</template>
             <template v-if="statement.amounts.new_charges_minor !== undefined"> · 本期新增消费及费用 {{ amountFormat.format(statement.amounts.new_charges_minor / 100) }}</template>
             <template v-if="statement.amounts.amount_due_minor !== undefined"> · 本期应还总额 {{ amountFormat.format(statement.amounts.amount_due_minor / 100) }}</template>
-            <template v-if="statement.provision === 'recorded'"> · 已暂记</template>
-            <button v-else-if="syncOnly" class="ghost" type="button" :disabled="busy" @click="useSummary(statement.amounts)">待确认 · 填入暂记表单</button>
+            <template v-if="statement.provision === 'recorded'"> · 已记入汇总流水</template>
+            <template v-else-if="statement.provision === 'review'"> · 待核对</template>
           </p>
           <table v-if="statement.transactions" class="statement-table" role="table" aria-label="账单交易明细">
             <thead><tr><th scope="col">交易日</th><th scope="col">交易说明</th><th scope="col" class="statement-amount">金额</th><th v-if="syncOnly" scope="col">分类与操作</th></tr></thead>
