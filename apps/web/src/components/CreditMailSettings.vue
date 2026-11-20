@@ -17,6 +17,7 @@ type StatementPreview = {
   received_on: string; error?: string
   amounts?: { new_charges_minor?: number; amount_due_minor?: number; statement_date?: string }
   provision?: 'eligible' | 'review' | 'recorded'
+  use_amount_due?: boolean
   transactions: StatementRow[] | null
   review?: RowReview[]
 }
@@ -82,7 +83,7 @@ const batchRows = computed(() => {
 })
 const hasPostableSummary = computed(() => (visiblePreview.value ?? []).some(statement =>
   statement.provision === 'eligible' && !!statement.amounts?.statement_date &&
-  statement.amounts.new_charges_minor !== undefined))
+  (statement.amounts.new_charges_minor !== undefined || statement.use_amount_due)))
 const needsSPDBWorkbook = computed(() => workbookBank.value === '浦发银行' &&
   (visiblePreview.value ?? []).some(statement => statement.amounts?.amount_due_minor !== undefined &&
     statement.amounts.new_charges_minor === undefined))
@@ -428,7 +429,7 @@ function saveBinding() {
         <p v-else-if="!visiblePreview.length">该日期范围内暂无账单。</p>
         <p v-else>显示 {{ visiblePreview.length }} 期账单。</p>
         <div v-if="syncOnly && needsSPDBWorkbook" class="mail-history-note">
-          <p>浦发邮件的应还总额用于核对。导入银行下载的 XLS 明细后，可在此一键记入符合条件的流水。</p>
+          <p>符合条件的浦发应还总额可先记为汇总。之后导入 XLS 并确认明细入账，系统会抵减同一期的汇总金额。</p>
           <button type="button" class="ghost" :disabled="busy" @click="workbookInput?.focus()">前往明细补录</button>
         </div>
         <div v-if="syncOnly && visiblePreview.length" class="review-actions">
@@ -444,6 +445,7 @@ function saveBinding() {
             <template v-if="statement.amounts.statement_date"> · 账单日 {{ statement.amounts.statement_date }}</template>
             <template v-if="statement.amounts.new_charges_minor !== undefined"> · 本期新增消费及费用 {{ amountFormat.format(statement.amounts.new_charges_minor / 100) }}</template>
             <template v-if="statement.amounts.amount_due_minor !== undefined"> · 本期应还总额 {{ amountFormat.format(statement.amounts.amount_due_minor / 100) }}</template>
+            <template v-if="statement.use_amount_due"> · 按应还总额入账</template>
             <template v-if="statement.provision === 'recorded'"> · 已记入汇总流水</template>
             <template v-else-if="statement.provision === 'review'"> · 待核对</template>
           </p>

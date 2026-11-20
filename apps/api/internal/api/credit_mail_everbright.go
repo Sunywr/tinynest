@@ -30,6 +30,7 @@ type everbrightPreviewStatement struct {
 	Error        string                         `json:"error,omitempty"`
 	Amounts      *credit.StatementAmounts       `json:"amounts,omitempty"`
 	Provision    string                         `json:"provision,omitempty"`
+	UseAmountDue bool                           `json:"use_amount_due,omitempty"`
 }
 
 func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +82,26 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, "credit_mail_preview_failed", "读取账单失败，请检查邮箱连接后重试")
 		return
 	}
+	if bank == "spdb" {
+		var start, end, due, offset int
+		var bindings int
+		err = a.DB.QueryRowContext(ctx, `SELECT i.cycle_start_day,i.cycle_end_day,i.due_day,i.due_month_offset,
+			(SELECT COUNT(*) FROM credit_mail_bindings b JOIN credit_instruments other
+			 ON other.id=b.instrument_id AND other.household_id=b.household_id
+			 WHERE b.household_id=i.household_id AND b.mailbox_id=? AND other.status='active'
+			 AND (other.name LIKE '%浦发%' OR other.issuer LIKE '%浦发%' OR other.name LIKE '%浦东发展%' OR other.issuer LIKE '%浦东发展%'))
+			 FROM credit_instruments i WHERE i.id=? AND i.household_id=?`, mailboxID, card, p.HouseholdID).
+			Scan(&start, &end, &due, &offset, &bindings)
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		if bindings == 1 {
+			for i := range statements {
+				enableSPDBAmountDue(&statements[i], start, end, due, offset)
+			}
+		}
+	}
 	// Missing or unreadable mail should not discard an existing usable preview.
 	present := make(map[string]bool)
 	for _, statement := range statements {
@@ -123,6 +144,25 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, saved)
+}
+
+func enableSPDBAmountDue(item *everbrightPreviewStatement, start, end, due, offset int) {
+	if item.Amounts == nil || item.Amounts.NewCharges != nil || item.Amounts.AmountDue == nil || *item.Amounts.AmountDue <= 0 {
+		return
+	}
+	if item.Amounts.StatementDate == "" {
+		received, err := time.Parse(time.DateOnly, item.ReceivedOn)
+		if err != nil {
+			return
+		}
+		cycle, err := credit.CycleFor(received.AddDate(0, 0, -3), start, end, due, offset)
+		if err != nil || cycle.End.Before(received.AddDate(0, 0, -3)) || cycle.End.After(received) {
+			return
+		}
+		item.Amounts.StatementDate = cycle.End.Format(time.DateOnly)
+	}
+	item.UseAmountDue = true
+	item.Provision = "eligible"
 }
 
 var imapFetchUID = regexp.MustCompile(`(?i)\bUID ([0-9]+)\b`)

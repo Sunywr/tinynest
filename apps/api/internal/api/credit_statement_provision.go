@@ -13,6 +13,16 @@ import (
 
 const provisionItem = "statement_provision"
 
+func mailSummaryTarget(item everbrightPreviewStatement) *money.Minor {
+	if item.Amounts == nil {
+		return nil
+	}
+	if item.UseAmountDue {
+		return item.Amounts.AmountDue
+	}
+	return item.Amounts.NewCharges
+}
+
 func (a *API) postCreditMailSummaries(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	card := r.PathValue("id")
@@ -74,10 +84,11 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 	seen := make(map[string]int64)
 	conflict := make(map[string]bool)
 	for _, item := range statements {
-		if item.Amounts == nil || item.Amounts.NewCharges == nil {
+		target := mailSummaryTarget(item)
+		if target == nil {
 			continue
 		}
-		day, amount := item.Amounts.StatementDate, int64(*item.Amounts.NewCharges)
+		day, amount := item.Amounts.StatementDate, int64(*target)
 		if previous, exists := seen[day]; exists && previous != amount {
 			conflict[day] = true
 		}
@@ -90,12 +101,13 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 			continue
 		}
 		amounts := item.Amounts
+		requested := mailSummaryTarget(*item)
 		if amounts != nil && amounts.StatementDate != "" && from != "" &&
 			(amounts.StatementDate < from || amounts.StatementDate > to) {
 			continue
 		}
 		item.Provision = "review"
-		if amounts == nil || amounts.NewCharges == nil || amounts.StatementDate == "" ||
+		if requested == nil || *requested < 0 || amounts.StatementDate == "" ||
 			amounts.StatementDate > a.businessDate() || conflict[amounts.StatementDate] {
 			continue
 		}
@@ -113,7 +125,7 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 		var target int64
 		err = tx.QueryRowContext(ctx, query, id, p.HouseholdID).Scan(&target)
 		if err == nil {
-			if target == int64(*amounts.NewCharges) {
+			if target == int64(*requested) {
 				item.Provision = "recorded"
 			}
 			continue
@@ -122,7 +134,7 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO credit_statement_provisions(statement_id,household_id,target_minor)
-			VALUES(?,?,?)`, id, p.HouseholdID, *amounts.NewCharges); err != nil {
+			VALUES(?,?,?)`, id, p.HouseholdID, *requested); err != nil {
 			return err
 		}
 		if amounts.AmountDue != nil {

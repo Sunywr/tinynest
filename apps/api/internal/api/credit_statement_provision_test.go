@@ -65,7 +65,7 @@ func TestPostSavedMailSummariesOnlyOnce(t *testing.T) {
 	defer db.Close()
 	defer ts.Close()
 	card := c.mustOK("POST", "/api/v1/credit-instruments", map[string]any{
-		"name": "摘要入账测试", "kind": "credit_card", "cycle_start_day": 1, "cycle_end_day": 31,
+		"name": "浦发摘要入账测试", "kind": "credit_card", "cycle_start_day": 1, "cycle_end_day": 31,
 		"due_day": 20, "due_month_offset": 1,
 	})["id"].(string)
 	var household string
@@ -75,8 +75,12 @@ func TestPostSavedMailSummariesOnlyOnce(t *testing.T) {
 	ctx := httptest.NewRequest("POST", "/", nil).Context()
 	amount := money.Minor(5000)
 	state := savedCreditPreview{SynchronizedAt: "2023-09-01T00:00:00Z", Statements: []everbrightPreviewStatement{
-		{Provision: "eligible", Amounts: &credit.StatementAmounts{NewCharges: &amount, StatementDate: "2023-08-31"}},
+		{ReceivedOn: "2023-09-01", Amounts: &credit.StatementAmounts{AmountDue: &amount}},
 	}}
+	enableSPDBAmountDue(&state.Statements[0], 1, 31, 20, 1)
+	if item := state.Statements[0]; !item.UseAmountDue || item.Amounts.StatementDate != "2023-08-31" {
+		t.Fatalf("invalid statement date or amount basis: %+v", item)
+	}
 	if err := c.mailAPI.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		return c.mailAPI.writeSavedCreditPreview(ctx, tx, household, card, state)
 	}); err != nil {
@@ -91,6 +95,17 @@ func TestPostSavedMailSummariesOnlyOnce(t *testing.T) {
 		JOIN credit_statements s ON s.id=i.statement_id WHERE s.instrument_id=? AND i.source_type='statement_provision'`, card).
 		Scan(&count, &total); err != nil || count != 1 || total != int(amount) {
 		t.Fatalf("count=%d total=%d err=%v", count, total, err)
+	}
+	category := c.firstCategory("expense")
+	c.mustOK("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": amount, "occurred_on": "2023-08-15", "payment_kind": "credit",
+		"credit_instrument_id": card, "splits": []map[string]any{{"category_id": category, "amount_minor": amount}},
+	})
+	var balance, remainder int64
+	if err := db.QueryRow(`SELECT s.system_due_minor,p.provision_minor FROM credit_statements s
+		JOIN credit_statement_provisions p ON p.statement_id=s.id WHERE s.instrument_id=?`, card).
+		Scan(&balance, &remainder); err != nil || balance != int64(amount) || remainder != 0 {
+		t.Fatalf("balance=%d remainder=%d err=%v", balance, remainder, err)
 	}
 }
 
