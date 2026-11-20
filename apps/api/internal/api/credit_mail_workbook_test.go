@@ -2,6 +2,17 @@ package api
 
 import "testing"
 
+func TestCMBWorkbookUsesCITICColumns(t *testing.T) {
+	rows, err := parseCreditWorkbook("cmb", "0123", [][]string{
+		{"交易日期", "入账日期", "交易描述", "卡末四位", "结算币种", "结算金额"},
+		{"2023-05-01", "2023-05-02", "测试消费", "0123", "人民币", "125.00"},
+		{"2023-05-01", "2023-05-02", "其他卡", "1234", "人民币", "99.00"},
+	})
+	if err != nil || len(rows) != 1 || rows[0].Amount != 12500 {
+		t.Fatalf("unexpected CMB workbook result: %v, %v", rows, err)
+	}
+}
+
 func TestCreditWorkbookPreviewUsesSettlementAndCardTail(t *testing.T) {
 	ts, c, database := newTestServer(t)
 	defer database.Close()

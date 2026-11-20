@@ -67,7 +67,7 @@ const workbookTail = ref('')
 const workbookBank = computed(() => {
   const card = props.cards.find(item => item.id === binding.value.instrument_id)
   const bank = (card?.issuer ?? '') + ' ' + (card?.name ?? '')
-  return /浦发|浦东发展/.test(bank) ? '浦发银行' : /中信/.test(bank) ? '中信银行' : ''
+  return /浦发|浦东发展/.test(bank) ? '浦发银行' : /中信/.test(bank) ? '中信银行' : /招商/.test(bank) ? '招商银行' : ''
 })
 const synchronizedAt = ref('')
 const confirmClear = ref(false)
@@ -437,12 +437,13 @@ function saveBinding() {
             </p>
           <p v-if="syncOnly && workbookBank && !canPreview" class="subinfo">绑定并启用账单邮箱后即可同步邮件金额。明细可稍后上传。</p>
             <button v-if="canPreview" class="primary preview-action" type="button" :disabled="busy || !rangeReady" @click="previewStatements">
-              {{ previewBusy ? '正在读取账单…' : workbookBank ? '同步邮件金额' : synchronizedAt ? '重新同步' : '同步并预览' }}
+              {{ previewBusy ? '正在读取账单…' : workbookBank && workbookBank !== '招商银行' ? '同步邮件金额' : synchronizedAt ? '重新同步' : '同步并预览' }}
             </button>
           </section>
           <button v-if="!syncOnly && canPreview" class="ghost preview-action" type="button" @click="previewStatements">读取账单预览</button>
           <section v-if="syncOnly && workbookBank" class="workflow-section">
             <h3>{{ workbookBank }}明细补录</h3>
+            <p v-if="workbookBank === '招商银行'" class="subinfo">目前接收与中信明细表头一致的 XLS 文件。</p>
             <div class="formgrid">
               <label>卡尾号<input v-model.trim="workbookTail" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" :readonly="!!binding.card_tail"></label>
               <label>银行下载的账单<input ref="workbookInput" :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel"
@@ -485,6 +486,7 @@ function saveBinding() {
             <template v-if="statement.amounts.amount_due_minor !== undefined"> · 本期应还总额 {{ amountFormat.format(statement.amounts.amount_due_minor / 100) }}</template>
             <template v-if="statement.use_amount_due"> · 按应还总额入账</template>
             <template v-if="statement.provision === 'recorded'"> · 已记入汇总流水</template>
+            <template v-else-if="statement.provision === 'eligible' && statement.error"> · 可先记汇总，明细可稍后补录</template>
             <template v-else-if="statement.provision === 'review'"> · 待核对</template>
           </p>
           <table v-if="statement.transactions" class="statement-table" role="table" aria-label="账单交易明细">

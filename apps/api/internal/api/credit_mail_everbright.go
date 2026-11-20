@@ -31,6 +31,7 @@ type everbrightPreviewStatement struct {
 	Amounts      *credit.StatementAmounts       `json:"amounts,omitempty"`
 	Provision    string                         `json:"provision,omitempty"`
 	UseAmountDue bool                           `json:"use_amount_due,omitempty"`
+	Workbook     bool                           `json:"workbook,omitempty"`
 }
 
 func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +107,24 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if bank == "cmb" {
+		var bindings int
+		err = a.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM credit_mail_bindings b
+			JOIN credit_instruments i ON i.id=b.instrument_id AND i.household_id=b.household_id
+			WHERE b.household_id=? AND b.mailbox_id=? AND i.status='active'
+			  AND (i.name LIKE '%招商%' OR i.issuer LIKE '%招商%')`, p.HouseholdID, mailboxID).Scan(&bindings)
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		for i := range statements {
+			item := &statements[i]
+			if bindings == 1 && item.Error != "" && item.Amounts != nil &&
+				item.Amounts.NewCharges != nil && item.Amounts.StatementDate != "" {
+				item.Provision = "eligible"
+			}
+		}
+	}
 	// Missing or unreadable mail should not discard an existing usable preview.
 	present := make(map[string]bool)
 	for _, statement := range statements {
@@ -114,7 +133,7 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, statement := range saved.Statements {
-		workbook := (bank == "spdb" || bank == "citic") && len(statement.Transactions) > 0
+		workbook := statement.Workbook || ((bank == "spdb" || bank == "citic") && len(statement.Transactions) > 0)
 		if statement.Error == "" && (workbook || !present[statement.ReceivedOn]) {
 			statement.Review = nil
 			if statement.Provision == "eligible" {
@@ -353,6 +372,9 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 			matchesCard := bank != "gdb" && credit.StatementSummaryMatchesCard(html, tail)
 			if bank == "citic" {
 				amounts, matchesCard = credit.ParseCITICStatementAmounts(html, tail)
+			}
+			if bank == "cmb" {
+				amounts, matchesCard = credit.ParseCMBStatementAmounts(html), false
 			}
 			if amounts.NewCharges != nil || amounts.AmountDue != nil {
 				item.Amounts = &amounts

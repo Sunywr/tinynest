@@ -68,7 +68,7 @@ func MatchBankStatementHeader(bank, from, subject, keyword string) bool {
 // in the bank's statement messages.
 func EverbrightCharsetReader(charset string, input io.Reader) (io.Reader, error) {
 	switch strings.ToLower(charset) {
-	case "", "utf-8", "us-ascii":
+	case "", "utf-8", "utf8", "us-ascii":
 		return input, nil
 	case "gb18030":
 		return simplifiedchinese.GB18030.NewDecoder().Reader(input), nil

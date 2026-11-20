@@ -2,6 +2,18 @@ package credit
 
 import "testing"
 
+func TestCMBStatementSummaryWithoutValidDetails(t *testing.T) {
+	body := `<table><tr><td>账单周期<br>Statement Cycle</td><td>2023/04/17－2023/05/16</td></tr></table>
+	<table><tr><td>本期应还金额<br>New Balance</td><td>上期账单金额</td><td>上期还款金额</td>
+	<td>本期账单金额<br>New Charges</td><td>本期调整金额</td><td>循环利息</td></tr>
+	<tr><td>¥ 161.75</td><td>¥ 22.02</td><td>¥ 22.02</td><td>¥ 160.70</td><td>¥ 0.00</td><td>¥ 1.05</td></tr></table>`
+	got := ParseCMBStatementAmounts(body)
+	if got.StatementDate != "2023-05-16" || got.NewCharges == nil || *got.NewCharges != 16070 ||
+		got.AmountDue == nil || *got.AmountDue != 16175 {
+		t.Fatalf("unexpected CMB summary: %+v", got)
+	}
+}
+
 func TestCITICStatementSummaryUsesMatchingRMBAccount(t *testing.T) {
 	body := `<tr><td>本期应还款总额</td><td></td><td>CNY 400.00</td></tr>
 	<tr><td>账单日</td><td>2026年11月07日</td></tr>

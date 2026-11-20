@@ -5,9 +5,21 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestLegacyCMBMultipartUTF8Alias(t *testing.T) {
+	header := mimeHeader{"Content-Type": {`multipart/mixed; boundary="legacy"`}}
+	body := "--legacy\r\nContent-Type: text/html; charset=utf8\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+		"<table><tr><td>=E8=B4=A6=E5=8D=95</td></tr></table>\r\n--legacy--\r\n"
+	got, err := everbrightMIMEHTML(header, strings.NewReader(body), 0)
+	if err != nil || !strings.Contains(got, "账单") {
+		t.Fatalf("legacy HTML body not decoded: %v", err)
+	}
+}
 
 func TestCITICSearchNarrowsLargeMailboxBeforeFetchingHeaders(t *testing.T) {
 	if got := bankStatementIMAPSearch("citic"); got != `UID SEARCH FROM "citic"` {

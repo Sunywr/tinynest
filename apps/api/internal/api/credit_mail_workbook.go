@@ -30,8 +30,8 @@ func (a *API) importCreditWorkbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bank := statementBank(issuer, name)
-	if bank != "spdb" && bank != "citic" {
-		writeErr(w, 400, "unsupported_bank", "请选择浦发或中信信用卡")
+	if bank != "spdb" && bank != "citic" && bank != "cmb" {
+		writeErr(w, 400, "unsupported_bank", "请选择浦发、中信或招商信用卡")
 		return
 	}
 	var in struct {
@@ -74,7 +74,7 @@ func (a *API) importCreditWorkbook(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, "preview_limit", "预览明细已达上限，请先处理并清空预览")
 			return
 		}
-		saved.Statements = append([]everbrightPreviewStatement{{ReceivedOn: latest, Transactions: rows}}, saved.Statements...)
+		saved.Statements = append([]everbrightPreviewStatement{{ReceivedOn: latest, Transactions: rows, Workbook: true}}, saved.Statements...)
 	}
 	if err := a.reviewEverbrightStatements(ctx, p.HouseholdID, card, saved.Statements); err != nil {
 		internalErr(w, err)
@@ -113,7 +113,7 @@ func parseCreditWorkbook(bank, tail string, data [][]string) ([]credit.Everbrigh
 		return nil, errors.New("单个账单文件最多支持 2000 行")
 	}
 	headers := []string{"交易日期", "记账日期", "交易摘要", "卡号末四位", "交易币种", "交易金额"}
-	if bank == "citic" {
+	if bank == "citic" || bank == "cmb" {
 		headers = []string{"交易日期", "入账日期", "交易描述", "卡末四位", "结算币种", "结算金额"}
 	}
 	var indexes []int
