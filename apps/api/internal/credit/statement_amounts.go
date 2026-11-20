@@ -64,7 +64,7 @@ func ParseStatementAmounts(body string) StatementAmounts {
 			continue
 		}
 		value, err := parseEverbrightAmount(strings.TrimPrefix(strings.TrimSpace(pair[2]), "人民币"))
-		if err != nil || value < 0 {
+		if err != nil || (key == "new" && value < 0) {
 			conflicting[key] = true
 			continue
 		}

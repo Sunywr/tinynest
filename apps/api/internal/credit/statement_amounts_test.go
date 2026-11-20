@@ -2,6 +2,14 @@ package credit
 
 import "testing"
 
+func TestStatementAmountsRecognizesCreditBalance(t *testing.T) {
+	got := ParseStatementAmounts("<table><tr><td>本期应还款总额：</td><td>￥-25.00</td></tr>" +
+		"<tr><td>到期还款日：您无需还款</td></tr></table>")
+	if got.AmountDue == nil || *got.AmountDue != -2500 || got.NewCharges != nil {
+		t.Fatalf("unexpected credit balance summary: %+v", got)
+	}
+}
+
 // The historical and current official SPDB mailboxes must both sync.
 func TestSPDBSummarySender(t *testing.T) {
 	for _, sender := range []string{"estmtservice@eb.spdbccc.com.cn", "estmtservice@eb.spdb.com.cn"} {
