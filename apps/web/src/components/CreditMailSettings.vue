@@ -26,7 +26,7 @@ type RowReview = { key: string; imported: boolean; suggested_category?: string; 
 type SavedPreview = { statements: StatementPreview[] | null; choices: Record<string, string>; synchronized_at: string }
 
 const props = defineProps<{ cards: Option[]; categories?: Option[]; syncOnly?: boolean }>()
-const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: [] }>()
+const emit = defineEmits<{ close: []; editTransaction: [id: string]; ledgerChanged: []; reportError: [message: string] }>()
 const inboxLabel = '收件箱'
 const fresh = () => ({ id: '', host: '', username: '', folder: inboxLabel, enabled: true, version: 0, tested_at: '', password: '' })
 const box = ref(fresh())
@@ -99,7 +99,10 @@ async function run(action: () => Promise<void>) {
   error.value = ''
   notice.value = ''
   try { await action() }
-  catch (err) { error.value = err instanceof Error ? err.message : '操作失败' }
+  catch (err) {
+    error.value = err instanceof Error ? err.message : '操作失败'
+    emit('reportError', error.value)
+  }
   finally { busy.value = false }
 }
 async function load() {
@@ -351,7 +354,7 @@ function saveBinding() {
       <h2>{{ syncOnly ? '同步账单' : '账单邮箱' }}</h2>
       <button type="button" class="ghost" @click="$emit('close')">返回列表</button>
     </div>
-    <p v-if="error" class="err" role="alert">{{ error }}</p>
+    <p v-if="error" class="err mail-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="subinfo" role="status">{{ notice }}</p>
     <button v-if="!loaded && !busy" type="button" class="ghost" @click="run(load)">重试</button>
     <p v-if="loaded && !keyReady" role="status">服务器尚未配置账单邮箱加密密钥。</p>
@@ -526,6 +529,7 @@ legend { font-weight: 700; padding: 0; }
 .workflow-section > fieldset { margin-bottom: 0; }
 .workflow-section .primary { width: auto; }
 .mail-history-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); font-size: .875rem; }
+.mail-error { border: 1px solid currentColor; border-inline-start-width: 4px; border-radius: 10px; padding: 10px 14px; font-weight: 700; overflow-wrap: anywhere; }
 form + form:not(.workflow-section) { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar button { max-width: 100%; overflow-wrap: anywhere; }
 .actions-bar .primary { width: auto; margin-top: 0; }

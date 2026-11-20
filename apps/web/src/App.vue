@@ -2028,10 +2028,10 @@ const metricCards = computed(() => {
           </div>
           <CreditMailSettings v-if="panel === 'creditMail' && canWrite"
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active')"
-            @close="closePanel()" />
+            @close="closePanel()" @report-error="toast" />
           <CreditMailSettings v-if="panel === 'creditMailSync' && canWrite" sync-only
             :cards="creditInstruments.filter(c => c.kind === 'credit_card' && c.status === 'active' && /光大|广发|交通|招商|中信|浦发|浦东发展/.test(c.issuer + ' ' + c.name))"
-            :categories="expenseCategories" @close="closePanel()"
+            :categories="expenseCategories" @close="closePanel()" @report-error="toast"
             @edit-transaction="id => { go('ledger'); void openTransactionDraft(id, true) }"
             @ledger-changed="loadAll()" />
           <section v-if="panel === 'creditMail' && !canWrite" class="panel formpanel">

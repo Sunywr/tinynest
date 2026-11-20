@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+func TestCITICSearchNarrowsLargeMailboxBeforeFetchingHeaders(t *testing.T) {
+	if got := bankStatementIMAPSearch("citic"); got != `UID SEARCH FROM "citic"` {
+		t.Fatalf("unexpected search command: %q", got)
+	}
+}
+
 func TestCreditIMAPIdentifiesClientBeforeExaminingFolder(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

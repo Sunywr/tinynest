@@ -144,6 +144,15 @@ func statementBank(issuer, name string) string {
 	return ""
 }
 
+func bankStatementIMAPSearch(bank string) string {
+	if bank == "citic" {
+		// All accepted CITIC sender domains contain this ASCII substring.
+		// Fetched headers still undergo exact domain and subject validation.
+		return `UID SEARCH FROM "citic"`
+	}
+	return "UID SEARCH ALL"
+}
+
 func readBankPreview(ctx context.Context, bank, host, username, password, folder, keyword, tail string) ([]everbrightPreviewStatement, error) {
 	user, err := quoteIMAPProbeValue(username)
 	if err != nil {
@@ -211,7 +220,7 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 		return errors.New("too many IMAP response lines")
 	}
 	var uids []string
-	if err := command("UID SEARCH ALL", func(line string, _ []byte) {
+	if err := command(bankStatementIMAPSearch(bank), func(line string, _ []byte) {
 		if strings.HasPrefix(strings.ToUpper(line), "* SEARCH ") {
 			uids = append(uids, strings.Fields(line)[2:]...)
 		}
