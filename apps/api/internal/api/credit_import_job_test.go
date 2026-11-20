@@ -31,7 +31,20 @@ func TestCreditWorkbookJobResultAvailableOnLaterRequest(t *testing.T) {
 			if statements, ok := c.mustOK("GET", path+"/preview", nil)["statements"].([]any); !ok || len(statements) != 1 {
 				t.Fatalf("missing workbook preview: %v", statements)
 			}
-			return
+			c.mustOK("POST", path+"/job", map[string]any{
+				"kind": "workbook", "workbook": map[string]any{"card_tail": "0123", "rows": [][]string{{"无效表头"}}},
+			})
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+				failed := c.mustOK("GET", path+"/job", nil)
+				if failed["status"] == "failed" {
+					if failed["error"] != "文件表头与所选银行账单不匹配" {
+						t.Fatalf("job dropped the workbook validation message: %v", failed)
+					}
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatal("invalid workbook job did not report failure")
 		case "failed":
 			t.Fatalf("workbook failed: %v", job)
 		}

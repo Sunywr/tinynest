@@ -21,6 +21,12 @@ func TestSPDBSearchNarrowsMailboxAcrossSenderDomainChange(t *testing.T) {
 	}
 }
 
+func TestCMBSearchNarrowsLargeMailbox(t *testing.T) {
+	if got := bankStatementIMAPSearch("cmb"); got != `UID SEARCH CHARSET UTF-8 SUBJECT "招商银行"` {
+		t.Fatalf("unexpected search command: %q", got)
+	}
+}
+
 func TestCreditIMAPIdentifiesClientBeforeExaminingFolder(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

@@ -44,7 +44,11 @@ func (a *API) previewEverbrightMail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p, _ := principal(r)
-	ctx, cancel := context.WithTimeout(r.Context(), 24*time.Second)
+	timeout := 24 * time.Second
+	if r.Context().Value(creditMailProgressKey{}) != nil {
+		timeout = 4 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	var host, user, folder, cipher, mailboxID, keyword, tail, name, issuer string
 	err := a.DB.QueryRowContext(ctx, `SELECT m.host,m.username,m.folder,m.password_cipher,m.id,b.subject_keyword,b.card_tail,i.name,COALESCE(i.issuer,'')
@@ -188,6 +192,10 @@ func bankStatementIMAPSearch(bank string) string {
 	case "spdb":
 		// The old and new statement addresses share this local part.
 		return `UID SEARCH FROM "estmtservice"`
+	case "cmb":
+		// QQ's sender index omits these messages. Its subject index finds
+		// candidates, and the exact sender and configured title are checked below.
+		return `UID SEARCH CHARSET UTF-8 SUBJECT "招商银行"`
 	default:
 		return "UID SEARCH ALL"
 	}
@@ -299,7 +307,7 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 			return nil, err
 		}
 	}
-	if len(matches) > 120 {
+	if len(matches) > 300 {
 		return nil, errors.New("too many matched statement messages")
 	}
 	progress, _ := ctx.Value(creditMailProgressKey{}).(func(int, int))

@@ -113,13 +113,15 @@ func (a *API) runCreditImportJob(r *http.Request, key [2]string, job creditImpor
 			return nil
 		}
 		var result struct {
-			Message string `json:"message"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		_ = json.Unmarshal(out.Body.Bytes(), &result)
-		if result.Message == "" {
-			result.Message = "账单操作失败"
+		if result.Error.Message == "" {
+			result.Error.Message = "账单操作失败"
 		}
-		return errors.New(result.Message)
+		return errors.New(result.Error.Message)
 	}
 	var err error
 	switch input.Kind {

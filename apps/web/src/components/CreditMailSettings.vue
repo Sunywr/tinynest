@@ -373,8 +373,11 @@ function saveBinding() {
     <p v-if="notice" class="mail-success" role="status">{{ notice }}</p>
     <div v-if="job?.status === 'running'" class="mail-job" role="status">
       <span>{{ job.kind === 'post' ? '正在记入流水' : job.kind === 'sync' ? '正在同步并解析邮件' : '正在导入账单明细' }}<template v-if="job.total"> · {{ job.done }} / {{ job.total }}</template></span>
-      <progress v-if="job.total" :value="job.done" :max="job.total" aria-label="账单任务进度"></progress>
-      <progress v-else aria-label="账单任务进行中"></progress>
+      <div class="mail-progress" role="progressbar" aria-label="账单任务进度"
+        :aria-valuenow="job.total ? job.done : undefined" :aria-valuemax="job.total || undefined">
+        <span v-if="job.total" class="mail-progress-fill" :style="{ transform: `scaleX(${job.done / job.total})` }"></span>
+        <span v-else class="mail-progress-pulse"></span>
+      </div>
     </div>
     <button v-if="!loaded && !busy" type="button" class="ghost" @click="run(load)">重试</button>
     <p v-if="loaded && !keyReady" role="status">服务器尚未配置账单邮箱加密密钥。</p>
@@ -541,7 +544,15 @@ legend { font-weight: 700; padding: 0; }
 .mail-history-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); font-size: .875rem; }
 .mail-success { color: #276341; background: #eff8ef; border: 1px solid currentColor; border-inline-start-width: 4px; border-radius: 10px; padding: 10px 14px; font-weight: 700; }
 .mail-job { display: grid; gap: 8px; margin-block: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
-.mail-job progress { width: 100%; accent-color: var(--primary); }
+.mail-progress { height: 8px; overflow: hidden; border-radius: 999px; background: var(--soft); }
+.mail-progress-fill, .mail-progress-pulse { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
+.mail-progress-fill { transform-origin: left center; transition: transform 560ms cubic-bezier(.2,.7,.25,1); }
+.mail-progress-pulse { width: 32%; animation: mail-progress-sweep 1.65s ease-in-out infinite; }
+@keyframes mail-progress-sweep { from { transform: translateX(-100%); } to { transform: translateX(315%); } }
+@media (prefers-reduced-motion: reduce) {
+  .mail-progress-fill { transition: none; }
+  .mail-progress-pulse { animation: none; }
+}
 .mail-error { border: 1px solid currentColor; border-inline-start-width: 4px; border-radius: 10px; padding: 10px 14px; font-weight: 700; overflow-wrap: anywhere; }
 form + form:not(.workflow-section) { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar button { max-width: 100%; overflow-wrap: anywhere; }
