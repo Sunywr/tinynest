@@ -15,6 +15,12 @@ func TestCITICSearchNarrowsLargeMailboxBeforeFetchingHeaders(t *testing.T) {
 	}
 }
 
+func TestSPDBSearchNarrowsMailboxAcrossSenderDomainChange(t *testing.T) {
+	if got := bankStatementIMAPSearch("spdb"); got != `UID SEARCH FROM "estmtservice"` {
+		t.Fatalf("unexpected search command: %q", got)
+	}
+}
+
 func TestCreditIMAPIdentifiesClientBeforeExaminingFolder(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

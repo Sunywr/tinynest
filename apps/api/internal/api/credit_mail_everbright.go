@@ -140,12 +140,17 @@ func statementBank(issuer, name string) string {
 }
 
 func bankStatementIMAPSearch(bank string) string {
-	if bank == "citic" {
+	switch bank {
+	case "citic":
 		// All accepted CITIC sender domains contain this ASCII substring.
 		// Fetched headers still undergo exact domain and subject validation.
 		return `UID SEARCH FROM "citic"`
+	case "spdb":
+		// The old and new statement addresses share this local part.
+		return `UID SEARCH FROM "estmtservice"`
+	default:
+		return "UID SEARCH ALL"
 	}
-	return "UID SEARCH ALL"
 }
 
 func readBankPreview(ctx context.Context, bank, host, username, password, folder, keyword, tail string) ([]everbrightPreviewStatement, error) {
@@ -215,12 +220,19 @@ func readBankPreview(ctx context.Context, bank, host, username, password, folder
 		return errors.New("too many IMAP response lines")
 	}
 	var uids []string
-	if err := command(bankStatementIMAPSearch(bank), func(line string, _ []byte) {
+	collectUIDs := func(line string, _ []byte) {
 		if strings.HasPrefix(strings.ToUpper(line), "* SEARCH ") {
 			uids = append(uids, strings.Fields(line)[2:]...)
 		}
-	}); err != nil {
+	}
+	if err := command(bankStatementIMAPSearch(bank), collectUIDs); err != nil {
 		return nil, err
+	}
+	// Some providers index sender searches differently from received headers.
+	if bank == "spdb" && len(uids) == 0 {
+		if err := command("UID SEARCH ALL", collectUIDs); err != nil {
+			return nil, err
+		}
 	}
 	if len(uids) > 10000 {
 		return nil, errors.New("mail folder exceeds preview limit")
