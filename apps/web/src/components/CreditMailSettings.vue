@@ -341,7 +341,7 @@ function saveBinding() {
             <h3>{{ workbookBank }}账单导入</h3>
             <div class="formgrid">
               <label>卡尾号<input v-model.trim="workbookTail" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4" :readonly="!!binding.card_tail"></label>
-              <label>银行下载的账单<input :key="binding.instrument_id" type="file" accept=".xls,application/vnd.ms-excel" required
+              <label>银行下载的账单<input :key="binding.instrument_id" class="workbook-file" type="file" accept=".xls,application/vnd.ms-excel" required
                 @change="workbook = ($event.target as HTMLInputElement).files?.[0] ?? null"></label>
             </div>
             <button type="submit" class="ghost" :disabled="!workbook || busy">导入并预览</button>
@@ -430,6 +430,26 @@ form + form { padding-top: 18px; border-top: 1px solid var(--border); }
 .actions-bar button { max-width: 100%; overflow-wrap: anywhere; }
 .actions-bar .primary { width: auto; margin-top: 0; }
 .preview-action { margin-top: 10px; }
+.credit-mail-settings .workbook-file {
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px;
+  font-size: 14px;
+  text-overflow: ellipsis;
+}
+.workbook-file::file-selector-button {
+  margin-inline-end: 10px;
+  padding: 6px 12px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--primary-deep);
+  font: inherit;
+  cursor: pointer;
+}
+.workbook-file:enabled::file-selector-button:hover { border-color: var(--primary); }
+.workbook-file:disabled::file-selector-button { cursor: default; }
 .preview-statements details { padding: 10px 0; border-top: 1px solid var(--border); }
 .preview-statements summary { cursor: pointer; font-weight: 700; }
 .statement-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
