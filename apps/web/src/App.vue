@@ -1246,6 +1246,37 @@ async function selectInstallment(id: string) {
 // Row actions jump straight into the matching form panel, prefilled.
 function openDebtPanel(id: string) { void selectDebt(id); openPanel('debtPay') }
 function openInstPanel(id: string) { void selectInstallment(id); openPanel('instPay') }
+const batch = reactive({ from: '', to: '', paidOn: '', account: '' })
+const batchItems = ref<{ id: string; instrument_name: string; due_on: string; remaining_minor: number }[] | null>(null)
+const batchBusy = ref(false)
+let batchVersion = 0
+let batchKey = ''
+watch(batch, () => { batchVersion++; batchItems.value = null; batchBusy.value = false }, { flush: 'sync' })
+function openBatchPayment() {
+  Object.assign(batch, { from: '', to: '', paidOn: today(), account: '' })
+  batchItems.value = null
+  openPanel('batchPay')
+}
+async function previewBatch() {
+  if (!batch.from || !batch.to || batch.from > batch.to || !batch.account || !batch.paidOn) return toast('请填写有效的日期范围、付款账户和还款日期')
+  const version = ++batchVersion
+  const navigation = ledgerNavigation
+  batchBusy.value = true
+  try {
+    const params = new URLSearchParams({ from: batch.from, to: batch.to, unpaid: 'true' })
+    const result = await api.statements('?' + params)
+    if (version !== batchVersion || navigation !== ledgerNavigation) return
+    batchKey = crypto.randomUUID()
+    batchItems.value = result.items
+  } catch (error) { if (version === batchVersion && navigation === ledgerNavigation) fail(error) }
+  finally { if (version === batchVersion) batchBusy.value = false }
+}
+function submitBatchPayment() {
+  if (loading.value || !batchItems.value?.length) return
+  const items = batchItems.value.map(s => ({ id: s.id, amount_minor: s.remaining_minor }))
+  const body = { from: batch.from, to: batch.to, paid_on: batch.paidOn, from_account_id: batch.account, items }
+  return run(() => api.batchStatementPayment(body, batchKey), '批量还款已入账')
+}
 function openStatementPay(s: { id: string; remaining_minor: number }) {
   f.payment.statement_id = s.id
   f.payment.amount = (s.remaining_minor / 100).toFixed(2)
@@ -2158,6 +2189,27 @@ const metricCards = computed(() => {
               <label>备注<input v-model.trim="f.credit.note" /></label>
             </div><button class="primary" type="submit" :disabled="loading">{{ creditEditID ? '保存修改' : '创建' }}</button>
           </form>
+          <section v-if="panel === 'batchPay'" class="panel formpanel">
+            <div class="paneltitle"><h2>批量还款</h2><button class="ghost" @click="closePanel()">返回列表</button></div>
+            <form @submit.prevent="previewBatch">
+              <fieldset class="formgrid" :disabled="loading">
+                <label>还款日起<DatePicker v-model="batch.from" required /></label>
+                <label>还款日止<DatePicker v-model="batch.to" required /></label>
+                <label>付款账户<SearchableSelect><select v-model="batch.account" required><option value="">请选择</option>
+                  <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option>
+                </select></SearchableSelect></label>
+                <label>实际还款日期<DatePicker v-model="batch.paidOn" required /></label>
+              </fieldset>
+              <button class="ghost" :disabled="batchBusy || loading">预览待还账单</button>
+            </form>
+            <div v-if="batchItems" aria-live="polite">
+              <p v-if="!batchItems.length">所选范围内没有待还账单</p>
+              <template v-else>
+                <div v-for="s in batchItems" :key="s.id" class="rankrow"><span>{{ s.instrument_name }} · {{ s.due_on }}</span><b>{{ formatMinor(s.remaining_minor) }}</b></div>
+                <button class="primary" :disabled="loading || batchBusy" @click="submitBatchPayment">确认还款 {{ batchItems.length }} 笔 · {{ formatMinor(batchItems.reduce((sum, s) => sum + s.remaining_minor, 0)) }}</button>
+              </template>
+            </div>
+          </section>
           <form v-if="panel === 'pay'" class="panel formpanel" @submit.prevent="payStatement">
             <div class="paneltitle"><div><h2>账单还款</h2></div>
               <button type="button" class="ghost" @click="closePanel()">返回列表</button></div>
@@ -2185,7 +2237,7 @@ const metricCards = computed(() => {
             </div>
               <p v-if="!creditInstruments.length" class="empty">还没有信用工具，点上方「新增信用工具」开始吧</p></div>
           </section>
-          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo"><label><input v-model="unpaidOnly" type="checkbox" @change="loadBills(1)"> 仅看未还清</label></span></div></div>
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账单列表</h2><label class="bill-filter"><input v-model="unpaidOnly" type="checkbox" @change="loadBills(1)"> 仅看未还清</label></div><button v-if="canWrite" class="ghost" @click="openBatchPayment">批量还款</button></div>
             <p v-if="billState === 'loading'">加载中…</p><button v-else-if="billState" @click="loadBills()">加载失败，重试</button><div v-else><div v-for="s in bills" :key="s.id" class="rankrow bill-row"><div class="bill-info">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ recordLabel(s.status) }}</span>
               <strong>待还 {{ formatMinor(s.remaining_minor) }}</strong><b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}<span v-if="s.provision_minor > 0" class="subinfo"> · 含暂记 {{ formatMinor(s.provision_minor) }}</span></b>
@@ -2692,6 +2744,8 @@ const metricCards = computed(() => {
 
 <style scoped>
 .bill-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 0; border-bottom:1px solid #eadfd3 }
+.bill-filter { display:inline-flex; align-items:center; gap:8px; min-height:44px; color:var(--text); cursor:pointer }
+.bill-filter input[type=checkbox] { width:18px; height:18px; min-height:18px; padding:0; margin:0; flex:none; accent-color:var(--primary-deep); cursor:pointer }
 .bill-info { display:grid; gap:.25rem }
 @media(max-width:680px) { .bill-row { flex-direction:column; align-items:stretch } }
 

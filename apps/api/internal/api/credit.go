@@ -22,6 +22,7 @@ func (a *API) registerCredit(mux *http.ServeMux) {
 	a.route(mux, "DELETE /api/v1/credit-instruments/{id}", a.handleDeleteInstrument)
 	a.route(mux, "GET /api/v1/credit-statements", a.handleListStatements)
 	a.route(mux, "PATCH /api/v1/credit-statements/{id}/archive", a.handleArchiveStatement)
+	a.route(mux, "POST /api/v1/credit-statement-batch-payments", a.handleBatchStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/payments", a.handleStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/payments/{paymentId}/reverse", a.handleReverseStatementPayment)
 	a.route(mux, "POST /api/v1/credit-statements/{id}/reconcile", a.handleReconcile)
@@ -382,57 +383,64 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	payID, entryID := newID("cpay"), newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var instrID, cycleEnd, dueOn string
-		var sysDue, paid int64
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT instrument_id,cycle_end_on,due_on,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
-			stmtID, p.HouseholdID).Scan(&instrID, &cycleEnd, &dueOn, &sysDue, &paid); err != nil {
-			return errors.New("账单不存在")
-		}
-		if int64(amount) > sysDue-paid {
-			return errors.New("还款金额超过剩余应还")
-		}
-		if _, err := a.validateAccount(tx, r, p.HouseholdID, in.FromAccountID); err != nil {
-			return errors.New("付款账户不存在")
-		}
-		e, err := ledger.RepayCredit(ledger.Context{EntryID: entryID, BizID: payID, OccurredOn: in.PaidOn},
-			in.FromAccountID, instrID, amount)
-		if err != nil {
-			return err
-		}
-		if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, replayKey, p.Username); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO credit_payments(id,household_id,statement_id,amount_minor,paid_on,from_account_id,entry_id,idempotency_key)
-			VALUES(?,?,?,?,?,?,?,?)`,
-			payID, p.HouseholdID, stmtID, int64(amount), in.PaidOn, in.FromAccountID, entryID,
-			nullableKey(replayKey)); err != nil {
-			return err
-		}
-		// Status is derived from facts + business date, not a mutable running flag.
-		newPaid := paid + int64(amount)
-		newStatus := deriveStatementStatus(cycleEnd, dueOn, a.businessDate(), sysDue, newPaid)
-		result, err := tx.ExecContext(r.Context(), `
-			UPDATE credit_statements SET paid_minor=?, status=?
-			WHERE id=? AND household_id=? AND system_due_minor=? AND paid_minor=?`,
-			newPaid, newStatus, stmtID, p.HouseholdID, sysDue, paid)
-		if err != nil {
-			return err
-		}
-		if n, err := result.RowsAffected(); err != nil || n != 1 {
-			return errors.New("账单金额已变化，请刷新后重试")
-		}
-		if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "credit_statement", stmtID); err != nil {
-			return err
-		}
-		return nil
+		return a.postStatementPayment(tx, r, p, stmtID, in.FromAccountID, in.PaidOn, amount, payID, entryID, replayKey, "", "")
 	})
 	if err != nil {
 		writeErr(w, 400, "invalid_request", err.Error())
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": payID, "entry_id": entryID, "statement_id": stmtID})
+}
+
+func (a *API) postStatementPayment(tx *sql.Tx, r *http.Request, p Principal, stmtID, account, paidOn string, amount money.Minor, payID, entryID, replayKey, from, to string) error {
+	var instrID, cycleEnd, dueOn string
+	var sysDue, paid int64
+	if err := tx.QueryRowContext(r.Context(),
+		`SELECT instrument_id,cycle_end_on,due_on,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
+		stmtID, p.HouseholdID).Scan(&instrID, &cycleEnd, &dueOn, &sysDue, &paid); err != nil {
+		return errors.New("账单不存在")
+	}
+	if from != "" && (dueOn < from || dueOn > to || int64(amount) != sysDue-paid) {
+		return errors.New("账单已变化，请重新预览")
+	}
+	if int64(amount) > sysDue-paid {
+		return errors.New("还款金额超过剩余应还")
+	}
+	if _, err := a.validateAccount(tx, r, p.HouseholdID, account); err != nil {
+		return errors.New("付款账户不存在")
+	}
+	e, err := ledger.RepayCredit(ledger.Context{EntryID: entryID, BizID: payID, OccurredOn: paidOn},
+		account, instrID, amount)
+	if err != nil {
+		return err
+	}
+	if err := db.SaveEntry(r.Context(), tx, e, p.HouseholdID, replayKey, p.Username); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO credit_payments(id,household_id,statement_id,amount_minor,paid_on,from_account_id,entry_id,idempotency_key)
+			VALUES(?,?,?,?,?,?,?,?)`,
+		payID, p.HouseholdID, stmtID, int64(amount), paidOn, account, entryID,
+		nullableKey(replayKey)); err != nil {
+		return err
+	}
+	// Status is derived from facts + business date, not a mutable running flag.
+	newPaid := paid + int64(amount)
+	newStatus := deriveStatementStatus(cycleEnd, dueOn, a.businessDate(), sysDue, newPaid)
+	result, err := tx.ExecContext(r.Context(), `
+			UPDATE credit_statements SET paid_minor=?, status=?
+			WHERE id=? AND household_id=? AND system_due_minor=? AND paid_minor=?`,
+		newPaid, newStatus, stmtID, p.HouseholdID, sysDue, paid)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		return errors.New("账单金额已变化，请刷新后重试")
+	}
+	if err := confirmDueItem(r.Context(), tx, p.HouseholdID, "credit_statement", stmtID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *API) handleReconcile(w http.ResponseWriter, r *http.Request) {

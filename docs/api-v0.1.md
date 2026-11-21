@@ -120,6 +120,7 @@
 | 方法 | 路径 | 状态 | 说明 |
 |---|---|---|---|
 | GET/POST | `/credit-instruments` | IMPLEMENTED | 信用卡、花呗、美团、抖音及自定义工具。列表返回 `issuer` |
+| POST | `/credit-statement-batch-payments` | IMPLEMENTED | 提交预览中的 `items[{id,amount_minor}]`、还款日范围 `from/to`、实际还款日 `paid_on`、付款账户 `from_account_id` 和 `Idempotency-Key`。逐笔结清剩余金额，任一账单校验失败则整批回滚。 |
 | GET | `/credit-statements` | IMPLEMENTED | 账单列表。可传 `unpaid=true` 筛选仍有待还金额的账单。传 `page=1` 起按每页 10 条返回 `items`、`has_more`，分页暂不支持同时传 `status`。省略页码保留完整列表格式。 |
 | POST | `/credit-statements/{id}/payments` | IMPLEMENTED | 部分/全额还款 |
 | POST | `/credit-statements/{id}/payments/{paymentId}/reverse` | IMPLEMENTED | 填写原因，按原还款日冲正误录还款，恢复付款账户余额、信用负债与账单待付提醒。重复提交返回同一冲正分录；账单详情保留原还款记录及状态 |

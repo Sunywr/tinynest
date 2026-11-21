@@ -128,6 +128,7 @@ export const api = {
     id: string; paid_on: string; amount_minor: number; account_name: string | null; status: string
   }[] }>(`/credit-statements/${encodeURIComponent(id)}`),
   adjustStatementCycle: (id: string, body: any) => request(`/credit-statements/${id}/cycle`, { method: 'PATCH', body: JSON.stringify(body) }),
+  batchStatementPayment: (body: unknown, key: string) => post('/credit-statement-batch-payments', body, { 'Idempotency-Key': key }),
   payStatement: (id: string, body: any) => post(`/credit-statements/${id}/payments`, body),
   reverseStatementPayment: (statementId: string, paymentId: string, reason: string) =>
     post(`/credit-statements/${encodeURIComponent(statementId)}/payments/${encodeURIComponent(paymentId)}/reverse`, { reason }),
