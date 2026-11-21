@@ -1847,7 +1847,7 @@ const metricCards = computed(() => {
               <div class="txicon"><component :is="t.type === 'income' ? ArrowDownLeft : t.type === 'transfer' ? ArrowLeftRight : Coffee" :size="19" aria-hidden="true" /></div>
               <div class="txbody"><div class="txname">{{ t.category_names || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出') }}</div>
                 <div v-if="t.merchant || t.note" class="txnote">{{ [t.merchant, t.note].filter(Boolean).join(' · ') }}</div>
-                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已更正' : '已入账' }} <span v-if="t.type === 'expense' && t.status === 'posted'" class="refund-badge">{{ t.refunded_minor >= t.amount_minor ? '已全额退款' : t.refunded_minor > 0 ? '部分退款 ' + formatMinor(t.refunded_minor) : '未退款' }}</span></div></div>
+                <div class="txcat">{{ t.occurred_on }} · {{ t.status === 'reversed' ? '已更正' : '已入账' }} <span v-if="t.type === 'expense' && t.status === 'posted' && t.refunded_minor > 0" class="refund-badge">{{ t.refunded_minor >= t.amount_minor ? '已全额退款' : '部分退款 ' + formatMinor(t.refunded_minor) }}</span></div></div>
               <div class="txamount" :class="{ in: t.type === 'income' }">{{ formatMinor(t.amount_minor) }}</div>
               <div class="rowacts" v-if="canWrite">
                 <button v-if="canCopyTransaction(t)" type="button" class="ghost" :disabled="loading" @click="openTransactionDraft(t.id, false)">复制</button>

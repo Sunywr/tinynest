@@ -328,6 +328,9 @@ test('08 账单部分还款 600', async ({ page }) => {
 test('09 原消费退款 300 回信用工具', async ({ page }) => {
   await ensureLogin(page)
   await page.getByRole('button', { name: '记账流水' }).click()
+  const expense = page.locator('.ledger-transaction').filter({ hasText: '¥1,000.00' })
+  await expect(expense).toBeVisible()
+  await expect(expense.locator('.refund-badge')).toHaveCount(0)
   await page.locator('.actions-bar').getByRole('button', { name: '退款' }).click()
   await page.getByLabel('原交易').selectOption({ index: 1 })
   await page.getByLabel('退款金额').fill('300')
