@@ -93,3 +93,13 @@ func TestCMBLegacyDueSummary(t *testing.T) {
 		t.Fatalf("unexpected legacy summary: %+v", got)
 	}
 }
+
+func TestCMBImageLabelDueSummary(t *testing.T) {
+	const body = `<table><tr><td><img src="https://pbdw.ebank.cmbchina.com/cbmresource/mailpicture/dygbcs0215/bqyh.jpg"></td></tr>
+	<tr><td><font>￥952.72</font></td></tr><tr><td>＄0.00</td></tr></table>
+	<img src="https://pbdw.ebank.cmbchina.com/cbmresource/mailpicture/dygbcs0215/zdhk.jpg"><div>￥418.49</div>`
+	got := ParseCMBStatementAmounts(body)
+	if got.AmountDue == nil || *got.AmountDue != 95272 || got.NewCharges != nil {
+		t.Fatalf("unexpected image-labeled summary: %+v", got)
+	}
+}
