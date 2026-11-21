@@ -106,118 +106,7 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		if in.MemberID != nil {
-			status, err := a.lockMember(r, tx, p.HouseholdID, *in.MemberID)
-			if err != nil || status != "active" {
-				return errors.New("家庭成员不存在或已停用")
-			}
-		}
-		if replaceID != "" {
-			if err := a.reverseTransaction(tx, r, p, replaceID, newID("je"), false); err != nil {
-				return err
-			}
-		}
-		var entry *ledger.Entry
-		var err error
-		var splits []splitInput
-
-		switch in.Type {
-		case "transfer":
-			if in.AccountID == nil || in.ToAccountID == nil {
-				return errors.New("转账需要 account_id 与 to_account_id")
-			}
-			if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
-				return errors.New("转出账户不存在")
-			}
-			if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.ToAccountID); err != nil {
-				return errors.New("转入账户不存在")
-			}
-			entry, err = ledger.Transfer(c, *in.AccountID, *in.ToAccountID, total)
-			if err != nil {
-				return err
-			}
-
-		case "expense", "income":
-			if len(in.Splits) == 0 {
-				return errors.New("至少需要一条分类拆分行")
-			}
-			ls := make([]ledger.Split, 0, len(in.Splits))
-			kind := "expense"
-			if in.Type == "income" {
-				kind = "income"
-			}
-			for _, s := range in.Splits {
-				if err := a.validateCategory(tx, r, p.HouseholdID, s.CategoryID, kind); err != nil {
-					return err
-				}
-				if s.ProjectID != nil {
-					var n int
-					if err := tx.QueryRowContext(r.Context(),
-						`SELECT COUNT(*) FROM projects WHERE id=? AND household_id=? AND status='active'`, *s.ProjectID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-						return errors.New("项目不存在")
-					}
-				}
-				ls = append(ls, ledger.Split{CategoryID: s.CategoryID, Amount: money.Minor(s.AmountMinor)})
-			}
-			splits = in.Splits
-
-			if in.Type == "expense" && in.PaymentKind == "credit" {
-				if in.CreditInstrumentID == nil {
-					return errors.New("信用消费需要 credit_instrument_id")
-				}
-				var n int
-				if err := tx.QueryRowContext(r.Context(),
-					`SELECT COUNT(*) FROM credit_instruments WHERE id=? AND household_id=? AND status='active'`,
-					*in.CreditInstrumentID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-					return errors.New("信用工具不存在")
-				}
-				entry, err = ledger.CreditExpense(c, *in.CreditInstrumentID, ls, total)
-			} else if in.Type == "expense" {
-				if in.AccountID == nil {
-					return errors.New("现金支出需要 account_id")
-				}
-				if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
-					return errors.New("付款账户不存在")
-				}
-				entry, err = ledger.CashExpense(c, *in.AccountID, ls, total)
-			} else {
-				if in.AccountID == nil {
-					return errors.New("收入需要 account_id")
-				}
-				if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
-					return errors.New("收款账户不存在")
-				}
-				entry, err = ledger.Income(c, *in.AccountID, ls, total)
-			}
-		}
-		if err != nil {
-			return err
-		}
-		if err := db.SaveEntry(r.Context(), tx, entry, p.HouseholdID, key, p.Username); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO transactions(id,household_id,type,amount_minor,currency,occurred_on,
-			  account_id,to_account_id,credit_instrument_id,member_id,merchant,note,status,entry_id,idempotency_key,created_by)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'posted',?,?,?)`,
-			txID, p.HouseholdID, in.Type, int64(total), in.Currency, in.OccurredOn,
-			in.AccountID, in.ToAccountID, in.CreditInstrumentID, in.MemberID, in.Merchant, in.Note,
-			entryID, nullableKey(key), p.Username); err != nil {
-			return err
-		}
-		for i, s := range splits {
-			if _, err := tx.ExecContext(r.Context(), `
-				INSERT INTO transaction_splits(transaction_id,line_no,category_id,project_id,amount_minor,note)
-				VALUES(?,?,?,?,?,?)`, txID, i+1, s.CategoryID, s.ProjectID, s.AmountMinor, s.Note); err != nil {
-				return err
-			}
-		}
-		if in.Type == "expense" && in.PaymentKind == "credit" {
-			if err := a.assignStatement(r, tx, p, *in.CreditInstrumentID, "transaction", txID, int64(total), in.OccurredOn); err != nil {
-				return err
-			}
-		}
-		return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, replaceID)
+		return a.saveTransaction(tx, r, p, in, key, replaceID, c)
 	})
 	if err != nil && key != "" && existing == "" {
 		// Another database client may commit the same key after our lookup.
@@ -236,6 +125,123 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": txID, "entry_id": entryID, "status": "posted"})
+}
+
+func (a *API) saveTransaction(tx *sql.Tx, r *http.Request, p Principal, in txInput, key, replaceID string, c ledger.Context) error {
+	total := money.Minor(in.AmountMinor)
+	txID, entryID := c.BizID, c.EntryID
+	if in.MemberID != nil {
+		status, err := a.lockMember(r, tx, p.HouseholdID, *in.MemberID)
+		if err != nil || status != "active" {
+			return errors.New("家庭成员不存在或已停用")
+		}
+	}
+	if replaceID != "" {
+		if err := a.reverseTransaction(tx, r, p, replaceID, newID("je"), false); err != nil {
+			return err
+		}
+	}
+	var entry *ledger.Entry
+	var err error
+	var splits []splitInput
+
+	switch in.Type {
+	case "transfer":
+		if in.AccountID == nil || in.ToAccountID == nil {
+			return errors.New("转账需要 account_id 与 to_account_id")
+		}
+		if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
+			return errors.New("转出账户不存在")
+		}
+		if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.ToAccountID); err != nil {
+			return errors.New("转入账户不存在")
+		}
+		entry, err = ledger.Transfer(c, *in.AccountID, *in.ToAccountID, total)
+		if err != nil {
+			return err
+		}
+
+	case "expense", "income":
+		if len(in.Splits) == 0 {
+			return errors.New("至少需要一条分类拆分行")
+		}
+		ls := make([]ledger.Split, 0, len(in.Splits))
+		kind := "expense"
+		if in.Type == "income" {
+			kind = "income"
+		}
+		for _, s := range in.Splits {
+			if err := a.validateCategory(tx, r, p.HouseholdID, s.CategoryID, kind); err != nil {
+				return err
+			}
+			if s.ProjectID != nil {
+				var n int
+				if err := tx.QueryRowContext(r.Context(),
+					`SELECT COUNT(*) FROM projects WHERE id=? AND household_id=? AND status='active'`, *s.ProjectID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
+					return errors.New("项目不存在")
+				}
+			}
+			ls = append(ls, ledger.Split{CategoryID: s.CategoryID, Amount: money.Minor(s.AmountMinor)})
+		}
+		splits = in.Splits
+
+		if in.Type == "expense" && in.PaymentKind == "credit" {
+			if in.CreditInstrumentID == nil {
+				return errors.New("信用消费需要 credit_instrument_id")
+			}
+			var n int
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT COUNT(*) FROM credit_instruments WHERE id=? AND household_id=? AND status='active'`,
+				*in.CreditInstrumentID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
+				return errors.New("信用工具不存在")
+			}
+			entry, err = ledger.CreditExpense(c, *in.CreditInstrumentID, ls, total)
+		} else if in.Type == "expense" {
+			if in.AccountID == nil {
+				return errors.New("现金支出需要 account_id")
+			}
+			if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
+				return errors.New("付款账户不存在")
+			}
+			entry, err = ledger.CashExpense(c, *in.AccountID, ls, total)
+		} else {
+			if in.AccountID == nil {
+				return errors.New("收入需要 account_id")
+			}
+			if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
+				return errors.New("收款账户不存在")
+			}
+			entry, err = ledger.Income(c, *in.AccountID, ls, total)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if err := db.SaveEntry(r.Context(), tx, entry, p.HouseholdID, key, p.Username); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(r.Context(), `
+		INSERT INTO transactions(id,household_id,type,amount_minor,currency,occurred_on,
+		  account_id,to_account_id,credit_instrument_id,member_id,merchant,note,status,entry_id,idempotency_key,created_by)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'posted',?,?,?)`,
+		txID, p.HouseholdID, in.Type, int64(total), in.Currency, in.OccurredOn,
+		in.AccountID, in.ToAccountID, in.CreditInstrumentID, in.MemberID, in.Merchant, in.Note,
+		entryID, nullableKey(key), p.Username); err != nil {
+		return err
+	}
+	for i, s := range splits {
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO transaction_splits(transaction_id,line_no,category_id,project_id,amount_minor,note)
+			VALUES(?,?,?,?,?,?)`, txID, i+1, s.CategoryID, s.ProjectID, s.AmountMinor, s.Note); err != nil {
+			return err
+		}
+	}
+	if in.Type == "expense" && in.PaymentKind == "credit" {
+		if err := a.assignStatement(r, tx, p, *in.CreditInstrumentID, "transaction", txID, int64(total), in.OccurredOn); err != nil {
+			return err
+		}
+	}
+	return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, replaceID)
 }
 
 func nullableKey(k string) any {

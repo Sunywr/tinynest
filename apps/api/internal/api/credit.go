@@ -273,7 +273,10 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,s.instrument_id,i.name,s.cycle_start_on,s.cycle_end_on,s.due_on,
-		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status,COALESCE(p.provision_minor,0)
+		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status,COALESCE(p.provision_minor,0),
+		       p.statement_id IS NOT NULL AND p.provision_minor>0 AND p.target_minor=s.platform_amount_minor
+		         AND EXISTS (SELECT 1 FROM audit_logs l WHERE l.household_id=s.household_id
+		           AND l.entity='credit_statement' AND l.entity_id=s.id AND l.action='auto_statement_provision')
 		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id AND i.household_id=s.household_id
 		LEFT JOIN credit_statement_provisions p ON p.statement_id=s.id AND p.household_id=s.household_id
 		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)`+filter+`
@@ -288,7 +291,8 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 		var id, instrID, name, start, end, due, stored string
 		var sysDue, paid, provision int64
 		var platform *int64
-		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &stored, &provision); err != nil {
+		var reviewProvision sql.NullBool
+		if err := rows.Scan(&id, &instrID, &name, &start, &end, &due, &sysDue, &paid, &platform, &stored, &provision, &reviewProvision); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -304,6 +308,7 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			"archived":              stored == "archived" && sysDue == paid,
 			"platform_amount_minor": platform,
 			"provision_minor":       provision,
+			"review_provision":      reviewProvision.Bool,
 		}
 		if platform != nil {
 			m["reconcile_diff_minor"] = sysDue - *platform

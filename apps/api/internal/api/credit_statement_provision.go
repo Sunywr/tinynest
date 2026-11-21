@@ -17,9 +17,6 @@ func mailSummaryTarget(item everbrightPreviewStatement) *money.Minor {
 	if item.Amounts == nil {
 		return nil
 	}
-	if item.UseAmountDue {
-		return item.Amounts.AmountDue
-	}
 	return item.Amounts.NewCharges
 }
 
@@ -83,7 +80,15 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 	// A conflicting message for the same period requires review.
 	seen := make(map[string]int64)
 	conflict := make(map[string]bool)
+	bankDue := make(map[string]int64)
 	for _, item := range statements {
+		if item.Amounts != nil && item.Amounts.AmountDue != nil {
+			day, amount := item.Amounts.StatementDate, int64(*item.Amounts.AmountDue)
+			if prior, exists := bankDue[day]; exists && prior != amount {
+				conflict[day] = true
+			}
+			bankDue[day] = amount
+		}
 		target := mailSummaryTarget(item)
 		if target == nil {
 			continue
@@ -107,8 +112,12 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 			continue
 		}
 		item.Provision = "review"
-		if requested == nil || *requested < 0 || amounts.StatementDate == "" ||
+		if amounts == nil || amounts.StatementDate == "" ||
 			amounts.StatementDate > a.businessDate() || conflict[amounts.StatementDate] {
+			continue
+		}
+		if requested == nil && (!item.UseAmountDue || amounts.AmountDue == nil || *amounts.AmountDue < 0) ||
+			requested != nil && *requested < 0 {
 			continue
 		}
 		id, err := a.ensureStatement(r, tx, p, card, amounts.StatementDate, true)
@@ -117,6 +126,26 @@ func (a *API) applyMailProvisions(tx *sql.Tx, r *http.Request, p Principal, card
 		}
 		if err != nil {
 			return err
+		}
+		if requested == nil {
+			var existing sql.NullInt64
+			if err := tx.QueryRowContext(ctx, `SELECT platform_amount_minor FROM credit_statements
+				WHERE id=? AND household_id=?`, id, p.HouseholdID).Scan(&existing); err != nil {
+				return err
+			}
+			if existing.Valid && existing.Int64 != int64(*amounts.AmountDue) {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE credit_statements
+				SET platform_amount_minor=COALESCE(platform_amount_minor,?) WHERE id=? AND household_id=?`,
+				*amounts.AmountDue, id, p.HouseholdID); err != nil {
+				return err
+			}
+			item.Provision = "bank_recorded"
+			if err := audit(ctx, tx, p, "record_statement_bank_amount", "credit_statement", id, "{}"); err != nil {
+				return err
+			}
+			continue
 		}
 		query := `SELECT target_minor FROM credit_statement_provisions WHERE statement_id=? AND household_id=?`
 		if a.DB.IsMySQL() {

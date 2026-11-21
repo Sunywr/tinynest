@@ -16,7 +16,7 @@ type Binding = {
 type StatementPreview = {
   received_on: string; error?: string
   amounts?: { new_charges_minor?: number; amount_due_minor?: number; statement_date?: string }
-  provision?: 'eligible' | 'review' | 'recorded'
+  provision?: 'eligible' | 'review' | 'recorded' | 'bank_recorded'
   use_amount_due?: boolean
   transactions: StatementRow[] | null
   review?: RowReview[]
@@ -235,6 +235,7 @@ async function followJob(initial: ImportJob) {
     await new Promise(resolve => setTimeout(resolve, 800))
     if (disposed || path !== jobPath()) return
     current = await request<ImportJob>(path)
+    if (current.id !== initial.id) throw new Error('原任务状态已变更，请刷新预览后核对')
   }
   if (disposed || path !== jobPath()) return
   if (!current.id) throw new Error('任务状态已失效，请刷新预览后重试')
@@ -468,12 +469,12 @@ function saveBinding() {
         <p v-else-if="!visiblePreview.length">该日期范围内暂无账单。</p>
         <p v-else>显示 {{ visiblePreview.length }} 期账单。</p>
         <div v-if="syncOnly && needsSPDBWorkbook" class="mail-history-note">
-          <p>符合条件的浦发应还总额可先记为汇总。之后导入 XLS 并确认明细入账，系统会抵减同一期的汇总金额。</p>
+          <p>浦发应还总额用于核对账单。导入 XLS 并确认明细后，消费才计入支出。</p>
           <button type="button" class="ghost" :disabled="busy" @click="workbookInput?.focus()">前往明细补录</button>
         </div>
         <div v-if="syncOnly && visiblePreview.length" class="review-actions">
           <button type="button" class="primary" :disabled="busy || (!batchRows.length && !hasPostableSummary)" @click="createBatch">
-            一键记入流水
+            确认流水与账单金额
           </button>
           <span v-if="!batchRows.length && !hasPostableSummary" class="subinfo">当前没有可入账项目。</span>
         </div>
@@ -486,7 +487,9 @@ function saveBinding() {
             <template v-if="statement.amounts.amount_due_minor !== undefined"> · 本期应还总额 {{ amountFormat.format(statement.amounts.amount_due_minor / 100) }}</template>
             <template v-if="statement.use_amount_due"> · 按应还总额入账</template>
             <template v-if="statement.provision === 'recorded'"> · 已记入汇总流水</template>
-            <template v-else-if="statement.provision === 'eligible' && statement.error"> · 可先记汇总，明细可稍后补录</template>
+            <template v-else-if="statement.provision === 'bank_recorded'"> · 已记录银行应还，待补明细</template>
+            <template v-else-if="statement.provision === 'eligible' && statement.use_amount_due"> · 可先记录银行应还</template>
+            <template v-else-if="statement.provision === 'eligible' && statement.error"> · 可先暂记本期新增消费</template>
             <template v-else-if="statement.provision === 'review'"> · 待核对</template>
           </p>
           <table v-if="statement.transactions" class="statement-table" role="table" aria-label="账单交易明细">

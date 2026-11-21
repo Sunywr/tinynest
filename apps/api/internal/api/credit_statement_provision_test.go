@@ -90,22 +90,20 @@ func TestPostSavedMailSummariesOnlyOnce(t *testing.T) {
 	for range 2 {
 		c.mustOK("POST", path, map[string]any{"synchronized_at": state.SynchronizedAt})
 	}
-	var count, total int
-	if err := db.QueryRow(`SELECT COUNT(*),COALESCE(SUM(i.amount_minor),0) FROM credit_statement_items i
-		JOIN credit_statements s ON s.id=i.statement_id WHERE s.instrument_id=? AND i.source_type='statement_provision'`, card).
-		Scan(&count, &total); err != nil || count != 1 || total != int(amount) {
-		t.Fatalf("count=%d total=%d err=%v", count, total, err)
+	var count int
+	var balance, bankDue int64
+	if err := db.QueryRow(`SELECT s.system_due_minor,s.platform_amount_minor,
+		(SELECT COUNT(*) FROM credit_statement_provisions p WHERE p.statement_id=s.id AND p.household_id=s.household_id)
+		FROM credit_statements s WHERE s.instrument_id=?`, card).Scan(&balance, &bankDue, &count); err != nil || count != 0 || balance != 0 || bankDue != int64(amount) {
+		t.Fatalf("provisions=%d balance=%d bankDue=%d err=%v", count, balance, bankDue, err)
 	}
 	category := c.firstCategory("expense")
 	c.mustOK("POST", "/api/v1/transactions", map[string]any{
-		"type": "expense", "amount_minor": amount, "occurred_on": "2023-08-15", "payment_kind": "credit",
-		"credit_instrument_id": card, "splits": []map[string]any{{"category_id": category, "amount_minor": amount}},
+		"type": "expense", "amount_minor": 2000, "occurred_on": "2023-08-15", "payment_kind": "credit",
+		"credit_instrument_id": card, "splits": []map[string]any{{"category_id": category, "amount_minor": 2000}},
 	})
-	var balance, remainder int64
-	if err := db.QueryRow(`SELECT s.system_due_minor,p.provision_minor FROM credit_statements s
-		JOIN credit_statement_provisions p ON p.statement_id=s.id WHERE s.instrument_id=?`, card).
-		Scan(&balance, &remainder); err != nil || balance != int64(amount) || remainder != 0 {
-		t.Fatalf("balance=%d remainder=%d err=%v", balance, remainder, err)
+	if err := db.QueryRow(`SELECT system_due_minor FROM credit_statements WHERE instrument_id=?`, card).Scan(&balance); err != nil || balance != 2000 {
+		t.Fatalf("balance=%d err=%v", balance, err)
 	}
 }
 

@@ -281,12 +281,11 @@ test('L16 登录期间刷新与后退不产生重定向循环', async ({ page })
   await expect.poll(() => new URL(page.url()).pathname).toBe('/')
 })
 
-test('L17 功能亮点如实标注已支持与规划中', async ({ page }) => {
+test('L17 公开首页明确展示已支持的账单导入', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.feature-card')).toHaveCount(6)
-  await expect(page.locator('.feature-status', { hasText: '已支持' })).toHaveCount(5)
-  await expect(page.locator('.feature-status.planned')).toHaveCount(1)
-  await expect(page.locator('.feature-status.planned')).toContainText('规划中')
+  await expect(page.locator('.feature-status', { hasText: '已支持' })).toHaveCount(6)
+  await expect(page.locator('.feature-card', { hasText: '家庭协作' })).toContainText('导入账单')
   await expect(page.getByRole('link', { name: /GitHub 仓库/ })).toHaveAttribute('href', 'https://github.com/Sunywr/tinynest')
 })
 

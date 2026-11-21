@@ -97,6 +97,27 @@ test('01 受控初始化：公开页无初始化入口，运维 API 单次创建
   expect(again.status()).toBe(409)
 })
 
+test('微信账单多次上传后只保留一行并可继续核对', async ({ page }) => {
+  await ensureLogin(page)
+  await page.getByRole('button', { name: '导入账单 / 继续核对' }).click()
+  const file = { name: '微信账单.csv', mimeType: 'text/csv', buffer: Buffer.from(
+    '微信支付交易明细\n交易时间,交易类型,交易对方,收/支,金额(元),支付方式,当前状态,交易单号,商户单号\n' +
+    '2025-10-10 12:15:00,商户消费,测试餐厅,支出,48.00,零钱,支付成功,202510101234567890,123\n',
+  ) }
+  for (let i = 0; i < 2; i++) {
+    await page.getByLabel('选择账单文件').setInputFiles(file)
+    const draft = page.getByRole('group', { name: file.name }).last()
+    await expect(draft.getByLabel('来源')).toHaveValue('wechat')
+    await draft.getByLabel('账单账户标识').fill('测试零钱')
+    await draft.getByRole('button', { name: '保存预览' }).click()
+    await expect(draft.getByRole('button', { name: '预览已保存' })).toBeVisible()
+  }
+  await expect(page.getByText('1 笔待核对 · 0 笔已关联 · 0 笔已入账')).toBeVisible()
+  await page.getByRole('button', { name: '返回首页' }).click()
+  await page.getByRole('button', { name: '导入账单 / 继续核对' }).click()
+  await expect(page.getByRole('group', { name: /2025-10-10 · 消费/ })).toHaveCount(1)
+})
+
 test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page }) => {
   await page.route('**/api/v1/credit-instruments', async route => {
     const response = await route.fetch()
@@ -118,9 +139,12 @@ test('有记账权限的家庭成员可打开账单邮箱配置', async ({ page 
       { TransactionDate: '2023-08-18', PostingDate: '2023-08-19', Description: '生活服务 财付通 喜茶 - 上海', Amount: 1900 },
     ], review: [{ key: 'fixture-row', imported: false, matches: [] }] }]
   await page.route('**/api/v1/credit-mail/bindings/fixture-card/preview', route => {
-    if (route.request().method() === 'POST') { saved = true; syncRequests++ }
     if (route.request().method() === 'DELETE') { saved = false; return route.fulfill({ status: 204 }) }
     return route.fulfill({ json: { statements: saved ? fixtureStatements : null, choices: {}, synchronized_at: saved ? '2026-11-19T04:00:00Z' : '' } })
+  })
+  await page.route('**/api/v1/credit-mail/bindings/fixture-card/job', route => {
+    if (route.request().method() === 'POST') { saved = true; syncRequests++ }
+    return route.fulfill({ json: saved ? { id: 'fixture-sync', kind: 'sync', status: 'completed', done: 1, total: 1 } : {} })
   })
   await ensureLogin(page)
   await page.getByRole('button', { name: '信用账单' }).click()
@@ -1705,12 +1729,13 @@ test('验收反馈：窄屏各菜单和表单控件均在容器内', async ({ pa
 })
 
 
-test('83 首页恢复 README 三卡与六个月布局', async ({ page }) => {
+test('83 首页保留三卡与六个月趋势并提供账单核对入口', async ({ page }) => {
   await ensureLogin(page)
   await expect(page.locator('.stats.metrics > .stat')).toHaveCount(3)
   await expect(page.getByRole('heading', { name: '收支小趋势' })).toBeVisible()
   await expect(page.locator('.home-trend .barcol')).toHaveCount(6)
-  await expect(page.getByText('预算功能未开发', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '账单核对' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '继续核对 →' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '信用总览' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '未来待还' })).toBeVisible()
   await expect(page.locator('.home-details')).not.toHaveAttribute('open', '')

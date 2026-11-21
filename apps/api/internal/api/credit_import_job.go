@@ -66,7 +66,7 @@ func (a *API) creditImportJob(w http.ResponseWriter, r *http.Request) {
 	a.creditJobsMu.Lock()
 	if job := a.creditJobs[key]; job.Status == "running" {
 		a.creditJobsMu.Unlock()
-		writeJSON(w, 202, job)
+		writeErr(w, 409, "credit_job_running", "这张卡已有账单任务在运行，请等待后再提交")
 		return
 	}
 	job := creditImportJob{ID: newID("cjob"), Kind: input.Kind, Status: "running", Total: total}

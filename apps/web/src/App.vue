@@ -7,18 +7,19 @@ import { creditBrandOptions } from './services/accountBrand'
 import SearchableSelect from './components/SearchableSelect.vue'
 import SmartSelect from './components/SmartSelect.vue'
 import {
-  ArrowDownLeft, ArrowLeftRight, ClipboardList, Coffee, CreditCard, Flower2, House,
+  ArrowDownLeft, ArrowLeftRight, ClipboardList, Coffee, CreditCard, House,
   Layers, MessageCircle, PenLine, Settings, Sparkles, TrendingUp, TriangleAlert, Wallet,
 } from 'lucide-vue-next'
 import CategoryEmojiPicker from './components/CategoryEmojiPicker.vue'
 import DatePicker from './components/DatePicker.vue'
 import MailSettings from './components/MailSettings.vue'
 import CreditMailSettings from './components/CreditMailSettings.vue'
+import StatementImports from './components/StatementImports.vue'
 import PasswordRecovery from './components/PasswordRecovery.vue'
 import { request } from './services/api'
 import UserProfileDialog from './components/UserProfileDialog.vue'
 
-type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings'
+type View = 'home' | 'ledger' | 'accounts' | 'credit' | 'debt' | 'invest' | 'settings' | 'imports'
 const nav: { key: View; label: string; icon: typeof House }[] = [
   { key: 'home', label: '首页概览', icon: House },
   { key: 'ledger', label: '记账流水', icon: ClipboardList },
@@ -32,6 +33,9 @@ const nav: { key: View; label: string; icon: typeof House }[] = [
 const booted = ref(false)
 const authed = ref(false)
 const view = ref<View>('home')
+const pendingImports = ref<number | null>(null)
+const importMonth = ref('')
+let importMovementPanel = ''
 const apiStatus = ref('检测中')
 const notice = ref('')
 const errorMsg = ref('')
@@ -68,7 +72,7 @@ const features = [
   { icon: Wallet, title: '家庭资产', desc: '现金、证券资金、持仓成本与负债结构，用资产减去负债查看净资产。', status: '已支持' },
   { icon: TrendingUp, title: '投资与分红', desc: '查看买入成本、交易费用、投资盈亏和手工估值。', status: '已支持' },
   { icon: ClipboardList, title: '项目归集', desc: '按项目与分类汇总净支出，支持自定义日期区间下钻明细。', status: '已支持' },
-  { icon: Sparkles, title: '更多协作能力', desc: '多成员独立登录、账单导入、预算与实时行情仍在规划。', status: '规划中' },
+  { icon: Sparkles, title: '家庭协作', desc: '成员独立登录，共用家庭账本，支持手记和导入账单。', status: '已支持' },
 ]
 
 const summary = ref<any>(null)
@@ -314,7 +318,7 @@ const f = reactive<any>({
   feeRule: { account_id: '', effective_from: today(), commission_bps: '0', commission_min: '0', stamp_duty_bps: '0', transfer_fee_bps: '0' },
   dividend: { asset_id: '', gross: '', tax: '', received_on: today(), to_account_id: '' },
   valuation: { asset_id: '', market_value: '', valued_on: today() },
-  refund: { transaction_id: '', amount: '', destination_type: 'cash', destination_id: '' },
+  refund: { transaction_id: '', amount: '', destination_type: 'cash', destination_id: '', refund_on: '' },
 })
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
@@ -388,6 +392,7 @@ async function boot() {
     authed.value = true
     apiStatus.value = '已连接'
     const savedView = nav.find(item => item.key === window.history.state?.tinynestView)
+    if (window.history.state?.tinynestView === 'imports' && canWrite.value) view.value = 'imports'
     const resumeBillSync = window.history.state?.tinynestBillSync === true
     if (savedView) go(savedView.key)
     await loadAll()
@@ -535,6 +540,7 @@ async function loadAll() {
     [loadHomeTrend(), () => {}],
     [api.dashboardCredit(range.from, range.to), v => creditDash.value = v],
     [api.categoryRanking(range.from, range.to), v => catRanking.value = v.items || []],
+    [request('/statement-imports/pending-count'), v => pendingImports.value = v.count],
   ]
   const results = await Promise.allSettled(reqs.map(r => r[0]))
   results.forEach((res, i) => { if (res.status === 'fulfilled') reqs[i][1](res.value) })
@@ -598,6 +604,7 @@ watch(transactionAmount, input => {
 let ledgerNavigation = 0
 function go(v: View) {
   restoreTransactionDraft()
+  importMovementPanel = ''
   ledgerNavigation++
   view.value = v
   window.history.replaceState({ ...window.history.state, tinynestView: v, tinynestBillSync: false }, '')
@@ -619,8 +626,13 @@ function openPanel(p: string, prefilled = false) {
     selectedMember.value = me.value?.member_id || ''
     void resolveCurrentMember()
   }
+  if (p === 'refund' && !prefilled) f.refund.refund_on = ''
 }
 function closePanel() {
+  if (importMovementPanel && panel.value === importMovementPanel) {
+    go('imports')
+    return
+  }
   restoreTransactionDraft()
   ledgerNavigation++
   panel.value = ''
@@ -1469,14 +1481,33 @@ function refund(txId: string) {
   f.refund.transaction_id = txId
   f.refund.destination_type = 'cash'
   f.refund.destination_id = accounts.value[0]?.id || ''
+  f.refund.refund_on = ''
   go('ledger')
   openPanel('refund')
+}
+function openImportedMovement(row: { kind: string; day: string; amount_minor: number; account_id?: string; card_id?: string }) {
+  importMonth.value = row.day.slice(0, 7)
+  const amount = (row.amount_minor / 100).toFixed(2)
+  if (row.kind === 'refund') {
+    go('ledger')
+    Object.assign(f.refund, { transaction_id: '', amount, refund_on: row.day,
+      destination_type: row.card_id ? 'credit' : 'cash', destination_id: row.card_id || row.account_id || '' })
+    openPanel('refund', true)
+    importMovementPanel = 'refund'
+  } else if (row.kind === 'repayment') {
+    go('credit')
+    const candidates = row.card_id ? statements.value.filter(item => item.instrument_id === row.card_id && item.remaining_minor > 0) : []
+    Object.assign(f.payment, { statement_id: candidates.length === 1 ? candidates[0].id : '',
+      amount, paid_on: row.day, from_account_id: row.account_id || '' })
+    openPanel('pay')
+    importMovementPanel = 'pay'
+  }
 }
 function submitRefund() {
   const amount = minor(f.refund.amount)
   if (!f.refund.transaction_id || amount === null || amount <= 0 || !f.refund.destination_id) return toast('请填写原交易、退款金额与去向')
   return run(() => api.createRefund({
-    transaction_id: f.refund.transaction_id, amount_minor: amount, refund_on: today(),
+    transaction_id: f.refund.transaction_id, amount_minor: amount, refund_on: f.refund.refund_on || today(),
     destination_type: f.refund.destination_type, destination_id: f.refund.destination_id,
   }), '退款已冲减原支出')
 }
@@ -1706,7 +1737,9 @@ const metricCards = computed(() => {
         <template v-if="view === 'home'">
           <section class="greeting"><div><h1>今天也要好好生活呀 ♡</h1><p>每一笔小小的记录，都在帮我们照顾这个温暖的家。</p></div>
             <div class="day">{{ range.from }} ～ {{ range.to }}</div>
-            <button v-if="canWrite" type="button" class="btn-primary quick-entry" @click="quickEntry()">＋ 记一笔</button></section>
+            <button v-if="canWrite" type="button" class="btn-primary quick-entry" @click="quickEntry()">＋ 记一笔</button>
+            <button v-if="canWrite" type="button" class="ghost" @click="go('imports')">导入账单 / 继续核对</button>
+          </section>
           <details class="home-period"><summary>选择统计周期</summary><div class="rangebar">
             <label>起始 <DatePicker v-model="range.from" /></label>
             <label>截止 <DatePicker v-model="range.to" /></label>
@@ -1735,7 +1768,11 @@ const metricCards = computed(() => {
               </section>
             </div>
             <div>
-              <section class="panel home-budget"><div class="paneltitle"><div><h2>本月预算</h2><span class="subinfo">慢慢花，也能开心存</span></div><Flower2 :size="20" aria-hidden="true" /></div><p class="budgetnote">预算功能未开发</p><div class="note-box">♡ 小家碎碎念<br />记录不是限制生活，而是让我们更自由地选择生活。</div></section>
+              <section v-if="canWrite" class="panel home-budget"><div class="paneltitle">
+                <h2>账单核对</h2><button class="switch" @click="go('imports')">继续核对 →</button>
+              </div>
+                <p v-if="pendingImports !== null" role="status">{{ pendingImports ? pendingImports + ' 笔待核对' : '暂无待核对明细' }}</p>
+              </section>
               <div class="legend-note">° ˖ ✧ 用轻轻柔柔的方式记下每一天 ✧ ˖ °</div>
               <section class="panel"><div class="paneltitle"><div><h2>信用总览</h2><span class="subinfo">按账单到期日 · 额度为实时负债余额</span></div>
                 <button class="switch" @click="go('credit')">管理 →</button></div>
@@ -1780,6 +1817,11 @@ const metricCards = computed(() => {
         </template>
 
         <!-- 记账流水：默认先展示全部流水，表单经按钮进入 -->
+        <StatementImports v-else-if="view === 'imports' && canWrite"
+          :accounts="activeAccounts" :cards="creditInstruments.filter(card => card.status === 'active')"
+          :members="members.filter(member => member.status === 'active')" :categories="[...expenseCategories, ...incomeCategories]"
+          :initial-month="importMonth" @movement="openImportedMovement"
+          @close="importMonth = ''; go('home'); loadAll()" @credit="go('credit'); openPanel('creditMailSync')" @changed="loadAll()" />
         <template v-else-if="view === 'ledger'">
           <section class="greeting"><div><h1>记账流水</h1><p>金额以「元」输入，按整数分入账。</p></div></section>
           <div class="actions-bar">
@@ -1878,6 +1920,7 @@ const metricCards = computed(() => {
               <label>原交易<SearchableSelect><select v-model="f.refund.transaction_id"><option value="">请选择</option>
                 <option v-for="t in refundOptions" :key="t.id" :value="t.id">{{ t.occurred_on }} · {{ formatMinor(t.amount_minor) }}</option></select></SearchableSelect></label>
               <label>退款金额<input v-model="f.refund.amount" inputmode="decimal" placeholder="0.00" /></label>
+              <label>退款日期<DatePicker v-model="f.refund.refund_on" /></label>
               <label>退款去向<SearchableSelect><select v-model="f.refund.destination_type"><option value="cash">现金账户</option><option value="credit">原信用工具</option></select></SearchableSelect></label>
               <label>到账账户 / 信用工具<SearchableSelect :allow-create="true" @create="(q) => openCreate(f.refund.destination_type === 'cash' ? 'account' : 'instrument', q, (id) => f.refund.destination_id = id)"><select v-model="f.refund.destination_id"><option value="">请选择</option>
                 <option v-for="a in (f.refund.destination_type === 'cash' ? activeAccounts : creditInstruments)" :key="a.id" :value="a.id">{{ a.name }}</option></select></SearchableSelect></label>
@@ -2108,6 +2151,8 @@ const metricCards = computed(() => {
             <div class="ranklist"><div v-for="s in statements" :key="s.id" class="rankrow">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ recordLabel(s.status) }}</span>
               <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}<span v-if="s.provision_minor > 0" class="subinfo"> · 含暂记 {{ formatMinor(s.provision_minor) }}</span></b>
+              <small v-if="s.platform_amount_minor != null" class="subinfo">银行应还 {{ formatMinor(s.platform_amount_minor) }} · 账本减银行 {{ formatMinor(s.reconcile_diff_minor) }}</small>
+              <small v-if="s.review_provision" class="subinfo">该期自动暂记目标等于银行应还，请核对本期新增金额。</small>
               <span class="rowacts">
                 <button v-if="canWrite" type="button" class="ghost" @click="openStatementPay(s)">还款</button>
                 <button type="button" class="ghost" @click="openPaymentHistory(s.id)">还款记录</button>
@@ -2549,7 +2594,7 @@ const metricCards = computed(() => {
           <section class="panel" v-if="!panel"><div class="note-box">
             <template v-if="household">家庭：{{ household.name }}<br />账本币种：{{ household.currency }}<br /></template>当前登录：{{ me?.username }}<span v-if="me?.role === 'viewer'">（只读）</span><br /><span v-if="me?.member_name">绑定档案：{{ me.member_name }}<br /></span><br />
             管理员可审批加入申请和停用成员账号。成员可使用家庭账本。<br /><br />
-            尚未开发：细粒度权限、导入导出、实时行情、自动账单同步。这些能力留待 V0.2，页面不会伪造保存成功。
+            尚未开发：细粒度权限、账本导出、实时行情、定时账单同步。
           </div></section>
         </template>
         </div>

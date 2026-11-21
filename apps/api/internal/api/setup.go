@@ -68,6 +68,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerV014(mux)
 	a.registerMail(mux)
 	a.registerCreditMail(mux)
+	a.registerStatementImports(mux)
 }
 
 // --- bootstrap & identity ---------------------------------------------------
@@ -237,6 +238,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "tn_session", Value: raw, Path: "/", HttpOnly: true,
 		Secure: a.secureCookie(r), SameSite: http.SameSiteLaxMode,
+		MaxAge:  7 * 24 * 60 * 60,
 		Expires: a.now().UTC().Add(7 * 24 * time.Hour),
 	})
 	writeJSON(w, 200, map[string]string{"username": in.Username, "csrf_token": csrfRaw, "status": "ok"})
