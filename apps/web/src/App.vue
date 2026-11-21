@@ -104,6 +104,27 @@ const paymentHistory = ref<{
 const paymentHistoryLoading = ref(false)
 const archivedStatements = ref<{ id: string; instrument_name: string; cycle_start_on: string; cycle_end_on: string; paid_minor: number }[] | null>(null)
 const archivedStatementsLoading = ref(false)
+const bills = ref<any[]>([])
+const billPage = ref(1)
+const unpaidOnly = ref(true)
+const moreBills = ref(false)
+const billState = ref('')
+let billRequest = 0
+async function loadBills(page = billPage.value): Promise<void> {
+  const id = ++billRequest
+  billState.value = 'loading'
+  try {
+    const result = await api.statements(`?page=${page}&unpaid=${unpaidOnly.value}`)
+    if (id !== billRequest) return
+    if (page > 1 && !result.items.length) return await loadBills(1)
+    bills.value = result.items
+    billPage.value = page
+    moreBills.value = result.has_more
+    billState.value = ''
+  } catch {
+    if (id === billRequest) billState.value = 'error'
+  }
+}
 const statements = ref<any[]>([])
 const installments = ref<any[]>([])
 const instDetail = ref<any>(null)
@@ -364,6 +385,7 @@ function clearPrivateState() {
   household.value = null; members.value = []; memberName.value = ''; selectedMember.value = ''; memberResolving.value = false
   accounts.value = []; accountEdit.value = null; accountJournal.value = []; categories.value = []; projects.value = []; projectName.value = ''; projectEdit.value = null; projectTotals.value = null; categoryEdit.value = null
   Object.assign(categoryDraft, { name: '', kind: 'expense', emoji: '' })
+  billRequest++; bills.value = []; billPage.value = 1; unpaidOnly.value = true; moreBills.value = false
   creditInstruments.value = []; statements.value = []; installments.value = []
   paymentHistory.value = null; paymentHistoryLoading.value = false
   archivedStatements.value = null; archivedStatementsLoading.value = false
@@ -527,7 +549,7 @@ async function loadAll() {
       firstTransactionCursor.value = v.next_cursor ?? null
     }],
     [api.creditInstruments(), v => creditInstruments.value = v.items || []],
-    [api.statements(), v => statements.value = v.items || []],
+    [loadBills(), () => {}],
     [api.installments(), v => installments.value = v.items || []],
     [api.debts(), v => debts.value = v.items || []],
     [api.dueItems(30), v => dueItems.value = v.items || []],
@@ -615,10 +637,27 @@ function go(v: View) {
     void refreshApplications()
   }
 }
-function openPanel(p: string, prefilled = false) {
+async function loadStatementChoices(navigation: number, card?: string) {
+  try {
+    const { items } = await api.statements('?unpaid=true')
+    if (navigation !== ledgerNavigation) return
+    statements.value = items
+    if (card && !f.payment.statement_id) {
+      const matches = statements.value.filter(item => item.instrument_id === card)
+      if (matches.length === 1) f.payment.statement_id = matches[0].id
+    }
+  } catch {
+    if (navigation === ledgerNavigation) toast('未能加载待还账单')
+  }
+}
+function openPanel(p: string, prefilled = false, card?: string) {
   restoreTransactionDraft()
   ledgerNavigation++
   panel.value = p
+  if (p === 'pay' || p === 'convert') {
+    statements.value = []
+    void loadStatementChoices(ledgerNavigation, card)
+  }
   window.history.replaceState({ ...window.history.state, tinynestBillSync: p === 'creditMailSync' }, '')
   errorMsg.value = ''
   if (p === 'tx' && !prefilled) {
@@ -1496,10 +1535,9 @@ function openImportedMovement(row: { kind: string; day: string; amount_minor: nu
     importMovementPanel = 'refund'
   } else if (row.kind === 'repayment') {
     go('credit')
-    const candidates = row.card_id ? statements.value.filter(item => item.instrument_id === row.card_id && item.remaining_minor > 0) : []
-    Object.assign(f.payment, { statement_id: candidates.length === 1 ? candidates[0].id : '',
+    Object.assign(f.payment, { statement_id: '',
       amount, paid_on: row.day, from_account_id: row.account_id || '' })
-    openPanel('pay')
+    openPanel('pay', true, row.card_id)
     importMovementPanel = 'pay'
   }
 }
@@ -2147,20 +2185,20 @@ const metricCards = computed(() => {
             </div>
               <p v-if="!creditInstruments.length" class="empty">还没有信用工具，点上方「新增信用工具」开始吧</p></div>
           </section>
-          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo">系统应还由明细汇总；点击「还款」直接填入金额</span></div></div>
-            <div class="ranklist"><div v-for="s in statements" :key="s.id" class="rankrow">
+          <section class="panel" v-if="!panel"><div class="paneltitle"><div><h2>账单列表</h2><span class="subinfo"><label><input v-model="unpaidOnly" type="checkbox" @change="loadBills(1)"> 仅看未还清</label></span></div></div>
+            <p v-if="billState === 'loading'">加载中…</p><button v-else-if="billState" @click="loadBills()">加载失败，重试</button><div v-else><div v-for="s in bills" :key="s.id" class="rankrow bill-row"><div class="bill-info">
               <span>{{ s.instrument_name }} · 还款日 {{ s.due_on }} · {{ recordLabel(s.status) }}</span>
-              <b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}<span v-if="s.provision_minor > 0" class="subinfo"> · 含暂记 {{ formatMinor(s.provision_minor) }}</span></b>
+              <strong>待还 {{ formatMinor(s.remaining_minor) }}</strong><b>应还 {{ formatMinor(s.system_due_minor) }} / 已还 {{ formatMinor(s.paid_minor) }}<span v-if="s.provision_minor > 0" class="subinfo"> · 含暂记 {{ formatMinor(s.provision_minor) }}</span></b>
               <small v-if="s.platform_amount_minor != null" class="subinfo">银行应还 {{ formatMinor(s.platform_amount_minor) }} · 账本减银行 {{ formatMinor(s.reconcile_diff_minor) }}</small>
               <small v-if="s.review_provision" class="subinfo">该期自动暂记目标等于银行应还，请核对本期新增金额。</small>
-              <span class="rowacts">
-                <button v-if="canWrite" type="button" class="ghost" @click="openStatementPay(s)">还款</button>
+              </div><span class="rowacts">
+                <button v-if="canWrite && s.remaining_minor > 0" type="button" class="ghost" @click="openStatementPay(s)">还款</button>
                 <button type="button" class="ghost" @click="openPaymentHistory(s.id)">还款记录</button>
                 <button v-if="canWrite" type="button" class="ghost" @click="editStatementCycle(s)">修正日期</button>
                 <button v-if="canWrite && s.remaining_minor === 0" type="button" class="ghost" @click="archiveStatement(s)">归档账单</button>
               </span>
             </div>
-              <p v-if="!statements.length" class="empty">暂无账单，记一笔信用消费后自动归集</p></div>
+              <p v-if="!bills.length" class="empty">{{ unpaidOnly ? '暂无未还清账单' : '暂无账单' }}</p><div class="rowacts" v-if="billPage > 1 || moreBills"><button class="ghost" :disabled="billPage === 1" @click="loadBills(billPage - 1)">上一页</button><span>第 {{ billPage }} 页</span><button class="ghost" :disabled="!moreBills" @click="loadBills(billPage + 1)">下一页</button></div></div>
             <form v-if="f.statementCycle.id" class="formgrid" @submit.prevent="saveStatementCycle()">
               <label>周期开始<DatePicker v-model="f.statementCycle.cycle_start_on" required /></label>
               <label>周期结束<DatePicker v-model="f.statementCycle.cycle_end_on" required /></label>
@@ -2653,6 +2691,10 @@ const metricCards = computed(() => {
 </template>
 
 <style scoped>
+.bill-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 0; border-bottom:1px solid #eadfd3 }
+.bill-info { display:grid; gap:.25rem }
+@media(max-width:680px) { .bill-row { flex-direction:column; align-items:stretch } }
+
 .txnote { font-size:12px; color:var(--muted); margin-top:5px; overflow-wrap:anywhere; }
 .ledger-transaction .txname { font-size:16px; }
 .refund-badge { display:inline-block; margin:4px; padding:3px 7px; border-radius:7px; color:var(--primary-deep); background:var(--soft); }

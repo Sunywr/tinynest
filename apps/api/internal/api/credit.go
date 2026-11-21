@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
 	"tinynest/api/internal/credit"
@@ -271,6 +272,21 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 	if q.Get("archived") == "true" {
 		filter = " AND " + archived
 	}
+	if q.Get("unpaid") == "true" {
+		filter += " AND s.system_due_minor>s.paid_minor"
+	}
+	args := []any{p.HouseholdID, from, from, to, to}
+	order := " ORDER BY s.cycle_start_on DESC,s.id DESC"
+	const size = 10
+	if q.Has("page") {
+		page, err := strconv.ParseInt(q.Get("page"), 10, 32)
+		if err != nil || page < 1 || status != "" {
+			writeErr(w, 400, "invalid_request", "分页参数无效")
+			return
+		}
+		order += " LIMIT ? OFFSET ?"
+		args = append(args, size+1, (page-1)*size)
+	}
 	rows, err := a.DB.QueryContext(r.Context(), `
 		SELECT s.id,s.instrument_id,i.name,s.cycle_start_on,s.cycle_end_on,s.due_on,
 		       s.system_due_minor,s.paid_minor,s.platform_amount_minor,s.status,COALESCE(p.provision_minor,0),
@@ -279,8 +295,7 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 		           AND l.entity='credit_statement' AND l.entity_id=s.id AND l.action='auto_statement_provision')
 		FROM credit_statements s JOIN credit_instruments i ON i.id=s.instrument_id AND i.household_id=s.household_id
 		LEFT JOIN credit_statement_provisions p ON p.statement_id=s.id AND p.household_id=s.household_id
-		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)`+filter+`
-		ORDER BY s.cycle_start_on DESC`, p.HouseholdID, from, from, to, to)
+		WHERE s.household_id=? AND (?='' OR s.due_on>=?) AND (?='' OR s.due_on<=?)`+filter+order, args...)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -317,6 +332,18 @@ func (a *API) handleListStatements(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		items = append(items, m)
+	}
+	if err := rows.Err(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	if q.Has("page") {
+		more := len(items) > size
+		if more {
+			items = items[:size]
+		}
+		writeJSON(w, 200, map[string]any{"items": items, "has_more": more})
+		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
 }
