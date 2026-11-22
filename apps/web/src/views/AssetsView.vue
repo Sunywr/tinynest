@@ -131,10 +131,10 @@ onMounted(() => void load())
       <p class="networth-note">投资是导入的估值快照，不是复式账余额。</p>
     </section>
 
+    <InvestmentPanel v-if="investments && investments.account_count && !error" :overview="investments" />
+
     <CreditDebtPanel v-if="plan && plan.cards.length && !error" :plan="plan" :can-write="canWrite"
       @configure="openConfigure" />
-
-    <InvestmentPanel v-if="investments && investments.account_count && !error" :overview="investments" />
 
     <p class="info-line" role="note">
       现金与信用卡仍按复式记账；信用卡是负债账户，支出增加欠款、还款按账户转账处理。可为信用卡设置账单日与还款日，

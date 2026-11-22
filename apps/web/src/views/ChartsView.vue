@@ -75,6 +75,10 @@ function barWidth(value: number): string {
   return `${Math.max(2, Math.round((Math.abs(value) / maxAbsReturn.value) * 100))}%`
 }
 
+function kindShare(value: number): number {
+  return investmentTotalMinor.value > 0 ? Math.round((value / investmentTotalMinor.value) * 10000) : 0
+}
+
 async function load() {
   if (investmentView.value) return
   const token = ++requestId
@@ -226,8 +230,16 @@ onMounted(() => void load())
         </section>
 
         <div class="inv-chart-grid">
-          <section class="card chart-card" aria-label="证券与理财占比">
+          <section class="card chart-card inv-donut-card" aria-label="证券与理财占比">
             <DonutChart :items="investmentDonut" :total-minor="investmentTotalMinor" center-label="投资市值" />
+            <ul class="inv-legend">
+              <li v-for="item in investments.by_kind" :key="item.kind">
+                <span class="inv-legend-dot" :class="item.kind"></span>
+                <span class="inv-legend-label">{{ item.label }}</span>
+                <strong>{{ formatMinor(item.market_value_minor) }}</strong>
+                <small>{{ formatBasisPoints(kindShare(item.market_value_minor)) }}</small>
+              </li>
+            </ul>
           </section>
 
           <section class="card inv-owners" aria-label="按成员收益">
@@ -287,6 +299,15 @@ onMounted(() => void load())
 .negative { color: #a04e43; }
 .flat { color: var(--muted); }
 .inv-chart-grid { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 12px; align-items: stretch; }
+.inv-donut-card { display: grid; align-content: start; gap: 4px; }
+.inv-legend { list-style: none; margin: 0; padding: 0 4px 4px; display: grid; gap: 6px; }
+.inv-legend li { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; }
+.inv-legend-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--soft); }
+.inv-legend-dot.security { background: #bed5da; }
+.inv-legend-dot.wealth { background: #ecd5a8; }
+.inv-legend-label { color: var(--muted); }
+.inv-legend strong { margin-inline-start: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.inv-legend small { width: 42px; color: var(--muted); font-size: 10px; text-align: right; font-variant-numeric: tabular-nums; }
 .inv-owners { padding: 16px; display: grid; align-content: start; gap: 10px; }
 .inv-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .inv-section-head .section-title { margin: 0; }
