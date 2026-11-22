@@ -12,8 +12,8 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 | V2 代码（后端 / 前端 / 迁移 / 运维 CLI） | 已完成，代码可清点（见 §3） |
 | 信用卡还款计划（2026-11-22 增补） | 已完成：信用卡账户账单日/还款日配置 + `GET /accounts?include=credit_debt` 只读派生；不新增路由/表，不恢复 V1 信用账单模块 |
 | 信用卡还款计划生产发布（2026-11-22） | **已完成**：后端/前端 `v2-9fc30b1` 上线；生产迁移 1–4；`healthz`/`readyz` 200；静态资源哈希与前后端 release 核对通过；登录后真实账本冒烟待用户验证。见 [发布证据](reviews/v2-credit-plan-deployment-evidence.md) |
-| 证券/理财估值快照（2026-11-22 增补） | 代码与本地验证完成：2 张只读表、`GET /accounts?include=investments`、资产页投资面板与图表投资视图；pfm dry-run 4 账户/30 持仓，总市值 ¥535,406.71；生产迁移与导入待用户授权 |
-| V2 文档（AGENTS / README / 开发 / 架构 / 安全 / 部署 / API / ER / 账务 / 验收） | 已完成（含本次还款计划口径） |
+| 证券/理财估值快照（2026-11-22 增补） | **已完成并发布**：2 张只读表、`GET /accounts?include=investments`、资产页投资面板与图表投资视图；生产迁移 1–5，导入 pfm 4 账户/30 持仓（总市值 ¥535,406.71），生产 API 与 390×844 真实页面验证通过。见 [发布证据](reviews/v2-investment-snapshot-deployment-evidence.md) |
+| V2 文档（AGENTS / README / 开发 / 架构 / 安全 / 部署 / API / ER / 账务 / 验收） | 已完成（含还款计划与投资估值快照口径） |
 | V2 测试代码 | 已就位：Go 117 个 Test 函数、Playwright 80 条用例 |
 | 生产清理（P5） | **已执行**：删除 3,975 行业务数据、身份 29 行保留，见 [清理证据](reviews/v2-purge-evidence.md) |
 | 生产新库切换与身份导入（P5） | **已执行**：`tinynest_v2` + 身份导入（users 摘要一致），见 [切换证据](reviews/v2-cutover-evidence.md) |
@@ -71,7 +71,7 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 ## 6. UNVERIFIED 清单
 
 - **生产 MySQL Unix socket 链路**：本机隔离 MySQL 8.0.46（TCP 3307）已跑通既有 24 条 API 测试、`TestMySQLPurgeDrill`、`TestMySQLIdentityCutoverDrill`、dump/restore 对账与新增投资投影定向用例；但生产 B 机 Unix socket、受限账号、`readyz` 的 `mysql_ping_and_migrations` 实际输出仍未验证。
-- **生产投资快照迁移与导入**：`005_investments.sql` 尚未部署到生产；pfm dry-run 已核对 4 账户/30 持仓，但真实写入、备份与生产 API 验证待用户授权。
+- **生产投资快照**：已完成迁移 1–5、4 账户/30 持仓导入，生产 API 与 390×844 真实页面验证通过；iPhone 实机、A↔B TLS 与生产性能仍未复测。
 - **go test -race**：本机未找到 gcc/CGO 工具链，未执行。
 - **生产清理执行**：`purge --execute` / `verify` 未在生产或生产副本上执行，输出与耗时未知。
 - **生产新库切换**：`identity-export` / `identity-import`、表数与 `baseline=v2` 的实际输出未在生产数据上核对。
