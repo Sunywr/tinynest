@@ -122,7 +122,7 @@ function goSettings() {
 </template>
 
 <style scoped>
-.credit-debt-card { display: grid; gap: 12px; }
+.credit-debt-card { display: grid; gap: 12px; padding: 16px; }
 .credit-debt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .credit-debt-head h2 { margin: 0; font-size: 16px; }
 .credit-debt-sub { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
@@ -149,6 +149,7 @@ function goSettings() {
 .credit-debt-action { justify-self: start; margin-top: 2px; }
 .credit-debt-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 @media (min-width: 560px) {
+  .credit-debt-card { padding: 18px 20px; }
   .credit-debt-main { grid-template-columns: auto 1fr; align-items: baseline; column-gap: 14px; }
   .credit-debt-label { grid-column: 1; }
   .credit-debt-amount { grid-column: 1; }

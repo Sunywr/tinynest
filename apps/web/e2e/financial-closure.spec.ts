@@ -903,15 +903,17 @@ test.describe('F 预算与导出', () => {
 // ------------------------------------------------------------ G 成员 / 分类 / 管理
 
 test.describe('G 成员 / 分类 / 管理', () => {
-  test('G01 添加家庭成员后出现在成员列表', async ({ page }) => {
+  test('G01 邀请新成员后生成邀请码并出现在成员列表', async ({ page }) => {
     await signIn(page)
     await page.goto('/me')
     await page.getByRole('button', { name: /家庭成员/ }).click()
     const dialog = page.getByRole('dialog', { name: '家庭成员' })
     const name = `成员 ${uid('m')}`
-    await dialog.getByLabel('新成员名称').fill(name)
-    await dialog.getByRole('button', { name: '添加成员' }).click()
-    await expect(dialog.getByText(name)).toBeVisible()
+    await dialog.getByLabel('成员名称').fill(name)
+    await dialog.getByRole('button', { name: '生成邀请码' }).click()
+    await expect(dialog.getByRole('region', { name: '成员列表' }).getByText(name, { exact: true })).toBeVisible()
+    await expect(dialog.locator('.invite-code')).toHaveText(/.{20,}/)
+    await expect(dialog.getByText('复制邀请链接')).toBeVisible()
   })
 
   test('G02 新建分类后出现在记账面板分类网格', async ({ page }) => {
@@ -941,12 +943,16 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(page.getByRole('status').filter({ hasText: '已停用' })).toBeVisible()
   })
 
-  test('G04 管理员可打开邀请、用户与审计面板', async ({ page }) => {
+  test('G04 管理员在家庭成员面板完成邀请、审批入口、用户与审计', async ({ page }) => {
     await signIn(page)
     await page.goto('/me')
-    await page.getByRole('button', { name: /邀请与审批/ }).click()
-    await expect(page.getByRole('dialog', { name: '邀请与审批' })).toBeVisible()
-    await page.getByRole('button', { name: '关闭邀请与审批' }).click()
+    await page.getByRole('button', { name: /家庭成员/ }).click()
+    const members = page.getByRole('dialog', { name: '家庭成员' })
+    await expect(members).toBeVisible()
+    await expect(members.getByText('邀请新成员', { exact: true })).toBeVisible()
+    await expect(members.getByText('待接受邀请', { exact: true })).toBeVisible()
+    await expect(members.getByText('加入申请', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '关闭成员管理' }).click()
     await page.getByRole('button', { name: /用户管理/ }).click()
     const users = page.getByRole('dialog', { name: '用户管理' })
     await expect(users).toBeVisible()
@@ -954,6 +960,35 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await page.getByRole('button', { name: '关闭用户管理' }).click()
     await page.getByRole('button', { name: /审计日志/ }).click()
     await expect(page.getByRole('dialog', { name: '审计日志' })).toBeVisible()
+  })
+
+  test('G05 邀请链接会带入邀请码并支持已有账号加入', async ({ page }) => {
+    const code = `invite-${uid('code')}`
+    await page.goto(`/login?invite=${encodeURIComponent(code)}`)
+    const dialog = page.getByRole('dialog', { name: '欢迎回家' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByLabel('邀请码（加入家庭时填写）')).toHaveValue(code)
+    await dialog.getByRole('button', { name: '已有账号？用邀请码加入' }).click()
+    await expect(page.getByRole('dialog', { name: '加入家庭' })).toBeVisible()
+    await expect(page.getByLabel('邀请码', { exact: true })).toHaveValue(code)
+  })
+
+  test('G06 管理员可把已有账号绑定到未绑定成员', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/me')
+    await page.getByRole('button', { name: /家庭成员/ }).click()
+    const dialog = page.getByRole('dialog', { name: '家庭成员' })
+    const name = `绑定成员 ${uid('b')}`
+    await dialog.getByLabel('成员名称').fill(name)
+    await dialog.getByRole('button', { name: '生成邀请码' }).click()
+    await expect(dialog.locator('.invite-code')).toBeVisible()
+
+    await dialog.getByLabel('绑定成员').selectOption({ label: name })
+    await dialog.getByLabel('已有账号').selectOption({ value: ADMIN })
+    await dialog.getByRole('button', { name: '绑定账号' }).click()
+    const row = dialog.locator('.member-row').filter({ hasText: name })
+    await expect(row).toContainText('已加入')
+    await expect(row).toContainText(`登录账号 ${ADMIN}`)
   })
 })
 

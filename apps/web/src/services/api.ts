@@ -102,7 +102,7 @@ export type ProfileUpdate = {
 export type ManagedUser = UserProfile & { id: string; role: string; status: string }
 
 export type Household = { name: string; currency: string; timezone: string }
-export type Member = { id: string; name: string; status: string }
+export type Member = { id: string; name: string; status: string; bound?: boolean; user_id?: string; username?: string; role?: string }
 export type Category = { id: string; kind: 'expense' | 'income'; name: string; emoji: string; color?: string; sort: number; active: number | boolean }
 export type Account = {
   id: string
@@ -347,8 +347,10 @@ export const api = {
   deleteMember: (id: string) => del(`/household/members/${encodeURIComponent(id)}`),
   ensureCurrentMember: () => post<Member>('/household/members/current', {}),
 
-  issueInvite: (body: { member_id: string; member_name: string; username: string }) =>
+  issueInvite: (body: { member_id?: string; member_name?: string; username?: string }) =>
     post<{ code: string }>('/household/invitations', body),
+  bindMember: (body: { member_id: string; username: string }) =>
+    post<{ status: string; member_id: string; username: string }>('/household/invitations', { ...body, bind_existing: true }),
   invitations: () => get<{ items: Invitation[] }>('/admin/invitations'),
   revokeInvitation: (id: string) => del(`/admin/invitations/${encodeURIComponent(id)}`),
   joinApplications: () => get<{ items: JoinApplication[] }>('/admin/join-applications'),

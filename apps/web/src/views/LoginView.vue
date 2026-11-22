@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import PasswordRecovery from '../components/PasswordRecovery.vue'
 import { api } from '../services/api'
 import { useSession } from '../composables/useSession'
 
 const emit = defineEmits<{ close: [] }>()
 const session = useSession()
+const route = useRoute()
 
-const mode = ref<'login' | 'register' | 'recover'>('login')
+const mode = ref<'login' | 'register' | 'join' | 'recover'>('login')
 const form = reactive({ username: '', password: '' })
 const registration = reactive({ email: '', code: '', invite: '' })
 const challenge = ref('')
@@ -24,7 +26,7 @@ function resetMessages() {
   notice.value = ''
 }
 
-function switchMode(next: 'login' | 'register' | 'recover') {
+function switchMode(next: 'login' | 'register' | 'join' | 'recover') {
   mode.value = next
   resetMessages()
   form.password = ''
@@ -58,6 +60,17 @@ async function submit() {
       form.password = ''
       return
     }
+    if (mode.value === 'join') {
+      if (!registration.invite.trim()) throw new Error('请填写邀请码')
+      await api.applyInvite({
+        username: form.username,
+        password: form.password,
+        code: registration.invite.trim(),
+      })
+      notice.value = '申请已提交，管理员批准后即可登录本家庭。'
+      form.password = ''
+      return
+    }
     if (!challenge.value) throw new Error('请先发送邮箱验证码')
     await api.register({
       username: form.username,
@@ -71,9 +84,9 @@ async function submit() {
         password: form.password,
         code: registration.invite.trim(),
       })
-      notice.value = '申请已提交，管理员批准后即可登录。'
+      notice.value = '注册与加入申请已提交，管理员批准后即可登录。'
     } else {
-      notice.value = '注册请求已受理。拿到邀请码后可在登录页提交加入申请。'
+      notice.value = '注册请求已受理。拿到邀请码后可在登录页选择“用邀请码加入”。'
     }
     form.password = ''
     registration.code = ''
@@ -104,6 +117,12 @@ function onKeydown(event: KeyboardEvent) {
 onMounted(async () => {
   document.body.classList.add('no-scroll')
   window.addEventListener('keydown', onKeydown)
+  const invite = typeof route.query.invite === 'string' ? route.query.invite.trim() : ''
+  if (invite) {
+    mode.value = 'register'
+    registration.invite = invite
+    notice.value = '邀请码已带入；完成注册后会提交加入申请。已注册但未加入的账号可选择“用邀请码加入”。'
+  }
   await nextTick()
   usernameInput.value?.focus()
 })
@@ -118,8 +137,8 @@ onBeforeUnmount(() => {
     <div ref="dialog" class="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title" aria-describedby="login-desc">
       <button type="button" class="dialog-close" aria-label="关闭登录" @click="emit('close')">×</button>
       <img src="/icons/tinynest-original.png" alt="" class="dialog-logo" />
-      <h2 id="login-title">欢迎回家</h2>
-      <p id="login-desc">登录后进入你的家庭账本。</p>
+      <h2 id="login-title">{{ mode === 'join' ? '加入家庭' : '欢迎回家' }}</h2>
+      <p id="login-desc">{{ mode === 'join' ? '使用已注册但尚未加入本家庭的账号与邀请码提交申请。' : '登录后进入你的家庭账本。' }}</p>
 
       <PasswordRecovery v-if="mode === 'recover'" @close="switchMode('login')" />
 
@@ -148,14 +167,29 @@ onBeforeUnmount(() => {
           </label>
         </template>
 
+        <template v-if="mode === 'join'">
+          <p class="email-flow-hint">
+            适用于已注册、但尚未加入本家庭的账号。填写登录密码与管理员给的邀请码；批准后即可共享该家庭的账户与流水。
+          </p>
+          <label>邀请码
+            <input v-model="registration.invite" required autocomplete="off" />
+          </label>
+        </template>
+
         <button v-if="mode === 'login'" class="btn-quiet" type="button" @click="switchMode('recover')">忘记密码</button>
         <p v-if="error" class="err" role="alert">{{ error }}</p>
         <p v-if="notice" role="status">{{ notice }}</p>
         <button class="btn-primary" type="submit" :disabled="loading">
-          {{ loading ? '处理中…' : mode === 'login' ? '登录' : registration.invite.trim() ? '注册并申请加入' : '注册' }}
+          {{ loading ? '处理中…' : mode === 'login' ? '登录' : mode === 'join' ? '提交加入申请' : registration.invite.trim() ? '注册并申请加入' : '注册' }}
         </button>
-        <button class="btn-quiet" type="button" :disabled="loading" @click="switchMode(mode === 'register' ? 'login' : 'register')">
-          {{ mode === 'register' ? '返回登录' : '注册新账号' }}
+        <button v-if="mode === 'register'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('join')">
+          已有账号？用邀请码加入
+        </button>
+        <button v-if="mode === 'join'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('register')">
+          注册新账号
+        </button>
+        <button class="btn-quiet" type="button" :disabled="loading" @click="switchMode(mode === 'login' ? 'register' : 'login')">
+          {{ mode === 'login' ? '注册新账号' : '返回登录' }}
         </button>
       </form>
     </div>

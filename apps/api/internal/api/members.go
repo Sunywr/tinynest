@@ -45,16 +45,24 @@ func (a *API) handleEnsureCurrentMember(w http.ResponseWriter, r *http.Request) 
 }
 
 type householdMember struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	UserID   string `json:"user_id,omitempty"`
+	Username string `json:"username,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Bound    bool   `json:"bound"`
 }
 
 func (a *API) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(), `
-		SELECT id, name, status FROM household_members
-		WHERE household_id=? AND status<>'deleted' ORDER BY name, id`, p.HouseholdID)
+		SELECT m.id, m.name, m.status,
+		       COALESCE(b.user_id,''), COALESCE(u.username,''), COALESCE(u.role,'')
+		FROM household_members m
+		LEFT JOIN household_user_members b ON b.member_id=m.id
+		LEFT JOIN users u ON u.id=b.user_id AND u.household_id=m.household_id
+		WHERE m.household_id=? AND m.status<>'deleted' ORDER BY m.name, m.id`, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -64,10 +72,12 @@ func (a *API) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	items := []householdMember{}
 	for rows.Next() {
 		var member householdMember
-		if err := rows.Scan(&member.ID, &member.Name, &member.Status); err != nil {
+		if err := rows.Scan(&member.ID, &member.Name, &member.Status,
+			&member.UserID, &member.Username, &member.Role); err != nil {
 			internalErr(w, err)
 			return
 		}
+		member.Bound = member.UserID != ""
 		items = append(items, member)
 	}
 	if err := rows.Err(); err != nil {

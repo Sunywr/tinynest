@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestCurrentHouseholdMember(t *testing.T) {
 	ts, client, database := newTestServer(t)
@@ -19,6 +22,10 @@ func TestCurrentHouseholdMember(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("expected one member profile, got %d", len(items))
 	}
+	row := items[0].(map[string]any)
+	if row["bound"] != true || row["username"] != "admin" || row["user_id"] == "" || row["role"] != "admin" {
+		t.Fatalf("bound member directory fields are incomplete: %v", row)
+	}
 }
 
 func TestHouseholdMemberDirectory(t *testing.T) {
@@ -35,6 +42,49 @@ func TestHouseholdMemberDirectory(t *testing.T) {
 	code, _ := client.do("POST", path, map[string]string{"name": " "})
 	if code != 400 {
 		t.Fatalf("blank name returned %d", code)
+	}
+}
+
+func TestBindExistingMember(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+
+	var householdID string
+	if err := database.QueryRow(`SELECT id FROM households LIMIT 1`).Scan(&householdID); err != nil {
+		t.Fatal(err)
+	}
+	member := c.mustOK("POST", "/api/v1/household/members", map[string]string{"name": "待绑定"})
+	userID := newID("usr")
+	if _, err := database.ExecContext(context.Background(), `INSERT INTO users
+		(id,household_id,username,password_hash,role,status) VALUES(?,?,?,?, 'member','active')`,
+		userID, householdID, "existing-user", "not-used"); err != nil {
+		t.Fatal(err)
+	}
+	body := c.mustOK("POST", "/api/v1/household/invitations", map[string]any{
+		"member_id": member["id"], "username": "existing-user", "bind_existing": true,
+	})
+	if body["status"] != "bound" {
+		t.Fatalf("bind response = %v", body)
+	}
+	items := c.mustOK("GET", "/api/v1/household/members", nil)["items"].([]any)
+	found := false
+	for _, raw := range items {
+		row := raw.(map[string]any)
+		if row["id"] == member["id"] {
+			found = true
+			if row["bound"] != true || row["username"] != "existing-user" {
+				t.Fatalf("bound member = %v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("member not listed: %v", items)
+	}
+	if code, _ := c.do("POST", "/api/v1/household/invitations", map[string]any{
+		"member_id": member["id"], "username": "existing-user", "bind_existing": true,
+	}); code != 409 {
+		t.Fatalf("second bind returned %d, want 409", code)
 	}
 }
 

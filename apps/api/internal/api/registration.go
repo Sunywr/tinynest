@@ -96,15 +96,82 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]string{"status": "accepted"})
 }
 
+// handleBindExistingMember binds an already-active account in this household to
+// an unbound member profile. It is an admin-only variant of the invitation
+// endpoint; new accounts still use the normal invite-code path.
+func (a *API) handleBindExistingMember(w http.ResponseWriter, r *http.Request, p Principal, memberID, username string) {
+	if p.Role != "admin" {
+		writeErr(w, 403, "forbidden", "仅管理员可绑定已有账号")
+		return
+	}
+	if memberID == "" || username == "" {
+		writeErr(w, 400, "invalid_request", "请选择成员和已有账号")
+		return
+	}
+	unavailable := errors.New("成员或账号已绑定、不存在或不可用")
+	ctx := r.Context()
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		status, err := a.lockMember(r, tx, p.HouseholdID, memberID)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "active") {
+			return unavailable
+		}
+		if err != nil {
+			return err
+		}
+		var userID string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM users
+			WHERE household_id=? AND username=? AND status='active'`, p.HouseholdID, username).Scan(&userID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return unavailable
+		}
+		if err != nil {
+			return err
+		}
+		var memberBound, userBound bool
+		if err := tx.QueryRowContext(ctx, `SELECT
+			EXISTS(SELECT 1 FROM household_user_members WHERE member_id=?),
+			EXISTS(SELECT 1 FROM household_user_members WHERE user_id=?)`, memberID, userID).Scan(&memberBound, &userBound); err != nil {
+			return err
+		}
+		if memberBound || userBound {
+			return unavailable
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO household_user_members(user_id,member_id) VALUES(?,?)`,
+			userID, memberID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE household_invites SET decided_at=?
+			WHERE household_id=? AND member_id=? AND decided_at IS NULL`,
+			a.nowUTC(), p.HouseholdID, memberID); err != nil {
+			return err
+		}
+		return audit(ctx, tx, p, "bind_existing_member", "household_member", memberID, "{}")
+	})
+	if errors.Is(err, unavailable) {
+		writeErr(w, 409, "conflict", unavailable.Error())
+		return
+	}
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "bound", "member_id": memberID, "username": username})
+}
+
 func (a *API) handleIssueInvite(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
-		MemberID   string `json:"member_id"`
-		MemberName string `json:"member_name"`
-		Username   string
+		MemberID     string `json:"member_id"`
+		MemberName   string `json:"member_name"`
+		Username     string
+		BindExisting bool `json:"bind_existing"`
 	}
 	if decode(r, &in) != nil {
 		writeErr(w, 400, "invalid_request", "邀请码资料无效")
+		return
+	}
+	if in.BindExisting {
+		a.handleBindExistingMember(w, r, p, strings.TrimSpace(in.MemberID), strings.TrimSpace(in.Username))
 		return
 	}
 	in.MemberName = strings.TrimSpace(in.MemberName)

@@ -80,14 +80,14 @@
 
 | 方法 | 路径 | 鉴权 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/household/invitations` | 会话（`viewer` 写请求 403） | `member_id` 与 `member_name` 二选一、`username` 可空（指定登录名） | 201 `{code}`（明文邀请码只返回一次，落库保存哈希） | 400、403、404 档案已绑定/不可用 |
+| POST | `/household/invitations` | 会话（`viewer` 写请求 403；`bind_existing` 需 admin） | 普通邀请：`member_id` 与 `member_name` 二选一、`username` 可空（指定登录名）；已有账号绑定：`bind_existing:true` + `member_id` + `username` | 201 `{code}`（明文邀请码只返回一次，落库保存哈希）；绑定成功 200 `{status:"bound",member_id,username}` | 400、403、404 档案已绑定/不可用、409 已有账号或成员已绑定 |
 | GET | `/household/current` | 会话 | 无 | 200 `{id,name,currency,timezone}` | 401、404 |
-| GET | `/household/members` | 会话 | 无 | 200 `{items:[{id,name,status}],total}`（排除已删除） | 401 |
+| GET | `/household/members` | 会话 | 无 | 200 `{items:[{id,name,status,bound,user_id?,username?,role?}],total}`（排除已删除；`bound` 表示已绑定登录账号） | 401 |
 | POST | `/household/members` | 会话 | `name`（1–100 字） | 201 `{id,name,status:"active"}` | 400 |
 | DELETE | `/household/members/{id}` | 会话 | 无 | 200 `{id,status:"deleted"}`（软删除） | 404、409 `member_in_use`（已绑定登录、被邀请或被账务引用） |
 | POST | `/household/members/current` | 会话 | 空对象 `{}` 即可 | 200 `{id,name,status}`；缺失时自动创建并绑定当前用户 | 401 |
 
-说明：邀请默认 48 小时有效；审批通过后为申请人创建 `member` 账号并绑定成员档案。邀请接口在路由层只限制 `viewer` 写操作，代码未额外限定为家庭管理员。
+说明：邀请默认 48 小时有效；审批通过后为申请人创建 `member` 账号并绑定成员档案。邀请接口在路由层只限制 `viewer` 写操作；`bind_existing` 变体仅管理员可用，用于把本家庭已有账号绑定到未绑定成员，并撤销该成员的未决邀请。
 
 ## 5. 管理员（11 条，均需 `role=admin`）
 

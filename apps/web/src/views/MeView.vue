@@ -2,7 +2,6 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ChevronRight } from 'lucide-vue-next'
-import AdminInvites from '../components/AdminInvites.vue'
 import AdminUsers from '../components/AdminUsers.vue'
 import AuditLogs from '../components/AuditLogs.vue'
 import BudgetEditor from '../components/BudgetEditor.vue'
@@ -25,7 +24,6 @@ const membersOpen = ref(false)
 const categoryOpen = ref(false)
 const budgetOpen = ref(false)
 const exportOpen = ref(false)
-const invitesOpen = ref(false)
 const usersOpen = ref(false)
 const auditOpen = ref(false)
 const logoutOpen = ref(false)
@@ -119,9 +117,6 @@ async function profileSaved() {
 
     <nav v-if="isAdmin" class="me-menu admin-menu" aria-label="管理员菜单">
       <h2 class="section-title">管理员</h2>
-      <button type="button" class="me-menu-item" @click="invitesOpen = true">
-        <span>邀请与审批</span><span class="me-menu-meta"><ChevronRight :size="16" /></span>
-      </button>
       <button type="button" class="me-menu-item" @click="usersOpen = true">
         <span>用户管理</span><span class="me-menu-meta"><ChevronRight :size="16" /></span>
       </button>
@@ -138,7 +133,6 @@ async function profileSaved() {
     <CategoryEditor v-if="categoryOpen" @close="categoryOpen = false" />
     <BudgetEditor v-if="budgetOpen" :month="month" @close="budgetOpen = false" @saved="budgetOpen = false" />
     <ExportMenu v-if="exportOpen" :from="from" :to="to" @close="exportOpen = false" />
-    <AdminInvites v-if="invitesOpen" @close="invitesOpen = false" />
     <AdminUsers v-if="usersOpen" @close="usersOpen = false" />
     <AuditLogs v-if="auditOpen" @close="auditOpen = false" />
     <ConfirmSheet :open="logoutOpen" title="要退出登录吗？" message="退出后需要重新登录才能查看家庭账目。"
