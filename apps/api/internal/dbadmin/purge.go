@@ -564,7 +564,12 @@ func assertIdentityKept(before, after Snapshot) error {
 // Unclassified reports tables that are neither purged nor protected, so the
 // operator notices schema drift instead of silently keeping unknown data.
 func (snap Snapshot) Unclassified(all []string) []string {
-	known := map[string]bool{"schema_migrations": true}
+	known := map[string]bool{
+		"schema_migrations": true,
+		// SQLite's own bookkeeping table for AUTOINCREMENT; it holds no
+		// application data and does not exist on MySQL.
+		"sqlite_sequence": true,
+	}
 	for _, table := range PurgeTableSet() {
 		known[table] = true
 	}

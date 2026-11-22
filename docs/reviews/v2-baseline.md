@@ -114,3 +114,24 @@
 5. 信用卡口径文案断言与实现措辞不一致（「仅记录欠款」→「只记录欠款」），按实现修正断言。
 
 另：`MailSettings.vue` 移除了已退役的家庭公告表单与 `/household/mail/announcements` 调用，避免调用不存在的接口。
+
+### 7.5 V1 模式清理演练（本机，真实 V1 schema）
+
+生产库目前仍是 V1（`GET /api/v1/readyz` 返回 `mysql_ping_and_migrations`、`phase=v0.1`），而 `tinynest-admin` 是在 V2 代码库中构建的。为确认它能在 V1 schema 上安全运行，本机做了一次完整演练：
+
+1. 从 `f9bf038` 建临时工作树，用旧代码的嵌入迁移生成真实的 V1 SQLite 库（迁移版本 1–20）。
+2. 灌入覆盖各模块的合成数据：身份表 11 张 + 业务表 38 行（含自引用 `journal_entries.reversal_of`、`categories.parent_id`、`refunds`、`credit_payments`、`installment_payments`、`debt_payments`、`investment_*`、`schedule_due_items` 等）。
+3. 用**新构建的** `tinynest-admin` 依次执行 `baseline-capture` → `purge -dry-run` → `purge -execute` → `verify -baseline`。
+
+结果：
+
+| 步骤 | 结果 |
+| --- | --- |
+| `baseline-capture` | 读取 V1 迁移版本 `[1..20]`、借贷平衡、11 张身份表计数，写出基线 JSON |
+| `purge -dry-run` | 待删 41 行；自动跳过 V1 不存在的 `budgets`、`stock_watch`、`stock_quotes` 并明确列出 |
+| `purge -execute` | 单事务提交成功，`✓ 清理完成并已提交` |
+| `verify -baseline` | `✓ 校验通过：业务表全空，身份与权限数据与 baseline 一致` |
+| 独立复核（python sqlite3） | 业务行剩余 0，`journal_lines` 0 行，借贷合计 0；身份表 11 张计数不变 |
+
+结论：清理工具可在**当前 V1 生产 schema** 上直接运行，无需先升级数据库；V2 新增表会自动跳过。生产执行仍缺 B 机 shell/MySQL 访问，未执行，标 UNVERIFIED。
+
