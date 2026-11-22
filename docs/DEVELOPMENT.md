@@ -1,6 +1,6 @@
 # TinyNest · 小家 · 开发与本地验证
 
-**当前基线：V2 记账重置**。保留身份/权限/家庭/邮件与复式记账内核（含信用卡账单日/还款日与只读还款计划）；信用账单、分期、负债、投资、导入等 V1 模块已退役。唯一视觉主题是 **A · 奶油团子**（见 [设计规范](design-system.md)）。
+**当前基线：V2 记账重置**。保留身份/权限/家庭/邮件与复式记账内核（含信用卡账单日/还款日、只读还款计划与 pfm 导入的只读证券/理财估值快照）；信用账单、分期、负债、V1 投资交易、导入等模块已退役。唯一视觉主题是 **A · 奶油团子**（见 [设计规范](design-system.md)）。
 
 当前进度、已退役模块与未验证项见 [当前进度](project-status.md)。V1/Phase 0 报告仅作历史归档（[V0.1 实施报告](reviews/v1-implementation-report.md)、[Phase 0 执行报告](execution-report.md)）。
 
@@ -38,7 +38,7 @@ npm.cmd run test:e2e
 先阅读 `apps/api/.env.example`（示例配置，勿提交真实值）。本地用 SQLite 时不需要 MySQL 与邮件密钥；`TINYNEST_COOKIE_SECURE` **必须显式**设置。
 
 ```bash
-# 终端 1：Go API（启动时自动应用 V2 迁移 001–004）
+# 终端 1：Go API（启动时自动应用 V2 迁移 001–005）
 cd apps/api
 mkdir -p data
 export TINYNEST_DATA_DIR=./data

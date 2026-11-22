@@ -33,7 +33,7 @@ PC 浏览器 / iPhone Safari 或主屏 PWA
 | --- | --- | --- |
 | Web 客户端 | `apps/web/` | Vue 3 + TypeScript + Vite + vue-router 4；PWA；只请求相对路径 `/api/v1/*` |
 | API 服务 | `apps/api/cmd/server` | 组合根：打开数据库 → 执行迁移 → 注入 readiness → 注册路由 → 启动邮件 worker |
-| 业务包 | `internal/api` | 55 条业务路由、认证/CSRF/限流中间件、记账、统计、预算、信用卡还款计划派生、身份/家庭/邮件 handler |
+| 业务包 | `internal/api` | 55 条业务路由、认证/CSRF/限流中间件、记账、统计、预算、信用卡还款计划派生、只读投资估值投影、身份/家庭/邮件 handler |
 | 账务内核 | `internal/ledger`、`internal/money` | 借贷平衡校验、科目编码、业务分录、冲正、整数分金额 |
 | 数据层 | `internal/db` | SQLite/MySQL 连接、单一迁移器、分录持久化、默认分类 |
 | 运维工具 | `cmd/tinynest-admin`、`internal/dbadmin` | 生产清理、校验、身份导出导入；与本文件描述的数据访问共用 `internal/platform/config` |
@@ -54,7 +54,7 @@ PC 浏览器 / iPhone Safari 或主屏 PWA
 
 - Go 模块化单体：`net/http` + `modernc.org/sqlite`（纯 Go、无 CGO）或 `go-sql-driver/mysql`；SQLite 启用 WAL、`foreign_keys=ON`、`busy_timeout=5000`、单连接单写。
 - SQLite 与 MySQL 使用同一套迁移器（`internal/db/migrate.go`）与同一套业务代码；方言差异只在 SQL 语法分支（upsert、`FOR UPDATE`、DDL）。
-- 两个方言当前各有 4 个迁移文件：`001_core.sql`（21 张表：身份/家庭/邮件/审计/复式内核/`schema_meta`）、`002_bookkeeping.sql`（4 张表：分类/账户/流水/预算）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日配置列）。运行时另有代码创建的 `schema_migrations`，共 26 张。
+- 两个方言当前各有 5 个迁移文件：`001_core.sql`（21 张表：身份/家庭/邮件/审计/复式内核/`schema_meta`）、`002_bookkeeping.sql`（4 张表：分类/账户/流水/预算）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日配置列）、`005_investments.sql`（证券/理财估值快照 2 张表）。运行时另有代码创建的 `schema_migrations`，共 28 张。
 - 迁移器按文件名版本升序应用，记录 SHA-256 校验和并校验连续性；SQLite 整文件单事务，MySQL 逐条执行且文件必须可重跑。
 - **基线守卫**：`schema_meta.baseline` 缺失或不是 `v2`、出现不认识的版本、校验和不一致时启动直接失败，中文错误指向 [新库切换手册](plans/v2-cutover-runbook.md)。V2 不支持 V1 旧库原地升级。
 - 默认分类由 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()` 幂等写入；不再有 SQL 种子文件与启动期 `UPDATE`。
@@ -82,7 +82,7 @@ PC 浏览器 / iPhone Safari 或主屏 PWA
 | --- | --- |
 | 保留 | 初始化、认证/会话/CSRF、家庭与成员、邀请与审批、管理员与审计、托管邮箱（SMTP + 邮箱验证/找回 + 发信队列）、站点管理员 |
 | 保留 | 复式内核、分类、账户（`cash`/`credit`，含账单日/还款日配置）、流水（支出/收入/转账）、统计、预算、信用卡还款计划（只读派生）、前端五界面、PWA、前端 xlsx 导出 |
-| 退役 | 信用账单、分期、负债、到期调度、投资、股票自选、账单导入、信用账单邮件（IMAP）、项目、仪表盘、退款、家庭公告 |
+| 退役 | 信用账单、分期、负债、到期调度、V1 投资交易、股票自选、账单导入、信用账单邮件（IMAP）、项目、仪表盘、退款、家庭公告；仅保留 pfm 导入的只读证券/理财估值快照 |
 
 ## 8. 尚未验证
 

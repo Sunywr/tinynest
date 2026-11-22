@@ -1,6 +1,6 @@
 # 运行与部署指引（服务器 A/B 完全独立）
 
-> 适用版本：**V2 记账重置**。数据层为 V2 基线：两个方言各 4 个迁移文件、运行时 26 张表；不支持 V1 旧库原地升级。
+> 适用版本：**V2 记账重置**。数据层为 V2 基线：两个方言各 5 个迁移文件、运行时 28 张表；不支持 V1 旧库原地升级。
 > 生产清理与新库切换由用户执行，步骤与证据要求以 [生产清理手册](plans/v2-prod-purge-runbook.md) 与 [新库切换手册](plans/v2-cutover-runbook.md) 为准。
 > 本地开发见 [DEVELOPMENT.md](DEVELOPMENT.md)，架构与边界见 [architecture.md](architecture.md)，安全底线见 [security.md](security.md)。
 

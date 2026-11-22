@@ -11,12 +11,12 @@
 首先完整阅读：
 - AGENTS.md（V2 守则，最高优先级）
 - docs/plans/v2-bookkeeping-reset.md（P0–P5 总计划）、docs/plans/v2-bookkeeping-module-spec.md（模块与 API 契约冻结稿）、docs/plans/v2-platform-optimization.md
-- docs/accounting-rules-v2.md（分录规则与统计口径）、docs/api-v2.md（55 条业务路由契约）、docs/er-v2.md（25 张业务表与冲正不变量）
+- docs/accounting-rules-v2.md（分录规则与统计口径）、docs/api-v2.md（55 条业务路由契约）、docs/er-v2.md（27 张业务表与冲正不变量）
 - docs/architecture.md、docs/DEVELOPMENT.md、docs/security.md、docs/deployment.md、docs/acceptance.md
 - docs/plans/v2-prod-purge-runbook.md 与 docs/plans/v2-cutover-runbook.md（生产清理与切换，用户执行）
 - docs/reviews/v2-baseline.md（V2 基线与 P5 结果）
 
-当前状态：V2 已完成代码与文档，保留身份/权限/家庭/邮件与复式记账内核（分类、账户、流水、统计、预算、前端五界面）；信用账单、分期、负债、投资、导入、项目、仪表盘、退款、家庭公告已退役。生产库清理与新库切换尚未执行，依赖生产、真机与外部网络的事项一律标 UNVERIFIED。
+当前状态：V2 已完成代码与文档，保留身份/权限/家庭/邮件、复式记账内核（分类、账户、流水、统计、预算、前端五界面）、信用卡还款计划与 pfm 导入的只读证券/理财估值快照；信用账单、分期、负债、V1 投资交易、导入、项目、仪表盘、退款、家庭公告已退役。生产库清理与新库切换尚未执行，依赖生产、真机与外部网络的事项一律标 UNVERIFIED。
 
 必须遵守：
 1. 账务唯一事实来源是 journal_entries + journal_lines；不得直接改余额；已入账分录不 UPDATE/DELETE，纠错走冲正分录；删除流水也是冲正。

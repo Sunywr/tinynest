@@ -60,6 +60,39 @@ func TestMigrateFromZeroAppliesEveryVersion(t *testing.T) {
 	}
 }
 
+func TestInvestmentSnapshotTablesAreUsable(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	if _, err := database.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO households(id,name) VALUES('hh_inv','投资测试')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO investment_accounts
+		(id,household_id,kind,name,institution,cash_minor,dividends_minor)
+		VALUES('inv_sec','hh_inv','security','证券账户','测试证券',500000,1000)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO investment_holdings
+		(id,household_id,account_id,symbol,name,asset_class,asset_label,quantity_micros,price_micros,
+		 cost_minor,market_value_minor,unrealized_pnl_minor)
+		VALUES('inv_h1','hh_inv','inv_sec','600900','长江电力','stock','股票',1000000,120000,
+		 100000,120000,20000)`); err != nil {
+		t.Fatal(err)
+	}
+	var cash, market, pnl int64
+	if err := database.QueryRowContext(ctx, `
+		SELECT ia.cash_minor, h.market_value_minor, h.unrealized_pnl_minor
+		FROM investment_accounts ia JOIN investment_holdings h ON h.account_id=ia.id
+		WHERE ia.household_id='hh_inv'`).Scan(&cash, &market, &pnl); err != nil {
+		t.Fatal(err)
+	}
+	if cash != 500000 || market != 120000 || pnl != 20000 {
+		t.Fatalf("investment snapshot values = %d/%d/%d, want 500000/120000/20000", cash, market, pnl)
+	}
+}
+
 func TestCreditCycleColumnsAreNullable(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()

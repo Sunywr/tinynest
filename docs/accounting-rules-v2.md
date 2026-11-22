@@ -1,12 +1,14 @@
 # TinyNest V2 · 账务规则与统计口径
 
 > 依据代码：`apps/api/internal/ledger/rules.go`、`internal/ledger/subjects.go`、`internal/ledger/entry.go`、
-> `internal/api/transactions.go`、`internal/api/accounts.go`、`internal/api/stats.go`、`internal/db/journal.go`。
-> 本文只描述**当前代码真实存在**的规则；退役模块的旧规则（信用账单、分期、投资、退款、拆分等）不在 V2 范围内。
+> `internal/api/transactions.go`、`internal/api/accounts.go`、`internal/api/investments.go`、`internal/api/stats.go`、`internal/db/journal.go`。
+> 本文只描述**当前代码真实存在**的规则；退役模块的旧规则（信用账单、分期、投资交易、退款、拆分等）不在 V2 范围内。
+> 2026-11-22 起另有 pfm 导入的只读证券/理财估值快照；它只用于资产页/图表的估值展示，不写分录，不改变下述复式账务规则。
 
 ## 1. 三条铁律
 
 1. **单一事实来源**：`journal_entries` + `journal_lines` 是唯一账务事实；`transactions` / `accounts` 只表达业务意图与状态，余额与统计一律从分录聚合重建，页面不维护余额。
+   **例外**：`investment_accounts` / `investment_holdings` 是 pfm 导入的只读估值快照；资产页“投资市值”和“含投资市值的净资产”是明确标注的估值视图，不是账本余额，不参与复式记账、转账或流水。
 2. **单事务提交**：一条流水行、其全部分录行与审计日志必须在同一个数据库事务内写入或同时回滚；不允许只写流水不写分录。
 3. **不可变 + 冲正**：已入账分录不 UPDATE、不 DELETE；纠错 = 生成借贷取反的冲正分录（`reversal_of`）+ 新建正确流水；删除流水同样只写冲正。
 
@@ -140,14 +142,14 @@
 
 | 项 | V0.1（历史） | V2（当前） |
 | --- | --- | --- |
-| 账户类型 | 现金/证券/理财/信用卡/信用工具等 | 仅 `cash` / `credit` |
+| 账户类型 | 现金/证券/理财/信用卡/信用工具等 | 记账账户仅 `cash` / `credit`；另有只读证券/理财估值快照（非记账账户） |
 | 流水拆分 | `transaction_splits`，多分类分摊 | 单分类，无拆分行 |
 | 退款 | `/refunds` 路由与 `refunds` 表 | 退役；内核构造器未暴露 |
-| 信用账单/分期/负债/投资 | 有独立表与规则 | 整套退役 |
+| 信用账单/分期/负债/投资交易 | 有独立表与规则 | 整套退役；仅保留 pfm 只读估值快照 |
 | 信用卡账单日/还款日 | 独立 `credit_instruments` + 账单表 | 仅 `accounts` 两个可空配置列 + 只读派生计划，无账单表/分期/利息 |
 | 分类 | 两级，可设 `parent_id` | 单层，无 `parent_id` |
-| 统计科目 | 含利息、手续费、保险、分红、投资损益等 | 仅 `4010:%` 收入、`5010:%` 支出；还款计划单独派生 |
-| 迁移 | 多版本增量 | 单一迁移器 + `baseline=v2` 基线重置（当前 001–004） |
+| 统计科目 | 含利息、手续费、保险、分红、投资损益等 | 仅 `4010:%` 收入、`5010:%` 支出；还款计划与投资收益单独只读派生 |
+| 迁移 | 多版本增量 | 单一迁移器 + `baseline=v2` 基线重置（当前 001–005） |
 
 ## 11. 相关代码与文档
 
@@ -155,5 +157,6 @@
 - 流水写入/更正/删除：`apps/api/internal/api/transactions.go`；账户与期初：`internal/api/accounts.go`。
 - 统计与预算：`apps/api/internal/api/stats.go`。
 - 信用卡还款计划：`apps/api/internal/api/credit_debt.go`（只读派生）；账户配置列在 `internal/api/accounts.go`。
+- 证券/理财估值快照：`apps/api/internal/api/investments.go`（只读投影）；表在 `005_investments.sql`。
 - 余额重建：`apps/api/internal/db/journal.go`。
 - 数据模型：[er-v2.md](er-v2.md)；接口契约：[api-v2.md](api-v2.md)；迁移与基线：[DEVELOPMENT.md](DEVELOPMENT.md) §5。

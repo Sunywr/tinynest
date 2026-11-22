@@ -66,6 +66,83 @@ function writeHeaders(csrf: string) {
   return { 'X-CSRF-Token': csrf, 'Idempotency-Key': uid('idem') }
 }
 
+/** Deterministic investment projection for UI-only asset/chart tests. */
+function sampleInvestmentOverview() {
+  return {
+    total_cost_minor: 50000,
+    total_holdings_value_minor: 60000,
+    total_cash_minor: 10000,
+    total_market_value_minor: 70000,
+    total_unrealized_pnl_minor: 10000,
+    total_dividends_minor: 2000,
+    total_return_minor: 12000,
+    total_return_bp: 2400,
+    total_dividend_yield_bp: 400,
+    holding_count: 1,
+    account_count: 1,
+    accounts: [{
+      id: 'inv_1',
+      kind: 'security',
+      name: '证券账户 · 测试证券',
+      institution: '测试证券',
+      owner_member_id: 'mem_test',
+      owner_name: '爸爸',
+      cash_minor: 10000,
+      holdings_value_minor: 60000,
+      market_value_minor: 70000,
+      cost_minor: 50000,
+      unrealized_pnl_minor: 10000,
+      dividends_minor: 2000,
+      return_minor: 12000,
+      return_bp: 2400,
+      dividend_yield_bp: 400,
+      holding_count: 1,
+      holdings: [{
+        id: 'h1',
+        symbol: '600900',
+        name: '长江电力',
+        asset_class: 'stock',
+        asset_label: '股票',
+        quantity_micros: 1000000,
+        price_micros: 60000,
+        cost_minor: 50000,
+        market_value_minor: 60000,
+        unrealized_pnl_minor: 10000,
+        return_bp: 2000,
+        dividends_minor: 2000,
+        total_return_minor: 12000,
+        total_return_bp: 2400,
+        dividend_yield_bp: 400,
+        last_trade_on: '2026-11-01',
+        last_trade_pnl_minor: 1000,
+        last_trade_return_bp: 200,
+        weight_bp: 10000,
+      }],
+    }],
+    by_owner: [{
+      owner_member_id: 'mem_test', owner_name: '爸爸', market_value_minor: 70000,
+      cost_minor: 50000, return_minor: 12000, return_bp: 2400,
+      dividends_minor: 2000, dividend_yield_bp: 400, holding_count: 1,
+    }],
+    by_kind: [{
+      kind: 'security', label: '证券', market_value_minor: 70000, cost_minor: 50000,
+      return_minor: 12000, return_bp: 2400, dividends_minor: 2000,
+      dividend_yield_bp: 400, holding_count: 1,
+    }],
+    by_asset_class: [{
+      asset_class: 'stock', label: '股票', market_value_minor: 60000, cost_minor: 50000,
+      return_minor: 12000, return_bp: 2400, dividends_minor: 2000,
+      dividend_yield_bp: 400, weight_bp: 10000, holding_count: 1,
+    }],
+    top_holdings: [{
+      id: 'h1', symbol: '600900', name: '长江电力', account_id: 'inv_1',
+      account_name: '证券账户 · 测试证券', owner_member_id: 'mem_test', owner_name: '爸爸',
+      market_value_minor: 60000, total_return_minor: 12000,
+      total_return_bp: 2400, dividend_yield_bp: 400,
+    }],
+  }
+}
+
 async function ensureCategory(request: APIRequestContext, csrf: string, kind: 'expense' | 'income'): Promise<{ id: string; name: string }> {
   const res = await request.get('/api/v1/categories', { headers: { 'X-CSRF-Token': csrf } })
   expect(res.ok()).toBeTruthy()
@@ -550,6 +627,27 @@ test.describe('D 图表', () => {
     for (let i = 0; i < 15; i += 1) await page.getByRole('button', { name: '下个月' }).click()
     await expect(page.getByRole('status').filter({ hasText: '没有支出数据' })).toBeVisible()
   })
+
+  test('D06 投资收益视图展示总览、占比与持仓排行', async ({ page }) => {
+    await signIn(page)
+    await page.route(/\/api\/v1\/accounts\?include=investments/, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], investments: sampleInvestmentOverview() }),
+      })
+    })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/charts')
+    await page.getByRole('button', { name: '投资', exact: true }).click()
+    await expect(page.getByRole('region', { name: '投资收益总览' })).toContainText('¥700.00')
+    await expect(page.getByText('当前持仓累计 · 含已导入股息')).toBeVisible()
+    await expect(page.getByRole('region', { name: '证券与理财占比' })).toBeVisible()
+    await expect(page.getByRole('region', { name: '按成员收益' })).toContainText('爸爸')
+    await expect(page.getByRole('region', { name: '持仓收益排行' })).toContainText('长江电力')
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+  })
 })
 
 // ------------------------------------------------------------ E 资产
@@ -560,7 +658,8 @@ test.describe('E 资产', () => {
     await ensureAccount(page.request, csrf, 'cash')
     await page.goto('/assets')
     await expect(page.getByTestId('net-worth')).toContainText('¥')
-    await expect(page.locator('.networth-split')).toContainText('资产')
+    await expect(page.locator('.networth-split')).toContainText('现金')
+    await expect(page.locator('.networth-split')).toContainText('投资')
     await expect(page.locator('.networth-split')).toContainText('负债')
   })
 
@@ -711,6 +810,38 @@ test.describe('E 资产', () => {
     const meRes = await page.request.get('/api/v1/auth/me')
     const me = await meRes.json()
     expect(me.payday).toBe(15)
+  })
+
+  test('E08 投资资产卡片展示归属、市值和持仓明细', async ({ page }) => {
+    await signIn(page)
+    await page.route(/\/api\/v1\/accounts\?include=credit_debt(,|%2C)investments/, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [],
+          credit_debt: {
+            today: '2026-11-22', payday: null, next_payday: null, days_until_payday: null,
+            complete: false, unconfigured_cards: 0, cash_available_minor: 0,
+            cash_needed_minor: null, cash_gap_minor: null, total_debt_minor: 0,
+            overdue_minor: 0, unbilled_minor: 0, cards: [],
+          },
+          investments: sampleInvestmentOverview(),
+        }),
+      })
+    })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/assets')
+    const panel = page.getByRole('region', { name: '证券与理财资产' })
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText('证券账户 · 测试证券')
+    await expect(panel).toContainText('爸爸')
+    await expect(page.getByTestId('net-worth')).toHaveText('¥700.00')
+    await panel.getByText('持仓 1 项').click()
+    await expect(panel).toContainText('长江电力')
+    await expect(panel).toContainText('上次交易快照 2026-11-01')
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
   })
 })
 

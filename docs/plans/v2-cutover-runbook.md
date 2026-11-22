@@ -84,7 +84,7 @@ SELECT `value` FROM schema_meta WHERE `key` = 'baseline';  -- 期望 v2
 SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema = '<新库名>';
 ```
 
-期望：`baseline=v2`；新库表数符合 V2 目标 25 张业务表（另加迁移账本 `schema_migrations`，运行时 26 张；逐表清单见模块规格 §6）；启动日志无迁移错误与解密错误。若新库非空或 baseline 与二进制不符，启动应被拒绝——此时不得绕过守卫，必须处理或重建新库。
+期望：`baseline=v2`；新库表数符合 V2 目标 27 张业务表（另加迁移账本 `schema_migrations`，运行时 28 张；逐表清单见模块规格 §6）；启动日志无迁移错误与解密错误。若新库非空或 baseline 与二进制不符，启动应被拒绝——此时不得绕过守卫，必须处理或重建新库。
 
 ### 步骤 4：停止旧服务
 

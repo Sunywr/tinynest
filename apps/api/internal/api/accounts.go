@@ -15,10 +15,17 @@ import (
 
 func (a *API) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	include := r.URL.Query().Get("include")
-	if include != "" && include != "credit_debt" {
-		writeErr(w, 400, "invalid_request", "include 仅支持 credit_debt")
-		return
+	includeSet := map[string]bool{}
+	for _, raw := range strings.Split(r.URL.Query().Get("include"), ",") {
+		token := strings.TrimSpace(raw)
+		if token == "" {
+			continue
+		}
+		if token != "credit_debt" && token != "investments" {
+			writeErr(w, 400, "invalid_request", "include 仅支持 credit_debt/investments")
+			return
+		}
+		includeSet[token] = true
 	}
 	rows, err := a.DB.QueryContext(r.Context(),
 		`SELECT `+accountColumns+` FROM accounts WHERE household_id=? AND status<>'deleted' ORDER BY created_at,id`,
@@ -64,13 +71,21 @@ func (a *API) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	body := map[string]any{"items": items}
-	if include == "credit_debt" {
+	if includeSet["credit_debt"] {
 		plan, err := a.creditDebtPlan(r.Context(), p.HouseholdID, p.UserID, a.businessToday())
 		if err != nil {
 			internalErr(w, err)
 			return
 		}
 		body["credit_debt"] = plan
+	}
+	if includeSet["investments"] {
+		overview, err := a.investmentOverview(r.Context(), p.HouseholdID)
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		body["investments"] = overview
 	}
 	writeJSON(w, 200, body)
 }

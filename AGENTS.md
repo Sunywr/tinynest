@@ -1,9 +1,10 @@
 # TinyNest / 小家 · 任意 Coding Agent 规范
 
 > **状态说明（2026-11-22）**：本文件已从 V0.1 规范升级为 **V2 记账重置** 的运维手册。
-> V2 删除了信用账单、分期、负债、到期调度、投资、股票自选、账单导入、信用账单邮件、项目、仪表盘与退款模块，
-> 只保留身份/权限/家庭/邮件、复式记账内核与 V2 记账 API。当前新增的「信用卡还款计划」只是 `accounts` 上
-> 账单日/还款日配置 + 只读派生统计，不恢复 V1 的 `credit_statements` 账单表、分期或利息。生产数据库**不做 V1 原地升级**，
+> V2 删除了信用账单、分期、负债、到期调度、投资交易、股票自选、账单导入、信用账单邮件、项目、仪表盘与退款模块，
+> 只保留身份/权限/家庭/邮件、复式记账内核、信用卡还款计划与 **只读的证券/理财估值快照**。该快照从 pfm 导入，
+> 使用独立的 `investment_accounts` / `investment_holdings` 表，不写分录、不参与转账，也不恢复 V1 投资交易/股票自选模块。
+> 当前新增的「信用卡还款计划」只是 `accounts` 上账单日/还款日配置 + 只读派生统计，不恢复 V1 的 `credit_statements` 账单表、分期或利息。生产数据库**不做 V1 原地升级**，
 > 清理与切换由用户按 [生产清理手册](docs/plans/v2-prod-purge-runbook.md) 与
 > [新库切换手册](docs/plans/v2-cutover-runbook.md) 执行；未执行前相关结论一律 `UNVERIFIED`。
 > Phase 0 与 V0.1 只作为历史归档，不再约束当前代码；历史交付见
@@ -24,7 +25,7 @@
 
 1. `README.md`（产品定位与当前状态）、`docs/project-status.md`（进度与实测数字）、`docs/DEVELOPMENT.md`（启动与验证）。
 2. `docs/plans/v2-bookkeeping-reset.md`（P0–P5 总计划）、`docs/plans/v2-bookkeeping-module-spec.md`（模块与 API 契约冻结稿）、`docs/plans/v2-platform-optimization.md`（三端优化计划）。
-3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（55 条业务路由契约）、`docs/er-v2.md`（25 张业务表与冲正不变量）。
+3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（55 条业务路由契约）、`docs/er-v2.md`（27 张业务表与冲正不变量）。
 4. `docs/plans/v2-prod-purge-runbook.md`（生产清理）、`docs/plans/v2-cutover-runbook.md`（新库切换）；执行前逐条核对。
 5. `docs/architecture.md`（双服务器边界）、`docs/security.md`（安全底线）、`docs/deployment.md`（部署与迁移）、`docs/acceptance.md`（验收清单）。
 6. 仍然有效：`docs/design-system.md`（**A · 奶油团子**，唯一主题，不得提供其他风格）、`assets/brand/README.md`（唯一批准原图 SHA-256，严禁改绘/重新生成图标）、`docs/reviews/v2-baseline.md`（V2 基线与 P5 结果）。
@@ -43,6 +44,7 @@
 
 - 金额一律整数分（`*_minor`），禁止浮点参与计算；API 与数据库都不存元。
 - `journal_entries` / `journal_lines` 是唯一账务事实来源；账户余额、统计与净资产一律从分录聚合重建，禁止直接改余额。
+  **例外（2026-11-22 起）**：`investment_accounts` / `investment_holdings` 是从 pfm 导入的只读估值快照，不写分录；资产页的“投资市值”及含投资的净资产是明确标注的估值视图，不是账本余额。投资账户不参与转账、不生成流水，不能据此反推账务事实。
 - 一条业务记录（`transactions` 行）、其全部分录行与审计日志必须在**同一个数据库事务**内写入或同时回滚。
 - 已入账分录不可变（不 UPDATE / DELETE）；纠错 = 生成借贷取反的冲正分录（`reversal_of`）+ 新建正确业务记录；删除流水同样只写冲正，不物理删除。
 - 冲正沿用原 `occurred_on`，保证同一统计期间净额归零；已冲正流水不可再次冲正。
@@ -67,10 +69,10 @@
 
 - V2 是一次**基线重置**：不支持 V1 旧库原地升级。数据库必须由 V2 二进制在空库上建立 `schema_meta.baseline=v2`；旧库按切换手册新建库 + 导入身份数据，禁止把 V2 二进制指向旧库。
 - **不得绕过 baseline 守卫**：`internal/db/migrate.go` 在 `schema_meta.baseline` 缺失或不为 `v2`、出现不认识的迁移版本、校验和不一致时拒绝启动。不要通过改守卫、改 `schema_meta`、删迁移账本等方式强行启动。
-- 两个方言当前各有 4 个迁移文件：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张表）、`003_category_style.sql`（分类颜色）与 `004_credit_cycle.sql`（信用卡账单日/还款日），嵌入在 `internal/db/migrations/`（SQLite）与 `internal/db/mysql/`（MySQL）。
+- 两个方言当前各有 **5 个迁移文件**：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张表）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）与 `005_investments.sql`（证券/理财估值快照 2 张表），嵌入在 `internal/db/migrations/`（SQLite）与 `internal/db/mysql/`（MySQL）。
+- 数据库只在后端 B 机；V2 运行时 28 张表（27 张业务表 + 迁移账本 `schema_migrations`）。
 - SQLite 迁移文件与账本行在同一事务执行；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重复执行**。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；确需 `ALTER TABLE` 时用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法），不能裸写会重复失败的 ALTER。
 - 默认分类来自 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()`，不要再加 SQL 种子文件或启动期 `UPDATE`。
-- 数据库只在后端 B 机；V2 运行时 26 张表（25 张业务表 + 迁移账本 `schema_migrations`）。
 
 ### 生产清理 CLI（`tinynest-admin`）安全规则
 
@@ -94,10 +96,11 @@
 | --- | --- |
 | 保留 | 初始化与认证、会话/CSRF、家庭成员与邀请审批、管理员与审计日志、托管邮箱 SMTP 与邮箱验证/找回、站点管理员 |
 | 保留 | 复式记账内核、`categories`、`accounts`（`cash` / `credit`，含可空账单日/还款日配置）、`transactions`（支出/收入/转账）、`stats`（summary / categories / daily / monthly）、`budgets`、信用卡还款计划（`GET /accounts?include=credit_debt` 只读派生） |
+| 保留 | 只读证券/理财估值快照：`investment_accounts` / `investment_holdings`，经 `GET /accounts?include=investments` 投影；不写分录、不参与转账 |
 | 保留 | 前端五界面：账单 / 记账面板 / 图表 / 资产 / 我的；账户行内转账；前端 xlsx 导出；PWA |
-| 退役 | 信用账单、分期、负债、到期调度、投资、股票自选、账单导入、信用账单邮件（IMAP）、项目、仪表盘、退款、家庭公告 |
+| 退役 | 信用账单、分期、负债、到期调度、**V1 投资交易**、股票自选、账单导入、信用账单邮件（IMAP）、项目、仪表盘、退款、家庭公告 |
 
-退役模块的路由、视图、测试与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。
+退役模块的路由、视图、测试与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。唯一例外是上述只读投资估值快照：它只是 pfm 导入的展示数据，不提供买卖、转账、估值重算或已实现收益账务。
 
 ## Phase 0（历史，仅存档，不再约束当前代码）
 

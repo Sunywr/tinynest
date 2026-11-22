@@ -522,7 +522,7 @@ V2 账户口径（必须如实标注在界面上）：
 | `schema_migrations` | 迁移版本记录 |
 | `schema_meta` | 基线元数据，`baseline=v2` |
 
-不进入 V2 的表（移除）：`transaction_splits`、`refunds`、`projects`，以及全部信用、分期、负债、投资、账单导入、股票、邮件账单相关表（完整分组见清理手册 §4.2）。V2 目标表数合计 25 张业务表（运行时 26 张，含 `schema_migrations`）。
+不进入 V2 的表（移除）：`transaction_splits`、`refunds`、`projects`，以及全部信用、分期、负债、V1 投资交易、账单导入、股票、邮件账单相关表（完整分组见清理手册 §4.2）。V2 目标表数合计 27 张业务表（运行时 28 张，含 `schema_migrations`）；其中 2 张是 2026-11-22 扩展的只读投资估值快照。
 
 ### 6.2 新增表 DDL
 
@@ -595,6 +595,7 @@ CREATE TABLE schema_meta (
 
 - `categories` 为单层分类（`level=1`），移除 `parent_id` 与二级分类。
 - `accounts.kind` 仅 `cash` | `credit`；信用卡是负债账户，`ledger_code` 关联保留的 `ledger_accounts`；`statement_day` / `due_day` 可空、仅信用卡使用，不建账单表。
+- 2026-11-22 扩展：`investment_accounts` / `investment_holdings` 只保存 pfm 导入的证券/理财估值快照，不写分录、不参与转账；资产页的投资市值与含投资净资产必须标注为估值视图。
 - `transactions` 的 `category_id` 仅支出 / 收入使用；转账时为空，使用 `account_id` 与 `to_account_id`。
 - `transactions.idempotency_key` 与 `household_id` 组合唯一，重复提交返回同一结果。
 - 表之间不新增 `ON DELETE` 级联，删除顺序显式处理（与现状一致，避免隐式误删）。
@@ -602,7 +603,16 @@ CREATE TABLE schema_meta (
 
 ### 6.3 表数目标
 
-V2 目标表数为 25（55 → 25，运行时 26）。逐表清单：`001_core.sql` 21 张（身份 14 张、审计 1 张、邮件/元数据 2 张、复式内核 4 张，其中 `schema_meta` 为基线元数据）＋ `002_bookkeeping.sql` 4 张（`categories` / `accounts` / `transactions` / `budgets`），另加代码创建的 `schema_migrations` 版本账本。
+V2 目标表数为 27（55 → 27，运行时 28）。逐表清单：`001_core.sql` 21 张（身份 14 张、审计 1 张、邮件/元数据 2 张、复式内核 4 张，其中 `schema_meta` 为基线元数据）＋ `002_bookkeeping.sql` 4 张（`categories` / `accounts` / `transactions` / `budgets`）＋ `005_investments.sql` 2 张（`investment_accounts` / `investment_holdings`），另加代码创建的 `schema_migrations` 版本账本。`003` 与 `004` 是列级迁移，不新增表。
+
+### 6.3.1 2026-11-22 扩展：只读投资估值快照
+
+- 来源：生产 pfm 的 `account_stockaccount`、`account_invest`（`status=0` 在持）、`longterm_income_event` 与 `account_ttradesnapshot`。
+- 账户：证券账户（按 pfm 券商账户，现金取 `available_cash`）与理财账户（按成员各一个）。
+- 收益口径：**当前在持仓位未实现收益 + 已导入股息**；不包含已卖出标的的历史已实现盈亏。
+- 上次交易：取 pfm 最近一次交易快照的日期、收益与收益率，只作展示，不重建完整买卖流水。
+- 读取：`GET /accounts?include=investments` 投影；不新增业务路由，`TestRouteBudget` 仍为 55。
+- 边界：只读；没有投资写入 API、买卖、转账、估值重算或复式分录。
 
 ### 6.4 迁移器与基线守卫
 
@@ -676,7 +686,7 @@ API 与数据：
 | 分类 8 色具体色值 | 设计 token 需要视觉评审，不在本文档发明色值 | P3 已落地 8 色调色板，待用户视觉确认（UNVERIFIED） |
 | 768–1023px 内容最大宽度 | 中间断点只做回归，具体值待定 | P3（UNVERIFIED） |
 | 前端 xlsx 实现方式 | 复用既有 `xlsx` 依赖在前端生成，未新增运行时依赖 | 已实现（`services/export.ts`） |
-| 逐表清单 | P2 实测 25 张业务表 + `schema_migrations`（运行时 26） | 已冻结（见 §6.1） |
+| 逐表清单 | P2 实测 25 张业务表 + `schema_migrations`（运行时 26）；2026-11-22 扩展 2 张估值快照后为 27 + 账本（运行时 28） | 已冻结（见 §6.1 / §6.3.1） |
 | 路由精确计数 | 实测 Register 55 条，`TestRouteBudget` 断言通过 | 已冻结 |
 | 性能预算数值（LCP / CLS） | 需在真实设备与网络条件下标定 | P5（UNVERIFIED） |
 | 真机与生产验收 | iPhone 实机、生产环境冒烟依赖用户环境 | P5（UNVERIFIED） |

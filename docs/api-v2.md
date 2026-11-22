@@ -3,7 +3,7 @@
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
 > 契约范围：**55 条业务路由**（按「方法 + 路径」计）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 55。
 > 路由总数由 `TestRouteBudget` 冻结为 ≤55；新增路由必须先删除或合并同类路由，否则测试失败。
-> 信用卡还款计划不是新路由，而是 `GET /accounts?include=credit_debt` 的可选投影；`include` 只接受空值或 `credit_debt`。
+> 信用卡还款计划与投资估值不是新路由，而是 `GET /accounts?include=credit_debt,investments` 的可选投影；`include` 接受空值、`credit_debt`、`investments` 或逗号组合。
 
 ## 1. 通用约定
 
@@ -124,7 +124,7 @@
 
 | 方法 | 路径 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
-| GET | `/accounts` | 查询 `include?`（空或 `credit_debt`） | 200 `{items:[{id,kind,subtype,name,owner_member_id,status,note,statement_day,due_day,balance_minor}], credit_debt?}`（排除 `status=deleted`；逐账户由分录重建余额；`include=credit_debt` 时追加还款计划投影） | 400（`include` 非法）、401 |
+| GET | `/accounts` | 查询 `include?`（空、`credit_debt`、`investments` 或逗号组合） | 200 `{items:[{id,kind,subtype,name,owner_member_id,status,note,statement_day,due_day,balance_minor}], credit_debt?, investments?}`（排除 `status=deleted`；逐账户由分录重建余额；`credit_debt` 追加还款计划投影；`investments` 追加只读估值快照） | 400（`include` 非法）、401 |
 | POST | `/accounts` | `kind`（`cash` / `credit`）、`name`（1–100 字）、`subtype?`、`owner_member_id?`、`note?`、`opening_minor?`（≥0）、`statement_day?` / `due_day?`（1–31，仅 `credit`，必须同时提供） | 201 `{id,name,kind,ledger_code,opening_minor,balance_minor,statement_day,due_day}`；创建时同步写 `ledger_accounts`，期初余额写分录 | 400 `invalid_request` / `invalid_amount` |
 | GET | `/accounts/{id}` | 无 | 200 `{id,kind,subtype,name,owner_member_id,status,note,statement_day,due_day,ledger_code,balance_minor}` | 404 |
 | PATCH | `/accounts/{id}` | `name?` / `subtype?` / `owner_member_id?` / `note?` / `status?`（`active` / `disabled`）/ `statement_day?` / `due_day?`（1–31 或显式 `null`；合并后两字段必须同时有值或同时为空，仅 `credit`） | 200 `{id}` | 400、404 |
@@ -158,6 +158,18 @@
 - 还款按到期日从早到晚 FIFO 冲抵；还款多于欠款形成 `credit_balance_minor` 溢缴款。
 - 期初欠款视为在账户创建时已出账，按创建日之前最近的账单截止日归期。
 - 已冲正/已删除/已更正的旧流水不计入；统计从 `journal_lines` + 当前有效 `transactions` 派生，不写分录、不缓存。
+
+### 7.2 证券/理财估值投影
+
+`GET /accounts?include=investments` 追加 `investments` 对象。它是 pfm 导入的只读快照，不写分录、不参与转账；`accounts.items` 仍只含 `cash` / `credit`。
+
+顶层字段：`total_cost_minor`、`total_holdings_value_minor`、`total_cash_minor`、`total_market_value_minor`（= 持仓 + 现金）、`total_unrealized_pnl_minor`、`total_dividends_minor`、`total_return_minor`（= 未实现 + 股息）、`total_return_bp`、`total_dividend_yield_bp`、`holding_count`、`account_count`。
+
+`accounts[]`：`id`、`kind`（`security` / `wealth`）、`name`、`institution`、`owner_member_id`、`owner_name`、`cash_minor`、`holdings_value_minor`、`market_value_minor`、`cost_minor`、`unrealized_pnl_minor`、`dividends_minor`、`return_minor`、`return_bp`、`dividend_yield_bp`、`holding_count`、`holdings[]`。
+
+`holdings[]`：`id`、`symbol`、`name`、`asset_class`、`asset_label`、`quantity_micros`、`price_micros`、`cost_minor`、`market_value_minor`、`unrealized_pnl_minor`、`return_bp`、`dividends_minor`、`total_return_minor`、`total_return_bp`、`dividend_yield_bp`、`last_trade_on?`、`last_trade_pnl_minor`、`last_trade_return_bp`、`weight_bp`。
+
+另返回 `by_owner[]`、`by_kind[]`、`by_asset_class[]`（含 `share_bp`/`weight_bp`）与按累计收益排序的 `top_holdings[]`。收益率均为基点，分母为对应成本；`last_trade_on` 来自 pfm 最近一次交易快照，不是完整买卖流水。
 
 ## 8. 流水（5 条）
 

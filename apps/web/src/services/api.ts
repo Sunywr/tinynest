@@ -151,6 +151,117 @@ export type CreditDebtPlan = {
   cards: CreditDebtCard[]
 }
 export type AccountsWithDebt = { items: Account[]; credit_debt: CreditDebtPlan }
+export type InvestmentHolding = {
+  id: string
+  symbol: string
+  name: string
+  asset_class: string
+  asset_label: string
+  quantity_micros: number
+  price_micros: number
+  cost_minor: number
+  market_value_minor: number
+  unrealized_pnl_minor: number
+  return_bp: number
+  dividends_minor: number
+  total_return_minor: number
+  total_return_bp: number
+  dividend_yield_bp: number
+  last_trade_on?: string | null
+  last_trade_pnl_minor: number
+  last_trade_return_bp: number
+  weight_bp: number
+}
+export type InvestmentAccount = {
+  id: string
+  kind: 'security' | 'wealth'
+  name: string
+  institution: string
+  owner_member_id: string
+  owner_name: string
+  cash_minor: number
+  holdings_value_minor: number
+  market_value_minor: number
+  cost_minor: number
+  unrealized_pnl_minor: number
+  dividends_minor: number
+  return_minor: number
+  return_bp: number
+  dividend_yield_bp: number
+  holding_count: number
+  holdings: InvestmentHolding[]
+}
+export type InvestmentOwnerStat = {
+  owner_member_id: string
+  owner_name: string
+  market_value_minor: number
+  cost_minor: number
+  return_minor: number
+  return_bp: number
+  dividends_minor: number
+  dividend_yield_bp: number
+  holding_count: number
+}
+export type InvestmentKindStat = {
+  kind: 'security' | 'wealth' | string
+  label: string
+  market_value_minor: number
+  cost_minor: number
+  return_minor: number
+  return_bp: number
+  dividends_minor: number
+  dividend_yield_bp: number
+  holding_count: number
+}
+export type InvestmentAssetClassStat = {
+  asset_class: string
+  label: string
+  market_value_minor: number
+  cost_minor: number
+  return_minor: number
+  return_bp: number
+  dividends_minor: number
+  dividend_yield_bp: number
+  weight_bp: number
+  holding_count: number
+}
+export type InvestmentTopHolding = {
+  id: string
+  symbol: string
+  name: string
+  account_id: string
+  account_name: string
+  owner_member_id: string
+  owner_name: string
+  market_value_minor: number
+  total_return_minor: number
+  total_return_bp: number
+  dividend_yield_bp: number
+}
+export type InvestmentOverview = {
+  total_cost_minor: number
+  total_holdings_value_minor: number
+  total_cash_minor: number
+  total_market_value_minor: number
+  total_unrealized_pnl_minor: number
+  total_dividends_minor: number
+  total_return_minor: number
+  total_return_bp: number
+  total_dividend_yield_bp: number
+  holding_count: number
+  account_count: number
+  accounts: InvestmentAccount[]
+  by_owner: InvestmentOwnerStat[]
+  by_kind: InvestmentKindStat[]
+  by_asset_class: InvestmentAssetClassStat[]
+  top_holdings: InvestmentTopHolding[]
+}
+export type AccountsOverview = {
+  items: Account[]
+  credit_debt: CreditDebtPlan
+  investments: InvestmentOverview
+}
+export type AccountsWithInvestments = { items: Account[]; investments: InvestmentOverview }
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type Transaction = {
   id: string
@@ -260,6 +371,8 @@ export const api = {
 
   accounts: () => get<{ items: Account[] }>('/accounts'),
   accountsWithDebt: () => get<AccountsWithDebt>('/accounts?include=credit_debt'),
+  accountsOverview: () => get<AccountsOverview>('/accounts?include=credit_debt,investments'),
+  investments: () => get<AccountsWithInvestments>('/accounts?include=investments'),
   account: (id: string) => get<Account & { items?: unknown[] }>(`/accounts/${encodeURIComponent(id)}`),
   createAccount: (body: {
     kind: 'cash' | 'credit'

@@ -49,7 +49,8 @@
 - [ ] 账户维护、停用/删除保留余额与分录、信用卡期初为负债：`TestAccountMaintenance`、`TestDisabledAccountRetainsBalance`、`TestDeleteAccountRetainsLedger`、`TestCreditAccountOpeningIsLiability`
 - [ ] 信用卡账单日/还款日配置与校验：`TestCreditAccountCycleSettings`、`TestCreditCycleColumnsAreNullable`
 - [ ] 信用卡还款计划：周期/发薪日边界、发薪日前金额、期初欠款、无发薪日/未配置、冲正更正删除、未来日期、溢缴款、两家庭隔离：`TestCreditCycleForBoundaries`、`TestNextPaydayAfterBoundaries`、`TestCreditDebtPlanBeforePayday`、`TestCreditDebtPlanMissingPaydayAndUnconfigured`、`TestCreditDebtPlanOpeningDebtIsAlreadyBilled`、`TestCreditDebtPlanReflectsReversalAndCorrection`、`TestCreditDebtPlanFutureAndOverpayment`、`TestCreditDebtPlanHouseholdIsolation`
-- [ ] 无拆分行/退款路由回归：确认 55 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/credit-*`、`/installments`、`/investments`、`/dashboard`、`/schedule`；`GET /accounts?include=credit_debt` 是既有集合路由的投影，不算新增路由
+- [ ] 投资估值快照：表结构可用、总额/账户/持仓/收益/股息/占比、家庭隔离、组合 include：`TestInvestmentSnapshotTablesAreUsable`、`TestInvestmentOverviewTotalsAndIsolation`
+- [ ] 无拆分行/退款路由回归：确认 55 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/credit-*`、`/installments`、`/investments`、`/dashboard`、`/schedule`；`GET /accounts?include=credit_debt` 与 `?include=investments` 是既有集合路由的投影，不算新增路由
 - [ ] 初始化安全：`TestSetupRequiresBootstrapToken`、`TestSetupDisabledWithoutConfiguredToken`、`TestSetupDisabledFlagRefusesBootstrapEvenWithValidToken`、`TestSetupConcurrentBootstrapOnlyOneSucceeds`
 - [ ] Cookie `Secure` 与可信反代：`TestSessionCookieSecureInProductionProxy`、`TestSessionCookieSecureCanBeDisabledForLocalDev`、`TestSessionCookieHonorsTrustedProxyForwardedProto`、`TestSessionCookieIgnoresUntrustedForwardedProto`
 - [ ] 登录失败限流：`TestLoginFailureRateLimit`、`TestLoginRateLimitScopeIsolation`、`TestLoginRateLimitConcurrentAndAuditSafe`
@@ -65,9 +66,10 @@
 - [ ] 记账面板：支出/收入/转账、4 列分类网格、数字键盘、备注/日期/账户/成员、保存中禁用、失败重试、离线不伪造成功
 - [ ] 主流程「打开记账 → 选分类 → 输入金额 → 保存」≤3 次显式点击（人工点按记录）
 - [ ] 账单：按天分组与小计、搜索、日历、点行更正、长按/菜单删除（冲正）
-- [ ] 图表：环形图 + 分类排行、支出/收入与月/年切换
-- [ ] 资产：现金/信用卡分组、净资产、行内转账；信用卡可配置账单日/还款日，显示发薪日前需准备、可用现金、缺口、下次还款与账单周期；未配置/无发薪日/逾期/无欠款状态如实标注，不宣称现金足够
-- [ ] 资产页 390×844 无横向溢出；「设置账单日」可打开编辑表单并保存；「我的 → 个人资料」保存后发薪日不丢失（E06/E07）
+- [ ] 图表：环形图 + 分类排行、支出/收入/投资三视图；投资视图显示总市值、成本、累计收益/率、股息/股息率、证券/理财占比、按成员收益与持仓收益排行
+- [ ] 资产：现金/信用卡分组、证券/理财只读估值卡片、净资产（含投资市值并明确标注）、行内转账；信用卡可配置账单日/还款日，显示发薪日前需准备、可用现金、缺口、下次还款与账单周期；未配置/无发薪日/逾期/无欠款状态如实标注，不宣称现金足够
+- [ ] 投资卡片：账户归属、市值、成本、累计收益/率、股息率、可展开持仓、最近交易快照与股息；为空账户/无持仓时如实显示
+- [ ] 资产页 390×844 无横向溢出；「设置账单日」可打开编辑表单并保存；「我的 → 个人资料」保存后发薪日不丢失（E06/E07）；投资卡片/图表视图无横向溢出（E08/D06）
 - [ ] 我的：成员、分类管理、预算、导出 xlsx、邮箱与密码、管理员区（邀请/用户/审计）
 - [ ] 390×844 与 1440×900 双视口 E2E 全绿（H02/H03）
 - [ ] 可点击元素热区 ≥44×44（H04）；`prefers-reduced-motion` 下无非必要动效

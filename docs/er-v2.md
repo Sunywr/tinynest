@@ -1,10 +1,10 @@
 # TinyNest V2 · 数据模型与 ER
 
 > 依据：`apps/api/internal/db/migrations/001_core.sql`（SQLite 21 张表）、`002_bookkeeping.sql`（SQLite 4 张表）、
-> `003_category_style.sql`（分类颜色）与 `004_credit_cycle.sql`（信用卡账单日/还款日），以及
+> `003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）与 `005_investments.sql`（证券/理财估值快照 2 张表），以及
 > `apps/api/internal/db/mysql/` 下同名 MySQL 文件与 `internal/db/migrate.go` 创建的 `schema_migrations`。
-> 数量口径：**25 张业务表**，加迁移账本 `schema_migrations` 后运行时 **26 张**；SQLite 与 MySQL 表集一致。
-> 金额一律整数分（`*_minor`），业务日期为 Asia/Shanghai 的 `YYYY-MM-DD`，其余时间戳为 RFC3339 UTC 文本。
+> 数量口径：**27 张业务表**，加迁移账本 `schema_migrations` 后运行时 **28 张**；SQLite 与 MySQL 表集一致。
+> 金额一律整数分（`*_minor`），业务日期为 Asia/Shanghai 的 `YYYY-MM-DD`，其余时间戳为 RFC3339 UTC 文本。投资持仓的份额/价格缩放 1e6，收益率为基点（10000 = 100%）。
 
 ## 1. 分组与表清单
 
@@ -14,9 +14,10 @@
 | 运营审计 | 1 | `audit_logs` |
 | 复式记账内核 | 4 | `ledger_accounts`、`journal_entries`、`journal_lines`、`account_opening_balances` |
 | 记账业务 | 4 | `categories`、`accounts`、`transactions`、`budgets` |
+| 投资估值快照 | 2 | `investment_accounts`、`investment_holdings`（只读 pfm 导入，不写分录） |
 | 基线元数据 | 1 | `schema_meta`（`baseline=v2`） |
 
-另：`schema_migrations` 由 Go 代码创建（不嵌入 DDL），记录 `version`、`description`、`applied_at`、`checksum`，是迁移器的账本，不计入 25 张业务表。
+另：`schema_migrations` 由 Go 代码创建（不嵌入 DDL），记录 `version`、`description`、`applied_at`、`checksum`，是迁移器的账本，不计入 27 张业务表。
 
 生产清理工具保留的 **11 张身份表** 为：`households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`；`mail_queue` 与成员档案/邀请 3 张表按业务数据清空（成员档案清后由用户登录与 `/household/members/current` 重建）。
 
@@ -33,6 +34,8 @@ erDiagram
     households ||--o{ accounts : "household_id"
     households ||--o{ budgets : "household_id"
     households ||--o{ transactions : "household_id"
+    households ||--o{ investment_accounts : "household_id"
+    investment_accounts ||--o{ investment_holdings : "account_id"
 
     users ||--o{ sessions : "user_id"
     journal_entries ||--|{ journal_lines : "entry_id"
@@ -109,6 +112,20 @@ erDiagram
 - `transactions.entry_id` 指向同事务写入的 `journal_entries`；不允许只写流水不写分录。
 - `transactions.idempotency_key` 为全局唯一约束；幂等回放查询按 `(idempotency_key, household_id)`。
 - 期初余额同时写 `journal_entries` + `journal_lines` 与 `account_opening_balances`，对方科目为 `3010` 期初权益。
+
+## 6.1 投资估值快照（2 张，只读）
+
+| 表 | 关键列 | 约束与说明 |
+| --- | --- | --- |
+| `investment_accounts` | `id`、`household_id`、`kind`、`name`、`institution`、`owner_member_id`、`source_ref`、`cash_minor`、`dividends_minor`、`status`、`note`、`created_at`、`updated_at` | `kind` CHECK `security`/`wealth`；`UNIQUE(household_id, source_ref)`；`household_id` 外键；不参与转账/分录 |
+| `investment_holdings` | `id`、`household_id`、`account_id`、`symbol`、`name`、`asset_class`、`asset_label`、`quantity_micros`、`price_micros`、`cost_minor`、`market_value_minor`、`unrealized_pnl_minor`、`return_bp`、`dividends_minor`、`dividend_yield_bp`、`last_trade_on`、`last_trade_pnl_minor`、`last_trade_return_bp`、`source_ref`、`status`、`note`、`created_at`、`updated_at` | `UNIQUE(account_id, symbol)`；`account_id` 外键；份额/价格 ×1e6；收益率为基点 |
+
+约定：
+
+- 两张表只保存从 pfm 导入的**估值快照**，不写 `journal_entries` / `journal_lines`，不产生账户余额；资产页“投资市值”及“含投资市值的净资产”必须标注为估值视图。
+- `investment_accounts.dividends_minor` 保存该账户归属人的累计已导入股息；`investment_holdings.dividends_minor` 只保存可归属到当前在持仓位的股息，因此账户合计可能大于持仓合计。
+- 当前收益口径：`unrealized_pnl_minor + dividends_minor`；成本分母为 `cost_minor`；不包含已卖出标的的历史已实现盈亏。
+- 交易快照只保留 pfm 最近一次 `account_ttradesnapshot` 的收益/收益率与日期，不重建买卖流水。
 
 ## 7. 基线元数据（1 张）
 
