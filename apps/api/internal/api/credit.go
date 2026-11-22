@@ -383,7 +383,7 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	payID, entryID := newID("cpay"), newID("je")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		return a.postStatementPayment(tx, r, p, stmtID, in.FromAccountID, in.PaidOn, amount, payID, entryID, replayKey, "", "")
+		return a.postStatementPayment(tx, r, p, stmtID, in.FromAccountID, in.PaidOn, amount, payID, entryID, replayKey, "", "", "")
 	})
 	if err != nil {
 		writeErr(w, 400, "invalid_request", err.Error())
@@ -392,13 +392,16 @@ func (a *API) handleStatementPayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": payID, "entry_id": entryID, "statement_id": stmtID})
 }
 
-func (a *API) postStatementPayment(tx *sql.Tx, r *http.Request, p Principal, stmtID, account, paidOn string, amount money.Minor, payID, entryID, replayKey, from, to string) error {
+func (a *API) postStatementPayment(tx *sql.Tx, r *http.Request, p Principal, stmtID, account, paidOn string, amount money.Minor, payID, entryID, replayKey, from, to, expectedDue string) error {
 	var instrID, cycleEnd, dueOn string
 	var sysDue, paid int64
 	if err := tx.QueryRowContext(r.Context(),
 		`SELECT instrument_id,cycle_end_on,due_on,system_due_minor,paid_minor FROM credit_statements WHERE id=? AND household_id=?`,
 		stmtID, p.HouseholdID).Scan(&instrID, &cycleEnd, &dueOn, &sysDue, &paid); err != nil {
 		return errors.New("账单不存在")
+	}
+	if expectedDue != "" && expectedDue != dueOn {
+		return errors.New("账单截止日期已变化，请重新预览")
 	}
 	if from != "" && (dueOn < from || dueOn > to || int64(amount) != sysDue-paid) {
 		return errors.New("账单已变化，请重新预览")
@@ -429,8 +432,8 @@ func (a *API) postStatementPayment(tx *sql.Tx, r *http.Request, p Principal, stm
 	newStatus := deriveStatementStatus(cycleEnd, dueOn, a.businessDate(), sysDue, newPaid)
 	result, err := tx.ExecContext(r.Context(), `
 			UPDATE credit_statements SET paid_minor=?, status=?
-			WHERE id=? AND household_id=? AND system_due_minor=? AND paid_minor=?`,
-		newPaid, newStatus, stmtID, p.HouseholdID, sysDue, paid)
+			WHERE id=? AND household_id=? AND system_due_minor=? AND paid_minor=? AND due_on=?`,
+		newPaid, newStatus, stmtID, p.HouseholdID, sysDue, paid, dueOn)
 	if err != nil {
 		return err
 	}

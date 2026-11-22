@@ -13,17 +13,19 @@ import (
 func (a *API) handleBatchStatementPayment(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
-		From    string `json:"from"`
-		To      string `json:"to"`
-		PaidOn  string `json:"paid_on"`
-		Account string `json:"from_account_id"`
-		Items   []struct {
+		From       string `json:"from"`
+		To         string `json:"to"`
+		PaidOn     string `json:"paid_on"`
+		UseDueDate bool   `json:"use_due_date,omitempty"`
+		Account    string `json:"from_account_id"`
+		Items      []struct {
 			ID     string `json:"id"`
+			DueOn  string `json:"due_on,omitempty"`
 			Amount int64  `json:"amount_minor"`
 		} `json:"items"`
 	}
 	key := idempotencyKey(r)
-	if decode(r, &in) != nil || !validDate(in.From) || !validDate(in.To) || in.To < in.From || !validDate(in.PaidOn) || in.Account == "" || len(in.Items) == 0 || key == "" {
+	if decode(r, &in) != nil || !validDate(in.From) || !validDate(in.To) || in.To < in.From || (!in.UseDueDate && !validDate(in.PaidOn)) || (in.UseDueDate && in.PaidOn != "") || in.Account == "" || len(in.Items) == 0 || key == "" {
 		writeErr(w, 400, "invalid_request", "请检查账单范围、付款账户和还款日期")
 		return
 	}
@@ -47,7 +49,16 @@ func (a *API) handleBatchStatementPayment(w http.ResponseWriter, r *http.Request
 			if i == 0 {
 				entryKey = marker
 			}
-			if err := a.postStatementPayment(tx, r, p, item.ID, in.Account, in.PaidOn, money.Minor(item.Amount), newID("cpay"), newID("je"), entryKey, in.From, in.To); err != nil {
+			paidOn := in.PaidOn
+			expectedDue := ""
+			if in.UseDueDate {
+				if !validDate(item.DueOn) {
+					return errors.New("请重新预览账单截止日期")
+				}
+				expectedDue = item.DueOn
+				paidOn = item.DueOn
+			}
+			if err := a.postStatementPayment(tx, r, p, item.ID, in.Account, paidOn, money.Minor(item.Amount), newID("cpay"), newID("je"), entryKey, in.From, in.To, expectedDue); err != nil {
 				return err
 			}
 		}

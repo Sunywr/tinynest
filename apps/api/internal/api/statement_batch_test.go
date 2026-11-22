@@ -3,6 +3,12 @@ package api
 import "testing"
 
 func TestBatchStatementPaymentAtomicReplay(t *testing.T) {
+	for _, mode := range []string{"fixed", "due"} {
+		t.Run(mode, func(t *testing.T) { testBatchRepayment(t, mode) })
+	}
+}
+
+func testBatchRepayment(t *testing.T, mode string) {
 	ts, c, database := newTestServer(t)
 	defer ts.Close()
 	defer database.Close()
@@ -21,6 +27,13 @@ func TestBatchStatementPaymentAtomicReplay(t *testing.T) {
 	c.mustOK("POST", "/api/v1/credit-statements/"+first+"/payments", map[string]any{"amount_minor": 20, "paid_on": "2026-11-12", "from_account_id": account})
 	items := []map[string]any{{"id": first, "amount_minor": 80}, {"id": second, "amount_minor": 90}}
 	body := map[string]any{"from": "2026-10-10", "to": "2026-11-10", "paid_on": "2026-11-12", "from_account_id": account, "items": items}
+	if mode == "due" {
+		delete(body, "paid_on")
+		body["use_due_date"] = true
+		for i, row := range rows {
+			items[i]["due_on"] = row.(map[string]any)["due_on"]
+		}
+	}
 	c.headers = map[string]string{"Idempotency-Key": "batch-test"}
 	const path = "/api/v1/credit-statement-batch-payments"
 	if status, _ := c.do("POST", path, body); status != 400 {
@@ -35,6 +48,17 @@ func TestBatchStatementPaymentAtomicReplay(t *testing.T) {
 	items[1]["amount_minor"] = 100
 	c.mustOK("POST", path, body)
 	c.mustOK("POST", path, body)
+	for i, item := range items {
+		want := body["paid_on"]
+		if mode == "due" {
+			want = rows[i].(map[string]any)["due_on"]
+		}
+		var paymentDate, entryDate string
+		err := database.QueryRow(`SELECT p.paid_on,j.occurred_on FROM credit_payments p JOIN journal_entries j ON j.id=p.entry_id AND j.household_id=p.household_id WHERE p.statement_id=? AND p.amount_minor=? AND p.household_id=(SELECT household_id FROM accounts WHERE id=?)`, item["id"], item["amount_minor"], account).Scan(&paymentDate, &entryDate)
+		if err != nil || paymentDate != want || entryDate != want {
+			t.Fatalf("payment/entry dates %s/%s, want %v: %v", paymentDate, entryDate, want, err)
+		}
+	}
 	if balance() != 800 {
 		t.Fatal("incorrect balance after replay")
 	}

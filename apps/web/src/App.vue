@@ -1246,19 +1246,19 @@ async function selectInstallment(id: string) {
 // Row actions jump straight into the matching form panel, prefilled.
 function openDebtPanel(id: string) { void selectDebt(id); openPanel('debtPay') }
 function openInstPanel(id: string) { void selectInstallment(id); openPanel('instPay') }
-const batch = reactive({ from: '', to: '', paidOn: '', account: '' })
+const batch = reactive({ from: '', to: '', dateMode: 'due', paidOn: '', account: '' })
 const batchItems = ref<{ id: string; instrument_name: string; due_on: string; remaining_minor: number }[] | null>(null)
 const batchBusy = ref(false)
 let batchVersion = 0
 let batchKey = ''
 watch(batch, () => { batchVersion++; batchItems.value = null; batchBusy.value = false }, { flush: 'sync' })
 function openBatchPayment() {
-  Object.assign(batch, { from: '', to: '', paidOn: today(), account: '' })
+  Object.assign(batch, { from: '', to: '', dateMode: 'due', paidOn: today(), account: '' })
   batchItems.value = null
   openPanel('batchPay')
 }
 async function previewBatch() {
-  if (!batch.from || !batch.to || batch.from > batch.to || !batch.account || !batch.paidOn) return toast('请填写有效的日期范围、付款账户和还款日期')
+  if (!batch.from || !batch.to || batch.from > batch.to || !batch.account || (batch.dateMode === 'fixed' && !batch.paidOn)) return toast('请填写有效的日期范围、付款账户和还款日期')
   const version = ++batchVersion
   const navigation = ledgerNavigation
   batchBusy.value = true
@@ -1273,8 +1273,8 @@ async function previewBatch() {
 }
 function submitBatchPayment() {
   if (loading.value || !batchItems.value?.length) return
-  const items = batchItems.value.map(s => ({ id: s.id, amount_minor: s.remaining_minor }))
-  const body = { from: batch.from, to: batch.to, paid_on: batch.paidOn, from_account_id: batch.account, items }
+  const items = batchItems.value.map(s => ({ id: s.id, amount_minor: s.remaining_minor, due_on: batch.dateMode === 'due' ? s.due_on : undefined }))
+  const body = { from: batch.from, to: batch.to, use_due_date: batch.dateMode === 'due', paid_on: batch.dateMode === 'fixed' ? batch.paidOn : undefined, from_account_id: batch.account, items }
   return run(() => api.batchStatementPayment(body, batchKey), '批量还款已入账')
 }
 function openStatementPay(s: { id: string; remaining_minor: number }) {
@@ -2198,14 +2198,15 @@ const metricCards = computed(() => {
                 <label>付款账户<SearchableSelect><select v-model="batch.account" required><option value="">请选择</option>
                   <option v-for="a in activeAccounts" :key="a.id" :value="a.id">{{ a.name }}</option>
                 </select></SearchableSelect></label>
-                <label>实际还款日期<DatePicker v-model="batch.paidOn" required /></label>
+                <label>入账日期方式<select v-model="batch.dateMode"><option value="due">按各期账单截止日</option><option value="fixed">统一指定日期</option></select></label>
+                <label v-if="batch.dateMode === 'fixed'">实际还款日期<DatePicker v-model="batch.paidOn" required /></label>
               </fieldset>
               <button class="ghost" :disabled="batchBusy || loading">预览待还账单</button>
             </form>
             <div v-if="batchItems" aria-live="polite">
               <p v-if="!batchItems.length">所选范围内没有待还账单</p>
               <template v-else>
-                <div v-for="s in batchItems" :key="s.id" class="rankrow"><span>{{ s.instrument_name }} · {{ s.due_on }}</span><b>{{ formatMinor(s.remaining_minor) }}</b></div>
+                <div v-for="s in batchItems" :key="s.id" class="rankrow"><span>{{ s.instrument_name }} · 截止 {{ s.due_on }} · 入账 {{ batch.dateMode === 'due' ? s.due_on : batch.paidOn }}</span><b>{{ formatMinor(s.remaining_minor) }}</b></div>
                 <button class="primary" :disabled="loading || batchBusy" @click="submitBatchPayment">确认还款 {{ batchItems.length }} 笔 · {{ formatMinor(batchItems.reduce((sum, s) => sum + s.remaining_minor, 0)) }}</button>
               </template>
             </div>
