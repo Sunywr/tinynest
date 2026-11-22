@@ -134,6 +134,7 @@ tinynest-admin --driver mysql verify --baseline=<备份目录>/baseline.json
 
 - 停止 API 服务（按生产部署方式执行；具体停服命令由运维环境决定）。
 - 确认服务不可达后继续；不得在服务运行中执行清理。
+- **实测注意（2026-11-22）**：B 机的 loopback TLS 反代单元声明了 `Requires=<API 单元>`，因此停在 API 会**级联停掉反代**，18444 端口随之消失、A 机隧道转发报 `SSL_ERROR_SYSCALL`。清理完成后必须**同时启动两个单元**（例如 `systemctl start <API 单元> <反代单元>`），再验证 `readyz` 与公开站点；只启动 API 会让线上一直 502。
 
 ### 步骤 2：全量备份
 
@@ -258,6 +259,7 @@ tinynest-admin --driver mysql verify --baseline=<备份目录>/baseline.json
 | `--confirm` 不符 | CLI 报错并中止 | 核对当前连接数据库名与实际库名；修正后重新 dry-run，不得绕过确认 |
 | 多家庭库未指定 `--household` | CLI 检测到多个家庭并中止 | 先确认清理范围，dry-run 加 `--household=<id>`，核对输出后执行 |
 | 服务未停 | 缺少 `--yes-service-stopped` 或检测到活动写入 | 中止执行；停服并确认后再继续 |
+| 停 API 后线上 502 | loopback 反代单元声明了 `Requires=<API 单元>`，被级联停止 | 清理后同时启动 API 与反代两个单元；不要只启动 API |
 | 无分类 | 清理后分类为空（默认即如此） | 需手工创建分类；或在清理时加 `-reseed-categories` 重新播种默认分类 |
 | 无账户 | 清理后账户为空 | 预期行为；先创建账户再记账 |
 | 密钥丢失 | 启动后 SMTP / IMAP 解密失败 | 备份缺失时无法恢复，只能重新配置；属不可自动回滚项 |
