@@ -42,6 +42,15 @@ html[data-theme="cream"] {
   --cat-6: #f3dae2;
   --cat-7: #e9e0d2;
   --cat-8: #e3e8de;
+  /* Matching ink colours: flat icons and selected outlines on each tint. */
+  --cat-1-ink: #b5644f;
+  --cat-2-ink: #a0762f;
+  --cat-3-ink: #5c7a4f;
+  --cat-4-ink: #3d7a85;
+  --cat-5-ink: #6257a6;
+  --cat-6-ink: #a8506b;
+  --cat-7-ink: #866a49;
+  --cat-8-ink: #5b755a;
 
   /* Motion tokens: single source of truth for A · Cream Mochi. */
   --motion-fast: 160ms;
@@ -217,6 +226,7 @@ a { color: var(--primary-deep); }
   align-items: flex-end;
   justify-content: center;
   background: rgba(70, 54, 45, .38);
+  animation: backdrop-in var(--motion-fast) var(--ease-soft) both;
 }
 
 .sheet {
@@ -228,7 +238,25 @@ a { color: var(--primary-deep); }
   border-radius: var(--sheet-radius);
   box-shadow: var(--shadow);
   padding-bottom: env(safe-area-inset-bottom);
+  animation: sheet-rise var(--motion-base) var(--ease-soft) both;
 }
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sheet-rise {
+  from { opacity: 0; transform: translateY(18px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Route transitions: the incoming view lifts in while the outgoing one fades
+   away, so a tab switch reads as a continuous surface instead of a repaint. */
+.view-enter-active { transition: opacity var(--motion-base) var(--ease-soft), transform var(--motion-base) var(--ease-soft); }
+.view-leave-active { transition: opacity var(--motion-fast) var(--ease-soft), transform var(--motion-fast) var(--ease-soft); }
+.view-enter-from { opacity: 0; transform: translateY(10px); }
+.view-leave-to { opacity: 0; transform: translateY(-4px); }
 
 @media (min-width: 1024px) {
   .sheet-backdrop { align-items: center; }
@@ -498,6 +526,27 @@ a { color: var(--primary-deep); }
 }
 .amount-currency { font-size: 22px; font-weight: 700; color: var(--muted); }
 .amount-value { font-size: 40px; font-weight: 800; letter-spacing: -1.2px; color: var(--text); }
+/* Real input so the system keyboard can type the amount; it inherits the big
+   number styling and hides the browser chrome. */
+.amount-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: right;
+  font: inherit;
+  font-size: var(--amount-size, 40px);
+  font-weight: 800;
+  letter-spacing: -1.2px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--primary);
+}
+.amount-input:focus { outline: none; }
+.amount-input::-webkit-outer-spin-button,
+.amount-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .amount-caret { width: 2px; height: 30px; margin-inline-start: 2px; background: var(--primary); animation: caret-blink 1.05s steps(2, start) infinite; }
 @keyframes caret-blink { 50% { opacity: 0; } }
 .entry-loading { margin: 0; padding: 26px 16px; color: var(--muted); text-align: center; font-size: 13px; }
@@ -630,6 +679,14 @@ a { color: var(--primary-deep); }
 .editor-row:last-child { border-bottom: 0; }
 .editor-row.inactive { opacity: .55; }
 .editor-emoji { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; background: var(--soft); font-size: 17px; }
+.color-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.color-swatch {
+  width: 34px; height: 34px; border-radius: 11px; border: 1px solid var(--border);
+  display: inline-grid; place-items: center; font-size: 14px; font-weight: 800;
+  transition: transform var(--motion-fast) var(--ease-soft), box-shadow var(--motion-fast) var(--ease-soft);
+}
+.color-swatch.active { box-shadow: 0 0 0 2px currentColor inset, 0 4px 12px rgba(118,91,65,.12); transform: translateY(-1px); }
+.color-swatch:active { transform: scale(.94); }
 .editor-name { flex: 1; min-width: 120px; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
 .editor-tag { flex: none; padding: 2px 8px; border-radius: 999px; background: var(--primary-pale); color: var(--primary-deep); font-size: 10px; font-weight: 700; }
 .editor-tag.muted { background: var(--soft); color: var(--muted); }

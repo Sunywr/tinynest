@@ -1,4 +1,4 @@
-/** State and persistence logic for the bookkeeping entry sheet.
+﻿/** State and persistence logic for the bookkeeping entry sheet.
  *  Kept out of EntrySheet.vue so the component stays focused on layout,
  *  focus management and keyboard behaviour. Amounts are integer minor units. */
 
@@ -144,8 +144,34 @@ export function useEntryForm(options: EntryFormOptions) {
     if (!amount.value || amount.value === '-') amount.value = '0'
   }
 
+  // The amount field is a real text input (inputmode="decimal") so a phone or a
+  // desktop on-screen keyboard can type into it. Both the system keyboard and
+  // the on-page keypad write through this single sanitiser.
+  function sanitiseAmount(raw: string): string {
+    const cleaned = raw.replace(/[^\d.]/g, '')
+    const dot = cleaned.indexOf('.')
+    const wholeRaw = dot === -1 ? cleaned : cleaned.slice(0, dot)
+    const fractionRaw = dot === -1 ? '' : cleaned.slice(dot + 1).replace(/\./g, '')
+    const whole = wholeRaw.replace(/^0+(?=\d)/, '').slice(0, 9) || '0'
+    if (dot === -1) return whole
+    return `${whole}.${fractionRaw.slice(0, 2)}`
+  }
+
+  function setAmount(raw: string) {
+    if (saving.value || offline.value) return
+    amount.value = sanitiseAmount(raw)
+  }
+
   async function save() {
-    if (!canSave.value) return
+    if (saving.value) return
+    if (!canSave.value) {
+      // Explain why the record cannot be saved yet instead of failing silently.
+      if (amountInvalid.value) error.value = '请输入金额'
+      else if (transferInvalid.value) error.value = '请选择不同的转出与转入账户'
+      else if (!accountId.value) error.value = '请选择账户'
+      else if (type.value !== 'transfer' && !categoryId.value) error.value = '请选择分类'
+      return
+    }
     if (!navigator.onLine) {
       offline.value = true
       error.value = '网络不可用，未保存'
@@ -207,6 +233,6 @@ export function useEntryForm(options: EntryFormOptions) {
     session, type, amount, note, date, accountId, toAccountId, categoryId, memberId,
     categories, accounts, loading, saving, error, offline, isEdit, amountMinor, display,
     activeCategories, accountOptions, memberOptions, accountMissing, categoryMissing, canSave, dirty,
-    load, reloadCategories, selectType, press, backspace, save,
+    load, reloadCategories, selectType, press, backspace, setAmount, save,
   }
 }

@@ -1,4 +1,4 @@
-# TinyNest V2 · 数据模型与 ER
+﻿# TinyNest V2 · 数据模型与 ER
 
 > 依据：`apps/api/internal/db/migrations/001_core.sql`（SQLite 21 张表）、`002_bookkeeping.sql`（SQLite 4 张表）、
 > `apps/api/internal/db/mysql/` 下同名 MySQL 文件，以及 `internal/db/migrate.go` 创建的 `schema_migrations`。
@@ -97,7 +97,7 @@ erDiagram
 
 | 表 | 关键列 | 约束与说明 |
 | --- | --- | --- |
-| `categories` | `id`、`household_id`、`kind`、`name`、`emoji`、`sort`、`active`、`created_at` | `kind` CHECK `income`/`expense`；单层分类，无 `parent_id`；`active`：1 启用、0 停用、-1 已删除；索引 `idx_categories_household(household_id,kind,active,sort)` |
+| `categories` | `id`、`household_id`、`kind`、`name`、`emoji`、`color`、`sort`、`active`、`created_at` | `kind` CHECK `income`/`expense`；单层分类，无 `parent_id`；`active`：1 启用、0 停用、-1 已删除；索引 `idx_categories_household(household_id,kind,active,sort)` |
 | `accounts` | `id`、`household_id`、`kind`、`subtype`、`name`、`owner_member_id`、`ledger_code`、`status`、`note`、`created_at` | `kind` CHECK `cash`/`credit`；`UNIQUE(household_id, ledger_code)`；`status` ∈ `active`/`disabled`/`deleted`；`ledger_code` 指向 `journal_lines.account_code` |
 | `transactions` | `id`、`household_id`、`type`、`amount_minor`、`currency`、`occurred_on`、`category_id`、`account_id`、`to_account_id`、`member_id`、`note`、`status`、`entry_id`、`idempotency_key`、`created_by`、`created_at` | `type` CHECK `expense`/`income`/`transfer`；`amount_minor > 0`；`status` CHECK `posted`/`reversed`；`idempotency_key` 唯一；索引 `idx_tx_household_date`、`idx_tx_category`、`idx_tx_account` |
 | `budgets` | `household_id`、`month`、`amount_minor` | 主键 `(household_id, month)`；`month` 为 `YYYY-MM`；`amount_minor` 由 API 校验 ≥0，DDL 无 CHECK；未设置预算时没有行（读取返回 `null`） |

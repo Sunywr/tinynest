@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"context"
@@ -102,13 +102,13 @@ func (a *API) handleStatsCategories(w http.ResponseWriter, r *http.Request) {
 	// it works identically in SQLite and MySQL. HAVING SUM(...) <> 0 drops
 	// categories whose flows were fully reversed (they net to exactly zero).
 	rows, err := a.DB.QueryContext(r.Context(), `
-		SELECT SUBSTR(l.account_code, 6) AS category_id, COALESCE(c.name,''), COALESCE(c.emoji,''),
+		SELECT SUBSTR(l.account_code, 6) AS category_id, COALESCE(c.name,''), COALESCE(c.emoji,''), COALESCE(c.color,''),
 		       COALESCE(SUM(`+sign+`),0) AS amount_minor
 		FROM journal_lines l
 		JOIN journal_entries e ON e.id=l.entry_id
 		LEFT JOIN categories c ON c.id=SUBSTR(l.account_code, 6) AND c.household_id=e.household_id
 		WHERE e.household_id=? AND e.occurred_on>=? AND e.occurred_on<=? AND l.account_code LIKE ?
-		GROUP BY SUBSTR(l.account_code, 6), c.name, c.emoji
+		GROUP BY SUBSTR(l.account_code, 6), c.name, c.emoji, c.color
 		HAVING SUM(`+sign+`) <> 0
 		ORDER BY amount_minor DESC, category_id`, p.HouseholdID, from, to, pattern)
 	if err != nil {
@@ -120,6 +120,7 @@ func (a *API) handleStatsCategories(w http.ResponseWriter, r *http.Request) {
 		CategoryID  string `json:"category_id"`
 		Name        string `json:"name"`
 		Emoji       string `json:"emoji"`
+		Color       string `json:"color"`
 		AmountMinor int64  `json:"amount_minor"`
 		ShareBP     int64  `json:"share_bp"`
 	}
@@ -127,7 +128,7 @@ func (a *API) handleStatsCategories(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	for rows.Next() {
 		var it item
-		if err := rows.Scan(&it.CategoryID, &it.Name, &it.Emoji, &it.AmountMinor); err != nil {
+		if err := rows.Scan(&it.CategoryID, &it.Name, &it.Emoji, &it.Color, &it.AmountMinor); err != nil {
 			internalErr(w, err)
 			return
 		}

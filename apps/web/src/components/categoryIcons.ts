@@ -1,7 +1,7 @@
-import {
+﻿import {
   Apple, Baby, Backpack, Banknote, Beef, Bike, BookOpen, BriefcaseBusiness, Building2,
   Bus, CakeSlice, Car, Cat, Cherry, CircleDollarSign, ClipboardList, Cloud, Clover,
-  Coffee, CreditCard, Croissant, CupSoda, Dog, Dumbbell, Film, Fish, Flower2, Fuel,
+  Coffee, Cookie, CreditCard, Croissant, CupSoda, Dog, Dumbbell, Film, Fish, Flower2, Fuel,
   Gamepad2, Gift, GraduationCap, Hammer, Heart, HeartPulse, Hospital, House, IceCreamCone,
   Landmark, WashingMachine, LibraryBig, Lightbulb, Mail, MapPin, Milk, Music, Package,
   Palette, PawPrint, Phone, PiggyBank, Pill, Pizza, Plane, Rabbit, ReceiptText, Ribbon,
@@ -13,6 +13,11 @@ import {
 type IconEntry = [value: string, label: string, icon: typeof Star]
 
 export const categoryIconGroups: { name: string; entries: IconEntry[] }[] = [
+  { name: '记账常用', entries: [
+    ['snack', '零食', Cookie], ['toys', '玩具', ToyBrick], ['games', '游戏', Gamepad2],
+    ['fun', '娱乐', Film], ['housing', '住房', House], ['car', '汽车', Car],
+    ['redpacket', '红包', Gift], ['meal', '正餐', Utensils], ['fitness', '健身', Dumbbell],
+  ] },
   { name: '餐饮美食', entries: [
     ['🍙', '饭团', Sandwich], ['meal', '正餐', Utensils], ['🍓', '水果', Cherry],
     ['apple', '苹果', Apple], ['🧁', '蛋糕', CakeSlice], ['🧋', '奶茶', CupSoda],

@@ -1,7 +1,9 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { X } from 'lucide-vue-next'
 import CategoryEmojiPicker from './CategoryEmojiPicker.vue'
+import CategoryTile from './CategoryTile.vue'
+import { CATEGORY_COLOR_KEYS, CATEGORY_COLOR_LABELS, categoryBackground, categoryInk, type CategoryColorKey } from '../services/categoryStyle'
 import { api, type Category } from '../services/api'
 import { useToast } from '../composables/useToast'
 
@@ -15,7 +17,7 @@ const loading = ref(true)
 const busy = ref(false)
 const error = ref('')
 const formOpen = ref(false)
-const form = reactive({ id: '', name: '', emoji: '🍙' })
+const form = reactive({ id: '', name: '', emoji: '🍙', color: '1' as CategoryColorKey })
 const confirmRemove = ref('')
 
 const visible = computed(() =>
@@ -46,6 +48,7 @@ function startCreate() {
   form.id = ''
   form.name = ''
   form.emoji = kind.value === 'income' ? '💰' : '🍙'
+  form.color = kind.value === 'income' ? '5' : '1'
   formOpen.value = true
 }
 
@@ -53,6 +56,7 @@ function startEdit(category: Category) {
   form.id = category.id
   form.name = category.name
   form.emoji = category.emoji || ''
+  form.color = (category.color as CategoryColorKey) || '1'
   formOpen.value = true
 }
 
@@ -68,8 +72,8 @@ async function save() {
   busy.value = true
   error.value = ''
   try {
-    if (form.id) await api.updateCategory(form.id, { name, emoji: form.emoji })
-    else await api.createCategory({ kind: kind.value, name, emoji: form.emoji, sort: visible.value.length })
+    if (form.id) await api.updateCategory(form.id, { name, emoji: form.emoji, color: form.color })
+    else await api.createCategory({ kind: kind.value, name, emoji: form.emoji, color: form.color, sort: visible.value.length })
     await load()
     formOpen.value = false
     form.id = ''
@@ -160,8 +164,8 @@ onMounted(load)
         <p v-if="loading" class="inline-notice" role="status">正在加载分类…</p>
 
         <ul v-if="!loading" class="editor-list">
-          <li v-for="category in visible" :key="category.id" class="editor-row" :class="{ inactive: Number(category.active) === 0 }">
-            <span class="editor-emoji" aria-hidden="true">{{ category.emoji || '·' }}</span>
+          <li v-for="(category, index) in visible" :key="category.id" class="editor-row" :class="{ inactive: Number(category.active) === 0 }">
+            <CategoryTile :icon="category.emoji" :color="category.color" :index="index" :size="40" />
             <span class="editor-name">{{ category.name }}</span>
             <span v-if="Number(category.active) === 0" class="editor-tag">已停用</span>
             <span class="editor-actions">
@@ -186,6 +190,16 @@ onMounted(load)
           <label class="field-label">名称
             <input v-model="form.name" maxlength="40" required placeholder="例如：餐饮" />
           </label>
+          <div class="color-row" role="group" aria-label="分类颜色">
+            <CategoryTile :icon="form.emoji" :color="form.color" :size="44" />
+            <button v-for="key in CATEGORY_COLOR_KEYS" :key="key" type="button" class="color-swatch"
+              :class="{ active: form.color === key }"
+              :style="{ background: categoryBackground(key), color: categoryInk(key) }"
+              :aria-label="`颜色 ${CATEGORY_COLOR_LABELS[key]}`" :aria-pressed="form.color === key"
+              @click="form.color = key">
+              <span v-if="form.color === key" aria-hidden="true">✓</span>
+            </button>
+          </div>
           <CategoryEmojiPicker v-model="form.emoji" />
           <div class="form-actions">
             <button type="button" class="btn-quiet" :disabled="busy" @click="cancelForm">取消</button>

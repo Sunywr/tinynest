@@ -1,9 +1,12 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import CategoryTile from '../components/CategoryTile.vue'
 import DonutChart from '../components/DonutChart.vue'
+import AppSkeleton from '../components/AppSkeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { api, type CategoryStat, type Summary } from '../services/api'
+import { categoryInk } from '../services/categoryStyle'
 import { formatBasisPoints, formatMinor, monthKey, monthLabel, monthRange, shiftMonth, yearRange } from '../services/format'
 
 const kind = ref<'expense' | 'income'>('expense')
@@ -16,7 +19,6 @@ const loading = ref(false)
 const error = ref('')
 let requestId = 0
 
-const palette = ['#eec3b4', '#ecd5a8', '#cdddbe', '#bed5da', '#cfc9e5', '#e9c3cf', '#ddd2c0', '#ced6c8']
 const range = computed<[string, string]>(() => (period.value === 'month' ? monthRange(month.value) : yearRange(year.value)))
 const periodLabel = computed(() => (period.value === 'month' ? monthLabel(month.value) : `${year.value}年`))
 const total = computed(() => {
@@ -95,7 +97,7 @@ onMounted(() => void load())
       {{ error }}
       <button type="button" class="error-retry" @click="load">重试</button>
     </p>
-    <p v-if="loading" class="chart-loading" role="status">正在计算图表…</p>
+    <AppSkeleton v-if="loading" variant="chart" />
 
     <template v-if="!empty && !error">
       <section class="card chart-card" aria-label="分类占比环形图">
@@ -105,15 +107,15 @@ onMounted(() => void load())
       <section class="card chart-ranking" aria-label="分类排行">
         <h2 class="section-title">分类排行（{{ kindLabel }}）</h2>
         <ol class="ranking-list">
-          <li v-for="(item, index) in ranking" :key="item.category_id" class="ranking-row">
+          <li v-for="(item, index) in ranking" :key="item.category_id" class="ranking-row" :style="{ '--i': index }">
             <span class="rank-index">{{ index + 1 }}</span>
             <span class="rank-body">
               <span class="rank-top">
-                <span class="rank-name"><span aria-hidden="true">{{ item.emoji }}</span> {{ item.name }}</span>
+                <span class="rank-name"><CategoryTile :icon="item.emoji" :color="item.color" :index="index" :size="24" /> {{ item.name }}</span>
                 <span class="rank-amount">{{ formatMinor(item.amount_minor) }}</span>
               </span>
               <span class="rank-bar-row">
-                <span class="rank-track"><span class="rank-fill" :style="{ width: `${shareOf(item)}%`, background: palette[index % palette.length] }"></span></span>
+                <span class="rank-track"><span class="rank-fill" :style="{ width: `${shareOf(item)}%`, background: categoryInk(item.color, index) }"></span></span>
                 <span class="rank-share">{{ formatBasisPoints(item.share_bp ?? shareOf(item) * 100) }}</span>
               </span>
             </span>

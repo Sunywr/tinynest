@@ -1,10 +1,11 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CalendarDays, ChevronLeft, ChevronRight, Search, X } from 'lucide-vue-next'
 import BudgetBar from '../components/BudgetBar.vue'
 import BudgetEditor from '../components/BudgetEditor.vue'
 import ConfirmSheet from '../components/ConfirmSheet.vue'
 import DayGroupList from '../components/DayGroupList.vue'
+import AppSkeleton from '../components/AppSkeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import MonthCalendar from '../components/MonthCalendar.vue'
 import { api, type Budget, type DailyStat, type Summary, type Transaction } from '../services/api'
@@ -253,7 +254,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       <button type="button" class="error-retry" @click="load">重试</button>
     </p>
 
-    <p v-if="loading && !items.length" class="bills-loading" role="status">正在加载流水…</p>
+    <AppSkeleton v-if="loading && !items.length" :rows="4" />
 
     <DayGroupList v-if="items.length" :items="items" :can-write="canWrite" @edit="openEdit" @remove="requestDelete" />
 

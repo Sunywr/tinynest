@@ -53,7 +53,11 @@ onBeforeUnmount(() => {
   <div v-else class="app-shell">
     <TabBar @entry="entry.openEntry()" />
     <main class="app-main">
-      <router-view />
+      <router-view v-slot="{ Component, route: current }">
+        <Transition name="view" mode="out-in">
+          <component :is="Component" :key="current.path" />
+        </Transition>
+      </router-view>
     </main>
   </div>
 

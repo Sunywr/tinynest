@@ -39,6 +39,7 @@ const usage = `tinynest-admin - TinyNest 运维命令（危险操作需显式确
   verify             [-baseline=<path>]                只读校验：业务表全空且身份数据未变
   identity-export    -out=<path>                       导出身份表为 JSON 行
   identity-import    -in=<path> [-dry-run]             把身份数据导入空的 V2 基线库
+  seed-categories    [-household=<id>]                 重播默认分类并补齐图标与颜色
 
 purge 额外开关:
   -household=<id>        多家庭库时指定清理范围
@@ -100,6 +101,8 @@ func run(args []string) error {
 		return runIdentityExport(rest)
 	case "identity-import":
 		return runIdentityImport(rest)
+	case "seed-categories":
+		return runSeedCategories(rest)
 	default:
 		fmt.Print(usage)
 		return fmt.Errorf("未知子命令 %q", command)
@@ -294,6 +297,26 @@ func runIdentityExport(args []string) error {
 	}
 	fmt.Println("已导出身份数据: " + summary.String())
 	fmt.Printf("共 %d 行 -> %s（权限 0600，含口令哈希，按机密保管）\n", summary.Rows, *out)
+	return nil
+}
+
+func runSeedCategories(args []string) error {
+	fs := flag.NewFlagSet("seed-categories", flag.ContinueOnError)
+	household := fs.String("household", "", "只处理指定家庭")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	_, admin, err := open()
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
+
+	households, err := admin.SeedCategories(context.Background(), *household)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已重播默认分类的家庭: %s\n", strings.Join(households, ", "))
 	return nil
 }
 

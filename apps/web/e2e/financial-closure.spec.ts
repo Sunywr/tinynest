@@ -214,7 +214,7 @@ test.describe('B 记账面板', () => {
     await gotoBills(page)
     const dialog = await openEntrySheet(page)
     await expect(dialog.getByRole('tab', { name: '支出' })).toHaveAttribute('aria-selected', 'true')
-    await expect(dialog.getByRole('textbox', { name: /金额/ })).toContainText('0')
+    await expect(dialog.getByRole('textbox', { name: /金额/ })).toHaveValue('0')
     await expect(dialog.getByRole('button', { name: '完成' })).toBeVisible()
   })
 
@@ -236,11 +236,11 @@ test.describe('B 记账面板', () => {
     for (const digit of ['1', '2', '8', '.', '5']) {
       await dialog.getByRole('button', { name: digit === '.' ? '小数点' : digit, exact: true }).click()
     }
-    await expect(dialog.getByRole('textbox', { name: /金额/ })).toContainText('128.5')
+    await expect(dialog.getByRole('textbox', { name: /金额/ })).toHaveValue('128.5')
     await dialog.getByRole('button', { name: '删除末位' }).click()
-    await expect(dialog.getByRole('textbox', { name: /金额/ })).toContainText('128.')
+    await expect(dialog.getByRole('textbox', { name: /金额/ })).toHaveValue('128.')
     await dialog.getByRole('button', { name: '删除末位' }).click()
-    await expect(dialog.getByRole('textbox', { name: /金额/ })).toContainText('128')
+    await expect(dialog.getByRole('textbox', { name: /金额/ })).toHaveValue('128')
   })
 
   test('B04 完整流程：选分类 → 输入金额 → 备注 → 保存成功', async ({ page }) => {
@@ -290,7 +290,7 @@ test.describe('B 记账面板', () => {
     const alert = dialog.getByRole('alert')
     await expect(alert).toContainText('保存失败了')
     await expect(alert.getByRole('button', { name: '重试' })).toBeVisible()
-    await expect(dialog.getByRole('textbox', { name: /金额/ })).toContainText('7')
+    await expect(dialog.getByRole('textbox', { name: /金额/ })).toHaveValue('7')
     await expect(dialog).toBeVisible()
   })
 
@@ -382,7 +382,7 @@ test.describe('C 账单列表', () => {
     await page.locator('.tx-main', { hasText: '可更正流水' }).click()
     const dialog = page.getByRole('dialog', { name: '更正流水' })
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByRole('textbox', { name: /金额/ })).toContainText('66')
+    await expect(dialog.getByRole('textbox', { name: /金额/ })).toHaveValue('66.00')
     await expect(dialog.getByRole('button', { name: '保存更正' })).toBeVisible()
   })
 
@@ -515,7 +515,15 @@ test.describe('D 图表', () => {
   })
 
   test('D03 支出/收入切换改变中心标签', async ({ page }) => {
-    await signIn(page)
+    const csrf = await signIn(page)
+    // Seed real income for this month: the donut only renders when the selected
+    // kind has data, so the toggle must be exercised against both sides.
+    const category = await ensureCategory(page.request, csrf, 'income')
+    const account = await ensureAccount(page.request, csrf)
+    await addTransaction(page, csrf, {
+      type: 'income', amount_minor: 880000, occurred_on: new Date().toISOString().slice(0, 10),
+      category_id: category.id, account_id: account.id, note: 'D03 收入',
+    })
     await page.goto('/charts')
     await expect(page.getByText('本月支出', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: '收入', exact: true }).click()
@@ -787,5 +795,91 @@ test.describe('H 角色与视口', () => {
       return { width: rect.width, height: rect.height }
     }))
     for (const box of keyBoxes) expect(box.height).toBeGreaterThanOrEqual(44)
+  })
+})
+// ------------------------------------------------------------ I 新增能力
+
+test.describe('I 分类配色与金额输入', () => {
+  test('I01 金额可用系统键盘输入，网页键盘继续可用', async ({ page }) => {
+    const csrf = await gotoBills(page)
+    await ensureAccount(page.request, csrf)
+    const dialog = await openEntrySheet(page)
+    await dialog.getByRole('listbox', { name: '选择分类' }).getByRole('option').first().click()
+    const amount = dialog.getByRole('textbox', { name: /金额/ })
+
+    // The system keyboard path: a real input accepting typed decimals.
+    await amount.fill('12.34')
+    await expect(amount).toHaveValue('12.34')
+    // Invalid characters and a third decimal are sanitised, not rejected silently.
+    await amount.fill('abc007.456')
+    await expect(amount).toHaveValue('7.45')
+
+    // The on-page keypad keeps working and writes into the same field.
+    await dialog.getByRole('button', { name: '删除末位' }).click()
+    await dialog.getByRole('button', { name: '删除末位' }).click()
+    await dialog.getByRole('button', { name: '删除末位' }).click()
+    await expect(amount).toHaveValue('7')
+    await dialog.getByRole('button', { name: '9', exact: true }).click()
+    await expect(amount).toHaveValue('79')
+
+    await dialog.getByLabel('备注').fill('键盘输入')
+    await dialog.getByRole('button', { name: '完成' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(page.getByText('键盘输入')).toBeVisible()
+  })
+
+  test('I02 未选分类时键盘仍可用，完成键说明原因', async ({ page }) => {
+    await gotoBills(page)
+    const dialog = await openEntrySheet(page)
+    const amount = dialog.getByRole('textbox', { name: /金额/ })
+    // The keypad must never be dead just because nothing is selected yet.
+    await dialog.getByRole('button', { name: '5', exact: true }).click()
+    await expect(amount).toHaveValue('5')
+    await dialog.getByRole('button', { name: '完成' }).click()
+    await expect(dialog.getByRole('alert')).toContainText(/账户|分类/)
+    await expect(dialog).toBeVisible()
+  })
+
+  test('I03 新建分类可选择图标颜色并在记账网格生效', async ({ page }) => {
+    await gotoBills(page)
+    await page.goto('/me')
+    await page.getByRole('button', { name: /分类管理/ }).click()
+    const editor = page.getByRole('dialog', { name: '分类管理' })
+    const name = `彩分类 ${uid('c')}`
+    await editor.getByRole('button', { name: '新建分类' }).click()
+    await editor.getByLabel('名称').fill(name)
+    const plum = editor.getByRole('button', { name: '颜色 紫藤' })
+    await plum.click()
+    await expect(plum).toHaveAttribute('aria-pressed', 'true')
+    await editor.getByRole('button', { name: '保存分类' }).click()
+
+    const row = editor.locator('.editor-row').filter({ hasText: name }).first()
+    await expect(row.locator('.category-tile')).toHaveAttribute('style', /--cat-5/)
+    await editor.getByRole('button', { name: '关闭分类管理' }).click()
+
+    // The same colour is used by the entry grid.
+    const sheet = await openEntrySheet(page)
+    const option = sheet.getByRole('option', { name })
+    await expect(option.locator('.category-tile')).toHaveAttribute('style', /--cat-5/)
+  })
+
+  test('I04 默认分类自带扁平图标与颜色，不再是空白圆点', async ({ page }) => {
+    await gotoBills(page)
+    const sheet = await openEntrySheet(page)
+    const grid = sheet.getByRole('listbox', { name: '选择分类' })
+    // The grid shows one kind at a time: 16 seeded expense categories.
+    const expenseOptions = grid.getByRole('option')
+    expect(await expenseOptions.count()).toBeGreaterThanOrEqual(16)
+    for (let index = 0; index < 3; index += 1) {
+      await expect(expenseOptions.nth(index).locator('.category-tile svg')).toBeVisible()
+      await expect(expenseOptions.nth(index).locator('.tile-dot')).toHaveCount(0)
+      await expect(expenseOptions.nth(index).locator('.category-tile')).toHaveAttribute('style', /--cat-/)
+    }
+    await sheet.getByRole('tab', { name: '收入' }).click()
+    const incomeOptions = grid.getByRole('option')
+    expect(await incomeOptions.count()).toBeGreaterThanOrEqual(5)
+    for (let index = 0; index < 3; index += 1) {
+      await expect(incomeOptions.nth(index).locator('.category-tile svg')).toBeVisible()
+    }
   })
 })

@@ -45,7 +45,7 @@
 | `--cat-3` | `#DFE9D6` | `--cat-7` | `#E9E0D2` |
 | `--cat-4` | `#D6E7EA` | `--cat-8` | `#E3E8DE` |
 
-色值以 `apps/web/src/styles.css` 为准；分类 emoji 与柔和底色组合使用，底色只做容器，保证正文对比度。
+色值以 `apps/web/src/styles.css` 为准。每个色号另配 `--cat-N-ink` 深色，用于扁平图标的描边与选中环；底色只做容器，正文对比度不受影响。分类的图标键与色号存库（`categories.emoji` / `categories.color`），默认分类在播种时即带一版扁平图标与配色；新建或编辑分类可在 8 色中选择，全部界面（记账网格、账单行、图表排行）使用同一色号。
 
 ## 3. 触控与可访问性硬约束
 
@@ -71,7 +71,7 @@
 | --- | --- | --- |
 | 公开首页 / 登录 | `/`、`/login` | 产品介绍、登录弹层；未登录不渲染任何私人数据，没有初始化入口 |
 | 账单 | `/bills` | 月份切换、搜索、日历、本月支出/收入/结余、预算进度条、按天分组明细；点行更正、长按或菜单删除（冲正） |
-| 记账面板 | 由底部中间键打开 | 支出/收入/转账分段、金额显示、4 列分类网格、备注/日期/账户/成员、自定义数字键盘、完成键 |
+| 记账面板 | 由底部中间键打开 | 支出/收入/转账分段、金额输入框（系统键盘可用）、4 列分类网格、备注/日期/账户/成员、自定义数字键盘、完成键 |
 | 图表 | `/charts` | 收支与月/年切换、环形图中心合计、分类排行（金额降序 + 占比） |
 | 资产 | `/assets` | 净资产、资产/负债合计、现金与信用卡分组、账户流水、新建账户、行内转账 |
 | 我的 | `/me` | 当前用户与家庭、成员、分类管理、预算、导出账单、邮箱与密码、管理员区（邀请与审批/用户/审计）、退出 |
@@ -82,8 +82,13 @@
 ## 6. 动效与状态
 
 - 动效只用 `--motion-*` + `--ease-soft`；按钮 hover 仅在有 hover 能力的设备启用，按下缩放仅在用户不要求减少动效时启用。
+- 页面切换：`router-view` 使用 `view` 过渡（进入 `opacity + translateY(10px)`，离场 `-4px`，`mode="out-in"`）。
+- 弹层：遮罩 `backdrop-in` 淡入（160ms），面板 `sheet-rise` 抬升 18px 并轻微缩放（240ms）。
+- 列表：账单行与分类网格按 `--i` 序号做 18–22ms 阶梯延迟，最多 8 步；环形图与占比条走 CSS 过渡。
+- 加载：列表、图表、资产分别使用骨架屏（`AppSkeleton.vue`）而非空白或纯文字，骨架扫光 1.25s。
 - 保存成功：toast + 列表乐观插入，后台以服务端数据为准；保存中禁用完成键与关闭键；失败显示内联错误条并保留输入；离线明确提示「网络不可用，未保存」，**绝不伪造成功**。
 - 空状态、加载骨架、错误条与离线提示的文案必须如实，不使用「演示数据」措辞描述真实账本。
+- 所有动效都必须在 `prefers-reduced-motion: reduce` 下关闭（已在全局样式统一处理），且不得作为唯一反馈。
 
 ## 7. 品牌
 
@@ -103,7 +108,7 @@
 | 应用壳（导航、记账面板挂载、路由切换） | `apps/web/src/App.vue` |
 | 底部导航/轨道导航 | `apps/web/src/components/TabBar.vue` |
 | 数字键盘 | `apps/web/src/components/AmountKeypad.vue` |
-| 分类网格 | `apps/web/src/components/CategoryGrid.vue`、`CategoryIcon.vue`、`categoryIcons.ts` |
+| 分类网格 | `apps/web/src/components/CategoryGrid.vue`、`CategoryTile.vue`、`CategoryIcon.vue`、`categoryIcons.ts`、`services/categoryStyle.ts` |
 | 环形图 | `apps/web/src/components/DonutChart.vue` |
 | 页面 | `apps/web/src/views/` |
 | 视觉/E2E 证据 | `apps/web/e2e/financial-closure.spec.ts`（含 H02/H03/H04 视口与触控断言） |

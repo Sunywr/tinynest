@@ -42,6 +42,14 @@ const TYPES: { key: TransactionType; label: string }[] = [
 ]
 
 const categoryEditor = ref(false)
+
+function onAmountInput(event: Event) {
+  form.setAmount((event.target as HTMLInputElement).value)
+  void nextTick(() => {
+    const field = amountBox.value as unknown as HTMLInputElement | null
+    if (field && field.value !== amount.value) field.value = amount.value
+  })
+}
 const closeConfirm = ref(false)
 const panel = ref<HTMLElement | null>(null)
 const amountBox = ref<HTMLElement | null>(null)
@@ -89,7 +97,9 @@ onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
   await load()
   await nextTick()
-  amountBox.value?.focus()
+  // Opening the on-screen keyboard unprompted is intrusive on phones, so only
+  // focus the amount field where a hardware pointer or keyboard is likely.
+  if (window.matchMedia?.('(pointer: fine)').matches) amountBox.value?.focus()
 })
 onBeforeUnmount(() => {
   document.body.classList.remove('no-scroll')
@@ -113,11 +123,11 @@ onBeforeUnmount(() => {
           </button>
         </header>
 
-        <div ref="amountBox" class="amount-display" tabindex="-1" role="textbox" aria-readonly="true"
-          :aria-label="`金额 ${display} 元`">
+        <div class="amount-display">
           <span class="amount-currency" aria-hidden="true">¥</span>
-          <span class="amount-value">{{ display }}</span>
-          <span class="amount-caret" aria-hidden="true"></span>
+          <input ref="amountBox" class="amount-value amount-input" type="text" inputmode="decimal"
+            autocomplete="off" enterkeyhint="done" :value="amount" :disabled="saving"
+            :aria-label="`金额 ${display} 元`" @input="onAmountInput" @keydown.enter.prevent="save" />
         </div>
 
         <p v-if="loading" class="entry-loading" role="status">正在加载分类与账户…</p>
@@ -163,7 +173,7 @@ onBeforeUnmount(() => {
             <button v-if="!offline" type="button" class="error-retry" @click="save">重试</button>
           </div>
 
-          <AmountKeypad :disabled="offline || accountMissing" :busy="saving"
+          <AmountKeypad :disabled="offline" :busy="saving"
             :done-label="isEdit ? '保存更正' : '完成'" @press="press" @back="backspace" @done="save" />
         </template>
 

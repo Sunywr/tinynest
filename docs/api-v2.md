@@ -1,4 +1,4 @@
-# TinyNest V2 · API 契约
+﻿# TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
 > 契约范围：**55 条业务路由**（按「方法 + 路径」计）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 55。
@@ -110,9 +110,9 @@
 
 | 方法 | 路径 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
-| GET | `/categories` | 查询 `kind?`（`expense` / `income`） | 200 `{items:[{id,kind,name,emoji,sort,active}]}`，按 `kind,sort,name,id`；包含已停用（`active=0`），排除已删除（`active=-1`） | 400 |
-| POST | `/categories` | `kind`（`expense` / `income`）、`name`（1–50 字）、`emoji`（≤16 字符且无控制字符，可空）、`sort?` | 201 `{id,kind,name,emoji,sort,active:1}` | 400 |
-| PATCH | `/categories/{id}` | `name?` / `emoji?` / `sort?` / `active?`（至少一项） | 200 `{id}` | 400、404 |
+| GET | `/categories` | 查询 `kind?`（`expense` / `income`） | 200 `{items:[{id,kind,name,emoji,color,sort,active}]}`，按 `kind,sort,name,id`；包含已停用（`active=0`），排除已删除（`active=-1`） | 400 |
+| POST | `/categories` | `kind`（`expense` / `income`）、`name`（1–50 字）、`emoji`（图标键或 emoji，≤16 字符且无控制字符，可空）、`color?`（`1`–`8` 调色板键或空）、`sort?` | 201 `{id,kind,name,emoji,color,sort,active:1}` | 400 |
+| PATCH | `/categories/{id}` | `name?` / `emoji?` / `color?` / `sort?` / `active?`（至少一项） | 200 `{id}` | 400、404 |
 | DELETE | `/categories/{id}` | 无 | 200 `{id,status:"deleted"}`；软删除（`active=-1`），历史分录仍可解析分类 | 404 |
 
 说明：分类为**单层**，每笔流水只有一个 `category_id`；改分类名不会回写历史流水，历史流水只保存 `category_id`。
@@ -154,7 +154,7 @@
 | `amount_minor` | 正整数分 |
 | `currency` | V2 固定 `CNY` |
 | `occurred_on` | 业务日期 `YYYY-MM-DD` |
-| `category_id` / `category_name` / `category_emoji` | 支出/收入分类；转账为 `null` |
+| `category_id` / `category_name` / `category_emoji` / `category_color` | 支出/收入分类与调色板键；转账为 `null` |
 | `account_id` / `account_name` | 转出账户或支出/收入账户 |
 | `to_account_id` / `to_account_name` | 转入账户；非转账为 `null` |
 | `member_id` / `note` | 可空 |
@@ -170,7 +170,7 @@
 | 方法 | 路径 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
 | GET | `/stats/summary` | 查询 `from?`、`to?`；缺省为本业务月首日至今天 | 200 `{from,to,income_minor,expense_minor,balance_minor}`；`balance = income − expense` | 400（日期非法或 `from > to`） |
-| GET | `/stats/categories` | 查询 `from?`、`to?`、`kind?`（默认 `expense`） | 200 `{from,to,kind,items:[{category_id,name,emoji,amount_minor,share_bp}]}`；按金额降序，净额为零的分类不返回 | 400 |
+| GET | `/stats/categories` | 查询 `from?`、`to?`、`kind?`（默认 `expense`） | 200 `{from,to,kind,items:[{category_id,name,emoji,color,amount_minor,share_bp}]}`；按金额降序，净额为零的分类不返回 | 400 |
 | GET | `/stats/daily` | 查询 `month?`（`YYYY-MM`，默认当前业务月） | 200 `{month,days:[{day,expense_minor,income_minor}]}`，按日升序，仅返回有净额的日子 | 400 |
 | GET | `/stats/monthly` | 查询 `to?`（`YYYY-MM`，默认当前业务月）、`months?`（1–120，默认 6） | 200 `{months:[{month,income_minor,expense_minor}]}`，含无数据月份（补 0） | 400 |
 

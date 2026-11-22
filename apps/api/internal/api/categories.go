@@ -18,8 +18,19 @@ type category struct {
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
 	Emoji  string `json:"emoji"`
+	Color  string `json:"color"`
 	Sort   int    `json:"sort"`
 	Active int    `json:"active"`
+}
+
+// validCategoryColor accepts the palette keys the web client offers, or an
+// empty value meaning "let the client derive a colour from the position".
+func validCategoryColor(color string) bool {
+	switch color {
+	case "", "1", "2", "3", "4", "5", "6", "7", "8":
+		return true
+	}
+	return false
 }
 
 func validCategoryEmoji(emoji string) bool {
@@ -33,7 +44,7 @@ func validCategoryName(name string) bool {
 
 func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	query := `SELECT id,kind,name,emoji,sort,active FROM categories
+	query := `SELECT id,kind,name,emoji,color,sort,active FROM categories
 		WHERE household_id=? AND active>=0`
 	args := []any{p.HouseholdID}
 	if kind := strings.TrimSpace(r.URL.Query().Get("kind")); kind != "" {
@@ -54,7 +65,7 @@ func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	items := []category{}
 	for rows.Next() {
 		var c category
-		if err := rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Emoji, &c.Sort, &c.Active); err != nil {
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Emoji, &c.Color, &c.Sort, &c.Active); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -73,6 +84,7 @@ func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		Kind  string `json:"kind"`
 		Name  string `json:"name"`
 		Emoji string `json:"emoji"`
+		Color string `json:"color"`
 		Sort  *int   `json:"sort"`
 	}
 	if err := decode(r, &in); err != nil {
@@ -92,18 +104,22 @@ func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "分类表情格式不正确")
 		return
 	}
+	if !validCategoryColor(in.Color) {
+		writeErr(w, 400, "invalid_request", "分类颜色无效")
+		return
+	}
 	sort := 0
 	if in.Sort != nil {
 		sort = *in.Sort
 	}
 	id := newID("cat")
 	if _, err := a.DB.ExecContext(r.Context(),
-		`INSERT INTO categories(id,household_id,kind,name,emoji,sort) VALUES(?,?,?,?,?,?)`,
-		id, p.HouseholdID, in.Kind, in.Name, in.Emoji, sort); err != nil {
+		`INSERT INTO categories(id,household_id,kind,name,emoji,color,sort) VALUES(?,?,?,?,?,?,?)`,
+		id, p.HouseholdID, in.Kind, in.Name, in.Emoji, in.Color, sort); err != nil {
 		internalErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, category{ID: id, Kind: in.Kind, Name: in.Name, Emoji: in.Emoji, Sort: sort, Active: 1})
+	writeJSON(w, http.StatusCreated, category{ID: id, Kind: in.Kind, Name: in.Name, Emoji: in.Emoji, Color: in.Color, Sort: sort, Active: 1})
 }
 
 func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
@@ -111,10 +127,11 @@ func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name   *string `json:"name"`
 		Emoji  *string `json:"emoji"`
+		Color  *string `json:"color"`
 		Sort   *int    `json:"sort"`
 		Active *bool   `json:"active"`
 	}
-	if err := decode(r, &in); err != nil || (in.Name == nil && in.Emoji == nil && in.Sort == nil && in.Active == nil) {
+	if err := decode(r, &in); err != nil || (in.Name == nil && in.Emoji == nil && in.Color == nil && in.Sort == nil && in.Active == nil) {
 		writeErr(w, 400, "invalid_request", "请提供要更新的分类字段")
 		return
 	}
@@ -129,6 +146,10 @@ func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "分类表情格式不正确")
 		return
 	}
+	if in.Color != nil && !validCategoryColor(*in.Color) {
+		writeErr(w, 400, "invalid_request", "分类颜色无效")
+		return
+	}
 	var active any
 	if in.Active != nil {
 		if *in.Active {
@@ -139,9 +160,10 @@ func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	result, err := a.DB.ExecContext(r.Context(),
-		`UPDATE categories SET name=COALESCE(?,name), emoji=COALESCE(?,emoji), sort=COALESCE(?,sort), active=COALESCE(?,active)
+		`UPDATE categories SET name=COALESCE(?,name), emoji=COALESCE(?,emoji), color=COALESCE(?,color),
+		        sort=COALESCE(?,sort), active=COALESCE(?,active)
 		 WHERE id=? AND household_id=? AND active>=0`,
-		in.Name, in.Emoji, in.Sort, active, id, p.HouseholdID)
+		in.Name, in.Emoji, in.Color, in.Sort, active, id, p.HouseholdID)
 	if err != nil {
 		internalErr(w, err)
 		return

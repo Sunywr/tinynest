@@ -1,4 +1,4 @@
-/** TinyNest V2 API client. Only same-origin relative /api/v1 paths are used.
+﻿/** TinyNest V2 API client. Only same-origin relative /api/v1 paths are used.
  *  No host, credential, certificate or database path is ever present in browser code.
  *  All amounts are integer minor units (cents); formatting lives in format.ts. */
 
@@ -103,7 +103,7 @@ export type ManagedUser = UserProfile & { id: string; role: string; status: stri
 
 export type Household = { name: string; currency: string; timezone: string }
 export type Member = { id: string; name: string; status: string }
-export type Category = { id: string; kind: 'expense' | 'income'; name: string; emoji: string; sort: number; active: number | boolean }
+export type Category = { id: string; kind: 'expense' | 'income'; name: string; emoji: string; color?: string; sort: number; active: number | boolean }
 export type Account = {
   id: string
   kind: 'cash' | 'credit'
@@ -124,6 +124,7 @@ export type Transaction = {
   category_id?: string | null
   category_name?: string | null
   category_emoji?: string | null
+  category_color?: string | null
   account_id?: string | null
   account_name?: string | null
   to_account_name?: string | null
@@ -143,7 +144,7 @@ export type TransactionInput = {
   note?: string | null
 }
 export type Summary = { from: string; to: string; income_minor: number; expense_minor: number; balance_minor: number }
-export type CategoryStat = { category_id: string; name: string; emoji: string; amount_minor: number; share_bp: number }
+export type CategoryStat = { category_id: string; name: string; emoji: string; color?: string; amount_minor: number; share_bp: number }
 export type DailyStat = { day: string; expense_minor: number; income_minor: number }
 export type MonthlyStat = { month: string; income_minor: number; expense_minor: number }
 export type Budget = { month: string; amount_minor: number | null; spent_minor?: number }
@@ -215,8 +216,8 @@ export const api = {
 
   // Bookkeeping module (V2).
   categories: () => get<{ items: Category[] }>('/categories'),
-  createCategory: (body: { kind: string; name: string; emoji: string; sort?: number }) => post<Category>('/categories', body),
-  updateCategory: (id: string, body: { name?: string; emoji?: string; sort?: number; active?: boolean }) =>
+  createCategory: (body: { kind: string; name: string; emoji: string; color?: string; sort?: number }) => post<Category>('/categories', body),
+  updateCategory: (id: string, body: { name?: string; emoji?: string; color?: string; sort?: number; active?: boolean }) =>
     patch<Category>(`/categories/${encodeURIComponent(id)}`, body),
   deleteCategory: (id: string) => del(`/categories/${encodeURIComponent(id)}`),
 

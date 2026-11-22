@@ -1,8 +1,9 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ArrowLeftRight, Plus, X } from 'lucide-vue-next'
 import AccountForm from '../components/AccountForm.vue'
 import AccountRow from '../components/AccountRow.vue'
+import AppSkeleton from '../components/AppSkeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import TransferForm from '../components/TransferForm.vue'
 import { api, type Account } from '../services/api'
@@ -99,7 +100,7 @@ onMounted(() => void load())
       {{ error }}
       <button type="button" class="error-retry" @click="load">重试</button>
     </p>
-    <p v-if="loading" class="assets-loading" role="status">正在加载账户…</p>
+    <AppSkeleton v-if="loading" variant="cards" :rows="3" />
 
     <template v-if="!empty && !error">
       <section class="card assets-group" aria-label="现金账户">

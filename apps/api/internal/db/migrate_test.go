@@ -1,4 +1,4 @@
-package db
+﻿package db
 
 import (
 	"context"
@@ -25,22 +25,22 @@ func TestMigrateFromZeroAppliesBothVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(expected) != 2 || expected[0] != 1 || expected[1] != 2 {
-		t.Fatalf("expected versions [1 2] from the embedded files, got %v", expected)
+	if len(expected) < 2 || expected[0] != 1 || expected[1] != 2 {
+		t.Fatalf("expected versions beginning [1 2] from the embedded files, got %v", expected)
 	}
 	applied, err := database.Migrate(ctx)
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if len(applied) != 2 {
-		t.Fatalf("expected 2 applied versions, got %v", applied)
+	if len(applied) != len(expected) {
+		t.Fatalf("expected %d applied versions, got %v", len(expected), applied)
 	}
 	versions, err := database.Versions(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(versions) != 2 {
-		t.Fatalf("readiness must see both versions, got %v", versions)
+	if len(versions) != len(expected) {
+		t.Fatalf("readiness must see every version, got %v", versions)
 	}
 	var baseline string
 	if err := database.QueryRow(`SELECT value FROM schema_meta WHERE meta_key='baseline'`).Scan(&baseline); err != nil {
@@ -151,8 +151,12 @@ func TestEmptyLegacyLedgerIsRebuilt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate over an empty legacy ledger: %v", err)
 	}
-	if len(applied) != 2 {
-		t.Fatalf("expected both versions applied, got %v", applied)
+	expected, err := database.ExpectedVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != len(expected) {
+		t.Fatalf("expected %d applied versions, got %v", len(expected), applied)
 	}
 	if !database.ledgerHasChecksumColumn(ctx) {
 		t.Fatal("ledger was not rebuilt with the checksum column")

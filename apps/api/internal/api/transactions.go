@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"context"
@@ -284,7 +284,7 @@ func derefString(s *string) string {
 
 const transactionSelect = `
 	SELECT t.id,t.type,t.amount_minor,t.currency,t.occurred_on,
-	       t.category_id,c.name,c.emoji,
+	       t.category_id,c.name,c.emoji,c.color,
 	       t.account_id,a.name,t.to_account_id,b.name,
 	       t.member_id,t.note,t.status,t.entry_id,t.created_at
 	FROM transactions t
@@ -302,6 +302,7 @@ type transactionRow struct {
 	CategoryID    sql.NullString
 	CategoryName  sql.NullString
 	CategoryEmoji sql.NullString
+	CategoryColor sql.NullString
 	AccountID     sql.NullString
 	AccountName   sql.NullString
 	ToAccountID   sql.NullString
@@ -318,7 +319,7 @@ func (row transactionRow) public() map[string]any {
 		"id": row.ID, "type": row.Type, "amount_minor": row.AmountMinor, "currency": row.Currency,
 		"occurred_on": row.OccurredOn,
 		"category_id": nullString(row.CategoryID), "category_name": nullString(row.CategoryName),
-		"category_emoji": nullString(row.CategoryEmoji),
+		"category_emoji": nullString(row.CategoryEmoji), "category_color": nullString(row.CategoryColor),
 		"account_id":     nullString(row.AccountID), "account_name": nullString(row.AccountName),
 		"to_account_id": nullString(row.ToAccountID), "to_account_name": nullString(row.ToAccountName),
 		"member_id": nullString(row.MemberID), "note": nullString(row.Note),
@@ -405,7 +406,7 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row transactionRow
 		if err := rows.Scan(&row.ID, &row.Type, &row.AmountMinor, &row.Currency, &row.OccurredOn,
-			&row.CategoryID, &row.CategoryName, &row.CategoryEmoji,
+			&row.CategoryID, &row.CategoryName, &row.CategoryEmoji, &row.CategoryColor,
 			&row.AccountID, &row.AccountName, &row.ToAccountID, &row.ToAccountName,
 			&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt); err != nil {
 			internalErr(w, err)
@@ -435,7 +436,7 @@ func (a *API) loadTransactionRow(ctx context.Context, q db.Queryer, householdID,
 	var row transactionRow
 	err := q.QueryRowContext(ctx, query, householdID, id).Scan(
 		&row.ID, &row.Type, &row.AmountMinor, &row.Currency, &row.OccurredOn,
-		&row.CategoryID, &row.CategoryName, &row.CategoryEmoji,
+		&row.CategoryID, &row.CategoryName, &row.CategoryEmoji, &row.CategoryColor,
 		&row.AccountID, &row.AccountName, &row.ToAccountID, &row.ToAccountName,
 		&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt)
 	return row, err

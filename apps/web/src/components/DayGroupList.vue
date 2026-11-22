@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { Ellipsis } from 'lucide-vue-next'
-import CategoryIcon from './CategoryIcon.vue'
+import CategoryTile from './CategoryTile.vue'
 import { dateLabel, formatMinor, weekdayLabel } from '../services/format'
 import type { Transaction } from '../services/api'
 
@@ -38,8 +38,6 @@ const groups = computed<Group[]>(() => {
   return [...map.values()].sort((a, b) => (a.day < b.day ? 1 : -1))
 })
 
-const emojiPattern = /\p{Extended_Pictographic}/u
-const palette = ['var(--cat-1)', 'var(--cat-2)', 'var(--cat-3)', 'var(--cat-4)', 'var(--cat-5)', 'var(--cat-6)', 'var(--cat-7)', 'var(--cat-8)']
 
 function title(tx: Transaction): string {
   if (tx.type === 'transfer') return `${tx.account_name || '账户'} → ${tx.to_account_name || '账户'}`
@@ -52,14 +50,12 @@ function subtitle(tx: Transaction): string {
 function emoji(tx: Transaction): string {
   return tx.category_emoji || (tx.type === 'income' ? '💰' : tx.type === 'transfer' ? '🔁' : '📝')
 }
-function isEmoji(value: string): boolean {
-  return emojiPattern.test(value)
-}
-function glyphColor(tx: Transaction): string {
+// Stable fallback index for rows whose category has no colour yet (legacy data).
+function txIndex(tx: Transaction): number {
   const key = tx.category_id || tx.type
   let hash = 0
-  for (let i = 0; i < key.length; i += 1) hash = (hash + key.charCodeAt(i)) % palette.length
-  return palette[hash]
+  for (let i = 0; i < key.length; i += 1) hash = (hash + key.charCodeAt(i)) % 8
+  return hash
 }
 function amountClass(tx: Transaction): string {
   return tx.type === 'income' ? 'income' : tx.type === 'transfer' ? 'transfer' : 'expense'
@@ -115,13 +111,10 @@ onBeforeUnmount(cancelPress)
         </span>
       </header>
       <ul class="day-rows">
-        <li v-for="tx in group.items" :key="tx.id" class="tx-row">
+        <li v-for="(tx, rowIndex) in group.items" :key="tx.id" class="tx-row" :style="{ '--i': rowIndex }">
           <button type="button" class="tx-main" :aria-label="rowLabel(tx)"
             @click="onEdit(tx)" @pointerdown="startPress(tx)" @pointerup="cancelPress" @pointerleave="cancelPress" @pointercancel="cancelPress">
-            <span class="tx-glyph" :style="{ background: glyphColor(tx) }" aria-hidden="true">
-              <span v-if="isEmoji(emoji(tx))" class="tx-emoji">{{ emoji(tx) }}</span>
-              <CategoryIcon v-else :value="emoji(tx)" />
-            </span>
+            <CategoryTile class="tx-glyph" :icon="emoji(tx)" :color="tx.category_color" :index="txIndex(tx)" :size="38" />
             <span class="tx-body">
               <span class="tx-name">{{ title(tx) }}</span>
               <span class="tx-category">{{ subtitle(tx) }}</span>
@@ -146,6 +139,17 @@ onBeforeUnmount(cancelPress)
 .day-total { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .day-rows { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .tx-row { display: flex; align-items: center; border-bottom: 1px solid var(--border); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .tx-row {
+    animation: row-in var(--motion-base) var(--ease-soft) both;
+    animation-delay: calc(min(var(--i, 0), 8) * 22ms);
+  }
+  @keyframes row-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+}
 .tx-row:last-child { border-bottom: 0; }
 .tx-main {
   flex: 1;
