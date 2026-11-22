@@ -47,3 +47,7 @@ id_ed25519*
 *.credentials.yml
 /deploy/local/
 /.secrets/
+
+# Local build temp dirs created by tooling workarounds
+apps/web/.tmp-build/
+
