@@ -102,6 +102,21 @@
 - 已用金额 = 该月支出科目净额（与 6.1 支出同公式、同家庭范围），由 `monthExpense()` 实时计算，不缓存。
 - 未设置预算时 `GET /budgets/{month}` 返回 `amount_minor: null` 与实时 `spent_minor`；`null` 不等于 0。
 
+### 6.5 信用卡还款现金计划（派生统计，不写分录）
+
+`GET /accounts?include=credit_debt` 返回只读计划；**不新增账单表、不写 `journal_entries` / `journal_lines`、不改余额**。配置只存在于 `accounts.statement_day` / `accounts.due_day`（均可空，1–31）。
+
+1. **账单周期**：账单截止日 = 事件日期当天或之后第一个 `statement_day`（按当月实际天数钳制）；周期开始日 = 上一月账单截止日的次日。例：账单日 5，2026-11-10 的消费归入 `2026-11-06 ~ 2026-12-05`。
+2. **还款日**：严格晚于账单截止日的第一个 `due_day`。例：账单日 5/还款日 23 → 11-05 截止、11-23 到期；账单日 25/还款日 13 → 12-25 截止、次年 01-13 到期。28/29/30/31 与闰年全部钳制到月末。
+3. **有效债务事件**：只取截至今天、`status='posted'` 且 `reversal_of` 为空的 `journal_entries`；消费须对应当前 `status='posted'` 的 `type=expense` 流水，还款须对应 `status='posted'` 的 `type=transfer` 且 `to_account_id` 为该卡；另加 `biz_type='opening_liability'` 的期初欠款。已冲正/已删除/已更正的旧记录不计入，其原分录与冲正分录仍完整保留在总账中。
+4. **还款分配**：按到期日从早到晚 FIFO 冲抵；还款多于欠款时为溢缴款（`credit_balance_minor`），欠款显示 0。
+5. **期初欠款**：视为在账户创建时已经出账，归入创建日之前最近的账单截止日，避免把已有欠款错误推到下一期。
+6. **聚合**：`total_debt_minor` 为全部未还（含未出账、逾期）；`unbilled_minor` 为账单截止日 > 今天的未还；`overdue_minor` 为到期日 < 今天的未还；`next_due_on` 只取今天及以后最早未还到期日。
+7. **发薪日**：取当前登录用户的 `users.payday`；下次发薪日 = 严格晚于今天的第一个发薪日（今天发薪则算下月），31 日按月末钳制。`cash_needed_minor` = 到期日 ≤ 下次发薪日的未还合计（含逾期）；未设置发薪日或没有任何已配置卡时为 `null`。
+8. **可用现金**：启用的 `cash` 账户在 `occurred_on <= 今天` 的余额合计；不扣除发薪日前其他开销，信用卡溢缴款不计入。
+9. **完成度**：`complete` 仅在发薪日已设置且所有未删除信用卡都配置时才是 true；否则界面显示「已知需准备 / 未配置卡未计入」，不得宣称现金足够。
+10. **无快照**：不保存历史账单；修改账单日/还款日会按当前配置重算未还金额。未来日期的流水不计入「截至今天」的计划。
+
 ## 7. 幂等
 
 - 仅 `POST /transactions` 与 `POST /accounts/transfers` 读取 `Idempotency-Key` 请求头。
@@ -128,15 +143,17 @@
 | 账户类型 | 现金/证券/理财/信用卡/信用工具等 | 仅 `cash` / `credit` |
 | 流水拆分 | `transaction_splits`，多分类分摊 | 单分类，无拆分行 |
 | 退款 | `/refunds` 路由与 `refunds` 表 | 退役；内核构造器未暴露 |
-| 信用/分期/负债/投资 | 有独立表与规则 | 全部退役 |
+| 信用账单/分期/负债/投资 | 有独立表与规则 | 整套退役 |
+| 信用卡账单日/还款日 | 独立 `credit_instruments` + 账单表 | 仅 `accounts` 两个可空配置列 + 只读派生计划，无账单表/分期/利息 |
 | 分类 | 两级，可设 `parent_id` | 单层，无 `parent_id` |
-| 统计科目 | 含利息、手续费、保险、分红、投资损益等 | 仅 `4010:%` 收入、`5010:%` 支出 |
-| 迁移 | 多版本增量 | 单一迁移器 + `baseline=v2` 基线重置 |
+| 统计科目 | 含利息、手续费、保险、分红、投资损益等 | 仅 `4010:%` 收入、`5010:%` 支出；还款计划单独派生 |
+| 迁移 | 多版本增量 | 单一迁移器 + `baseline=v2` 基线重置（当前 001–004） |
 
 ## 11. 相关代码与文档
 
 - 分录构造与冲正：`apps/api/internal/ledger/rules.go`、`entry.go`、`subjects.go`。
 - 流水写入/更正/删除：`apps/api/internal/api/transactions.go`；账户与期初：`internal/api/accounts.go`。
 - 统计与预算：`apps/api/internal/api/stats.go`。
+- 信用卡还款计划：`apps/api/internal/api/credit_debt.go`（只读派生）；账户配置列在 `internal/api/accounts.go`。
 - 余额重建：`apps/api/internal/db/journal.go`。
 - 数据模型：[er-v2.md](er-v2.md)；接口契约：[api-v2.md](api-v2.md)；迁移与基线：[DEVELOPMENT.md](DEVELOPMENT.md) §5。

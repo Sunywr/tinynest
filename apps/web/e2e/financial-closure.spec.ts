@@ -20,6 +20,11 @@ function uid(prefix: string): string {
   return `${prefix}-${Date.now()}-${unique}`
 }
 
+/** Asia/Shanghai business date, optionally shifted by whole days. */
+function shanghaiDate(offsetDays = 0): string {
+  return new Date(Date.now() + 8 * 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10)
+}
+
 test.describe.configure({ mode: 'serial' })
 
 async function ensureInitialized(page: Page) {
@@ -572,11 +577,13 @@ test.describe('E 资产', () => {
     await expect(page.getByRole('region', { name: '现金账户' })).toContainText(name)
   })
 
-  test('E03 信用卡分组如实标注仅记录欠款、不含账单与分期', async ({ page }) => {
+  test('E03 信用卡分组如实标注还款计划与未提供能力', async ({ page }) => {
     await signIn(page)
     await page.goto('/assets')
-    await expect(page.getByRole('note')).toContainText('只记录欠款')
-    await expect(page.getByRole('note')).toContainText('不包含账单、分期')
+    const note = page.getByRole('note')
+    await expect(note).toContainText('账单日')
+    await expect(note).toContainText('还款日')
+    await expect(note).toContainText('分期')
     await expect(page.getByRole('region', { name: '信用卡账户' })).toBeVisible()
   })
 
@@ -588,6 +595,7 @@ test.describe('E 资产', () => {
     await page.getByRole('button', { name: '行内转账' }).click()
     const dialog = page.getByRole('dialog', { name: '账户转账' })
     await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('现金账户 → 信用卡')
     await dialog.getByLabel('金额（元）').fill('12.34')
     await dialog.getByRole('button', { name: '确认转账' }).click()
     await expect(dialog).toHaveCount(0)
@@ -600,6 +608,109 @@ test.describe('E 资产', () => {
     await page.goto('/assets')
     await page.locator('.account-row').first().click()
     await expect(page.getByRole('region', { name: '账户流水' })).toBeVisible()
+  })
+
+  test('E06 信用卡还款计划：配置账单日并计算发薪日前现金', async ({ page }) => {
+    const csrf = await signIn(page)
+    const today = shanghaiDate()
+    const tomorrow = shanghaiDate(1)
+    const statementDay = Number(today.slice(8, 10))
+    const dueDay = Number(tomorrow.slice(8, 10))
+
+    const paydayRes = await page.request.patch('/api/v1/auth/me/profile', {
+      data: { payday: dueDay },
+      headers: { 'X-CSRF-Token': csrf },
+    })
+    expect(paydayRes.ok()).toBeTruthy()
+
+    const cashRes = await page.request.post('/api/v1/accounts', {
+      data: { kind: 'cash', name: `还款现金 ${uid('a')}`, opening_minor: 1000000 },
+      headers: writeHeaders(csrf),
+    })
+    expect(cashRes.ok()).toBeTruthy()
+
+    // Create the card through the real UI without a cycle configuration first.
+    await page.goto('/assets')
+    await page.getByRole('button', { name: '新增账户' }).first().click()
+    const createDialog = page.getByRole('dialog', { name: '新增账户' })
+    await createDialog.getByRole('tab', { name: '信用卡（负债）' }).click()
+    const cardName = `信用卡 ${uid('c')}`
+    await createDialog.getByLabel('账户名称').fill(cardName)
+    await createDialog.getByRole('button', { name: '创建账户' }).click()
+    await expect(createDialog).toHaveCount(0)
+
+    const panel = page.getByRole('region', { name: '信用卡还款计划' })
+    await expect(panel).toBeVisible()
+    const newRow = panel.locator('.credit-debt-row', { hasText: cardName })
+    await expect(newRow).toContainText('未设置账单日')
+    await newRow.getByRole('button', { name: '设置账单日' }).click()
+
+    const editDialog = page.getByRole('dialog', { name: '编辑账户' })
+    await editDialog.getByLabel('账单日（1–31）').fill(String(statementDay))
+    await editDialog.getByLabel('还款日（1–31）').fill(String(dueDay))
+    await editDialog.getByRole('button', { name: '保存账户' }).click()
+    await expect(editDialog).toHaveCount(0)
+
+    // Configure every other active card too, so the plan is complete.
+    const accountsRes = await page.request.get('/api/v1/accounts', { headers: { 'X-CSRF-Token': csrf } })
+    const accounts = (await accountsRes.json()).items as { id: string; kind: string; status: string; name: string }[]
+    for (const account of accounts.filter(item => item.kind === 'credit' && item.status !== 'deleted' && item.name !== cardName)) {
+      const res = await page.request.patch(`/api/v1/accounts/${account.id}`, {
+        data: { statement_day: statementDay, due_day: dueDay },
+        headers: { 'X-CSRF-Token': csrf },
+      })
+      expect(res.ok()).toBeTruthy()
+    }
+    const createdCard = accounts.find(item => item.name === cardName)
+    expect(createdCard).toBeTruthy()
+
+    const category = await ensureCategory(page.request, csrf, 'expense')
+    const chargeRes = await page.request.post('/api/v1/transactions', {
+      data: {
+        type: 'expense',
+        amount_minor: 12345,
+        occurred_on: today,
+        category_id: category.id,
+        account_id: createdCard!.id,
+        note: '还款计划测试',
+      },
+      headers: writeHeaders(csrf),
+    })
+    expect(chargeRes.ok()).toBeTruthy()
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.reload()
+    await expect(panel).toBeVisible()
+    await expect(page.getByTestId('credit-cash-needed')).toHaveText('¥123.45')
+    await expect(panel).toContainText('发薪日前需准备')
+    await expect(panel).toContainText(cardName)
+    await expect(panel).toContainText('现有现金足够')
+    const dueRow = panel.locator('.credit-debt-row', { hasText: cardName })
+    await expect(dueRow).toContainText('下次还款')
+    await expect(dueRow).toContainText('账单')
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+  })
+
+  test('E07 从我的页保存资料不会清空发薪日', async ({ page }) => {
+    const csrf = await signIn(page)
+    const res = await page.request.patch('/api/v1/auth/me/profile', {
+      data: { payday: 15 },
+      headers: { 'X-CSRF-Token': csrf },
+    })
+    expect(res.ok()).toBeTruthy()
+
+    await page.goto('/me')
+    await page.getByRole('button', { name: '个人资料' }).click()
+    const dialog = page.getByRole('dialog', { name: '个人资料' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByLabel('每月发薪日')).toHaveValue('15')
+    await dialog.getByRole('button', { name: '保存资料' }).click()
+    await expect(dialog).toHaveCount(0)
+
+    const meRes = await page.request.get('/api/v1/auth/me')
+    const me = await meRes.json()
+    expect(me.payday).toBe(15)
   })
 })
 

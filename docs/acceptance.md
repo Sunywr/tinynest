@@ -7,14 +7,14 @@
 ## 1. 构建与静态检查
 
 - [ ] `cd apps/api && go build ./...`
-- [ ] `cd apps/api && go test ./... -count=1`（100 个 Test 函数；无 MySQL 时 2 个 drill 会 skip）
+- [ ] `cd apps/api && go test ./... -count=1`（115 个 Test 函数；无 MySQL 时 2 个 drill 会 skip）
 - [ ] `cd apps/api && go vet ./...`
 - [ ] `cd apps/api && go mod tidy -diff`（退出码必须为 0）
 - [ ] `cd apps/api && go test -race ./... -count=1`（需 cgo/gcc；不具备时标 `UNVERIFIED`）
 - [ ] `cd apps/web && npm.cmd ci`（Windows 上 `npm` 被执行策略拦截时用 `npm.cmd`）
 - [ ] `cd apps/web && npm.cmd run typecheck`
 - [ ] `cd apps/web && npm.cmd run build`
-- [ ] `cd apps/web && npm.cmd run test:e2e`（72 条用例）
+- [ ] `cd apps/web && npm.cmd run test:e2e`（78 条用例）
 - [ ] `git diff --check`（退出码必须为 0）
 - [ ] 全树无行尾空白：`git grep -nI -E '[[:blank:]]+$' -- '*.md' '*.go' '*.ts' '*.vue' '*.css' '*.py' '*.sql' '*.yml' '*.yaml' '*.json' '*.html' '*.js'`
 - [ ] `python3 scripts/verify-brand.py`（原始团子图与 Web 副本 SHA-256 一致）
@@ -47,7 +47,9 @@
 - [ ] 家庭隔离：`TestHouseholdIsolation`、`TestHouseholdIsolationOnDetailEndpoints`、`TestHouseholdIsolationTransactionsAndStats`
 - [ ] 单层分类与软删除：`TestCategoriesAreSingleLevel`、`TestDeleteCategoryRetainsHistory`、`TestCategoryMaintenance`
 - [ ] 账户维护、停用/删除保留余额与分录、信用卡期初为负债：`TestAccountMaintenance`、`TestDisabledAccountRetainsBalance`、`TestDeleteAccountRetainsLedger`、`TestCreditAccountOpeningIsLiability`
-- [ ] 无拆分行/退款路由回归：确认 55 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/credit-*`、`/installments`、`/investments`、`/dashboard`、`/schedule`
+- [ ] 信用卡账单日/还款日配置与校验：`TestCreditAccountCycleSettings`、`TestCreditCycleColumnsAreNullable`
+- [ ] 信用卡还款计划：周期/发薪日边界、发薪日前金额、期初欠款、无发薪日/未配置、冲正更正删除、未来日期、溢缴款、两家庭隔离：`TestCreditCycleForBoundaries`、`TestNextPaydayAfterBoundaries`、`TestCreditDebtPlanBeforePayday`、`TestCreditDebtPlanMissingPaydayAndUnconfigured`、`TestCreditDebtPlanOpeningDebtIsAlreadyBilled`、`TestCreditDebtPlanReflectsReversalAndCorrection`、`TestCreditDebtPlanFutureAndOverpayment`、`TestCreditDebtPlanHouseholdIsolation`
+- [ ] 无拆分行/退款路由回归：确认 55 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/credit-*`、`/installments`、`/investments`、`/dashboard`、`/schedule`；`GET /accounts?include=credit_debt` 是既有集合路由的投影，不算新增路由
 - [ ] 初始化安全：`TestSetupRequiresBootstrapToken`、`TestSetupDisabledWithoutConfiguredToken`、`TestSetupDisabledFlagRefusesBootstrapEvenWithValidToken`、`TestSetupConcurrentBootstrapOnlyOneSucceeds`
 - [ ] Cookie `Secure` 与可信反代：`TestSessionCookieSecureInProductionProxy`、`TestSessionCookieSecureCanBeDisabledForLocalDev`、`TestSessionCookieHonorsTrustedProxyForwardedProto`、`TestSessionCookieIgnoresUntrustedForwardedProto`
 - [ ] 登录失败限流：`TestLoginFailureRateLimit`、`TestLoginRateLimitScopeIsolation`、`TestLoginRateLimitConcurrentAndAuditSafe`
@@ -64,7 +66,8 @@
 - [ ] 主流程「打开记账 → 选分类 → 输入金额 → 保存」≤3 次显式点击（人工点按记录）
 - [ ] 账单：按天分组与小计、搜索、日历、点行更正、长按/菜单删除（冲正）
 - [ ] 图表：环形图 + 分类排行、支出/收入与月/年切换
-- [ ] 资产：现金/信用卡分组、净资产、行内转账、信用卡「仅记录欠款，不含账单与分期」如实标注
+- [ ] 资产：现金/信用卡分组、净资产、行内转账；信用卡可配置账单日/还款日，显示发薪日前需准备、可用现金、缺口、下次还款与账单周期；未配置/无发薪日/逾期/无欠款状态如实标注，不宣称现金足够
+- [ ] 资产页 390×844 无横向溢出；「设置账单日」可打开编辑表单并保存；「我的 → 个人资料」保存后发薪日不丢失（E06/E07）
 - [ ] 我的：成员、分类管理、预算、导出 xlsx、邮箱与密码、管理员区（邀请/用户/审计）
 - [ ] 390×844 与 1440×900 双视口 E2E 全绿（H02/H03）
 - [ ] 可点击元素热区 ≥44×44（H04）；`prefers-reduced-motion` 下无非必要动效
@@ -80,7 +83,7 @@
 - [ ] 多家庭拒绝：`TestPurgeRefusesMultipleHouseholds`；借贷不平衡拒绝：`TestPurgeRefusesUnbalancedJournal`
 - [ ] 可选保留审计：`TestPurgeKeepAuditPreservesHistory`；重播默认分类：`TestPurgeReseedCategoriesLeavesOnlySystemDefaults`
 - [ ] `verify` 能捕获清理后新增业务行：`TestVerifyDetectsNewBusinessRow`
-- [ ] MySQL 实库演练：`TestMySQLPurgeDrill`、`TestMySQLIdentityCutoverDrill`（需 `TINYNEST_TEST_MYSQL_*` 环境）
+- [ ] MySQL 实库演练：`TestMySQLPurgeDrill`、`TestMySQLIdentityCutoverDrill`（需 `TINYNEST_TEST_MYSQL_*` 环境）；本机隔离 MySQL 8.0.46（TCP 3307）已通过，并完成 dump/restore 数据摘要一致与借贷平衡核对；生产 Unix socket / `readyz` 仍标 `UNVERIFIED`
 - [ ] 生产备份 + SHA-256 校验 + 隔离恢复比对完成（`UNVERIFIED`）
 - [ ] `baseline-capture` → `purge --dry-run` 人工核对 → 停服 → `purge --execute --confirm=<DBNAME> --yes-service-stopped` → `verify` → 冒烟（`UNVERIFIED`）
 - [ ] 新库建基线 → 身份导出/导入 → 计数与 `users` 摘要一致 → 切换数据库配置 → `readyz` 200（`UNVERIFIED`）

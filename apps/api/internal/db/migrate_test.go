@@ -1,7 +1,8 @@
-﻿package db
+package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ func openTestDB(t *testing.T) *DB {
 	return database
 }
 
-func TestMigrateFromZeroAppliesBothVersions(t *testing.T) {
+func TestMigrateFromZeroAppliesEveryVersion(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()
 
@@ -56,6 +57,40 @@ func TestMigrateFromZeroAppliesBothVersions(t *testing.T) {
 	}
 	if len(again) != 0 {
 		t.Fatalf("second migrate applied %v, want nothing", again)
+	}
+}
+
+func TestCreditCycleColumnsAreNullable(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	if _, err := database.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO households(id,name) VALUES('hh_cycle','测试')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx,
+		`INSERT INTO accounts(id,household_id,kind,name,ledger_code) VALUES('acc_cycle','hh_cycle','credit','测试卡','2010:acc_cycle')`); err != nil {
+		t.Fatal(err)
+	}
+	var statement, due sql.NullInt64
+	if err := database.QueryRowContext(ctx,
+		`SELECT statement_day,due_day FROM accounts WHERE id='acc_cycle'`).Scan(&statement, &due); err != nil {
+		t.Fatal(err)
+	}
+	if statement.Valid || due.Valid {
+		t.Fatalf("new cycle columns must default to NULL, got %v/%v", statement, due)
+	}
+	if _, err := database.ExecContext(ctx,
+		`UPDATE accounts SET statement_day=5,due_day=23 WHERE id='acc_cycle'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx,
+		`SELECT statement_day,due_day FROM accounts WHERE id='acc_cycle'`).Scan(&statement, &due); err != nil {
+		t.Fatal(err)
+	}
+	if !statement.Valid || statement.Int64 != 5 || !due.Valid || due.Int64 != 23 {
+		t.Fatalf("cycle columns not writable: %v/%v", statement, due)
 	}
 }
 

@@ -1,7 +1,7 @@
 # 托管邮箱 SMTP 接入与上线说明
 
 > **V2 说明（2026-11-22）**：邮件能力（站点 SMTP 配置、邮箱验证/换绑/找回、发信队列、每日 3 封限额、`mail-admin` 运维命令）在 V2 保留；**家庭公告发送能力已退役**（不存在 `GET/POST /household/mail/announcements`），本文涉及公告的段落与「SQLite 013 / MySQL 006 增量迁移」的版本号均为 V0.1 历史口径。
-> V2 数据库为基线重置：两个方言各 2 个迁移文件、`schema_meta.baseline=v2`，迁移与切换见 [新库切换手册](plans/v2-cutover-runbook.md)；V2 只读取一个 32 字节 `mail-key`（`credit-mail-key` 随信用模块退役），密钥与部署见 [部署文档](deployment.md) §7。
+> V2 数据库为基线重置：两个方言各 4 个迁移文件、`schema_meta.baseline=v2`，迁移与切换见 [新库切换手册](plans/v2-cutover-runbook.md)；V2 只读取一个 32 字节 `mail-key`（`credit-mail-key` 随信用模块退役），密钥与部署见 [部署文档](deployment.md) §7。
 
 2026-11-18，已部署生产，发布目录标识 `mail-20261118-1640`（首次部署基线为 `397289c` 加邮件功能改动）。发件公共邮箱为 `sender@example.com`。
 

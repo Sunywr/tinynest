@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -14,6 +15,11 @@ import (
 
 func (a *API) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
+	include := r.URL.Query().Get("include")
+	if include != "" && include != "credit_debt" {
+		writeErr(w, 400, "invalid_request", "include 仅支持 credit_debt")
+		return
+	}
 	rows, err := a.DB.QueryContext(r.Context(),
 		`SELECT `+accountColumns+` FROM accounts WHERE household_id=? AND status<>'deleted' ORDER BY created_at,id`,
 		p.HouseholdID)
@@ -24,11 +30,13 @@ func (a *API) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	type accountRow struct {
 		id, kind, name, code, status string
 		subtype, owner, note         sql.NullString
+		statementDay, dueDay         sql.NullInt64
 	}
 	var list []accountRow
 	for rows.Next() {
 		var v accountRow
-		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.code, &v.status, &v.subtype, &v.owner, &v.note); err != nil {
+		if err := rows.Scan(&v.id, &v.kind, &v.name, &v.code, &v.status, &v.subtype, &v.owner, &v.note,
+			&v.statementDay, &v.dueDay); err != nil {
 			_ = rows.Close()
 			internalErr(w, err)
 			return
@@ -51,10 +59,20 @@ func (a *API) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{
 			"id": v.id, "kind": v.kind, "subtype": nullString(v.subtype), "name": v.name,
 			"owner_member_id": nullString(v.owner), "status": v.status, "note": nullString(v.note),
+			"statement_day": nullInt64(v.statementDay), "due_day": nullInt64(v.dueDay),
 			"balance_minor": balance,
 		})
 	}
-	writeJSON(w, 200, map[string]any{"items": items})
+	body := map[string]any{"items": items}
+	if include == "credit_debt" {
+		plan, err := a.creditDebtPlan(r.Context(), p.HouseholdID, p.UserID, a.businessToday())
+		if err != nil {
+			internalErr(w, err)
+			return
+		}
+		body["credit_debt"] = plan
+	}
+	writeJSON(w, 200, body)
 }
 
 func nullString(v sql.NullString) any {
@@ -64,9 +82,37 @@ func nullString(v sql.NullString) any {
 	return v.String
 }
 
+func nullInt64(v sql.NullInt64) any {
+	if !v.Valid {
+		return nil
+	}
+	return v.Int64
+}
+
 func validAccountName(name string) bool {
 	length := utf8.RuneCountInString(name)
 	return length >= 1 && length <= 100
+}
+
+// accountCycle validates an optional credit-card statement/due day pair.
+// The two values are kept together: a card is either fully configured or not.
+func accountCycle(kind string, statementDay, dueDay *int64) (stmt, due any, problem string) {
+	if kind != "credit" {
+		if statementDay != nil || dueDay != nil {
+			return nil, nil, "现金账户不需要账单日/还款日"
+		}
+		return nil, nil, ""
+	}
+	if statementDay == nil && dueDay == nil {
+		return nil, nil, ""
+	}
+	if statementDay == nil || dueDay == nil {
+		return nil, nil, "账单日与还款日须同时设置"
+	}
+	if *statementDay < 1 || *statementDay > 31 || *dueDay < 1 || *dueDay > 31 {
+		return nil, nil, "账单日与还款日须为 1 至 31"
+	}
+	return *statementDay, *dueDay, ""
 }
 
 func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +124,8 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		OwnerMember  *string `json:"owner_member_id"`
 		Note         *string `json:"note"`
 		OpeningMinor int64   `json:"opening_minor"`
+		StatementDay *int64  `json:"statement_day"`
+		DueDay       *int64  `json:"due_day"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
@@ -92,6 +140,11 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "账户名称须为 1 至 100 个字符")
 		return
 	}
+	statementDay, dueDay, cycleProblem := accountCycle(in.Kind, in.StatementDay, in.DueDay)
+	if cycleProblem != "" {
+		writeErr(w, 400, "invalid_request", cycleProblem)
+		return
+	}
 	opening := money.Minor(in.OpeningMinor)
 	if opening < 0 {
 		writeErr(w, 400, "invalid_amount", "期初金额不能为负")
@@ -104,8 +157,9 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `INSERT INTO accounts
-			(id,household_id,kind,subtype,name,owner_member_id,ledger_code,note) VALUES(?,?,?,?,?,?,?,?)`,
-			id, p.HouseholdID, in.Kind, in.Subtype, in.Name, in.OwnerMember, code, in.Note); err != nil {
+			(id,household_id,kind,subtype,name,owner_member_id,ledger_code,note,statement_day,due_day)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			id, p.HouseholdID, in.Kind, in.Subtype, in.Name, in.OwnerMember, code, in.Note, statementDay, dueDay); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(r.Context(), `INSERT INTO ledger_accounts
@@ -154,6 +208,7 @@ func (a *API) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "name": in.Name, "kind": in.Kind, "ledger_code": code,
 		"opening_minor": opening, "balance_minor": balance,
+		"statement_day": statementDay, "due_day": dueDay,
 	})
 }
 
@@ -176,20 +231,49 @@ func (a *API) handleGetAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"id": info.ID, "kind": info.Kind, "subtype": nullString(info.Subtype), "name": info.Name,
 		"owner_member_id": nullString(info.Owner), "status": info.Status, "note": nullString(info.Note),
+		"statement_day": nullInt64(info.StatementDay), "due_day": nullInt64(info.DueDay),
 		"ledger_code": info.Code, "balance_minor": balance,
 	})
+}
+
+// accountUpdateRejected carries a client-facing validation message for PATCH.
+type accountUpdateRejected struct{ msg string }
+
+func (e *accountUpdateRejected) Error() string { return e.msg }
+
+// parseCyclePatch distinguishes an absent field (keep existing) from explicit
+// null (clear) and validates the 1..31 range.
+func parseCyclePatch(raw json.RawMessage, existing sql.NullInt64) (sql.NullInt64, error) {
+	if len(raw) == 0 {
+		return existing, nil
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return sql.NullInt64{}, nil
+	}
+	var n int64
+	if err := json.Unmarshal(raw, &n); err != nil || n < 1 || n > 31 {
+		return sql.NullInt64{}, &accountUpdateRejected{"账单日与还款日须为 1 至 31"}
+	}
+	return sql.NullInt64{Int64: n, Valid: true}, nil
 }
 
 func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
-		Name        *string `json:"name"`
-		Subtype     *string `json:"subtype"`
-		OwnerMember *string `json:"owner_member_id"`
-		Note        *string `json:"note"`
-		Status      *string `json:"status"`
+		Name         *string         `json:"name"`
+		Subtype      *string         `json:"subtype"`
+		OwnerMember  *string         `json:"owner_member_id"`
+		Note         *string         `json:"note"`
+		Status       *string         `json:"status"`
+		StatementDay json.RawMessage `json:"statement_day"`
+		DueDay       json.RawMessage `json:"due_day"`
 	}
-	if err := decode(r, &in); err != nil || (in.Name == nil && in.Subtype == nil && in.OwnerMember == nil && in.Note == nil && in.Status == nil) {
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, "invalid_request", "请求格式不正确")
+		return
+	}
+	hasCycle := len(in.StatementDay) > 0 || len(in.DueDay) > 0
+	if in.Name == nil && in.Subtype == nil && in.OwnerMember == nil && in.Note == nil && in.Status == nil && !hasCycle {
 		writeErr(w, 400, "invalid_request", "请提供要修改的账户资料")
 		return
 	}
@@ -209,13 +293,36 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		if err := a.validateAccountOwner(r, tx, p.HouseholdID, in.OwnerMember); err != nil {
 			return err
 		}
-		var code string
-		query := `SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status<>'deleted'`
+		var code, kind string
+		var existingStatement, existingDue sql.NullInt64
+		query := `SELECT ledger_code,kind,statement_day,due_day FROM accounts WHERE id=? AND household_id=? AND status<>'deleted'`
 		if a.DB.IsMySQL() {
 			query += " FOR UPDATE"
 		}
-		if err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&code); err != nil {
+		if err := tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).
+			Scan(&code, &kind, &existingStatement, &existingDue); err != nil {
 			return err
+		}
+		if hasCycle {
+			if kind != "credit" {
+				return &accountUpdateRejected{"现金账户不需要账单日/还款日"}
+			}
+			nextStatement, err := parseCyclePatch(in.StatementDay, existingStatement)
+			if err != nil {
+				return err
+			}
+			nextDue, err := parseCyclePatch(in.DueDay, existingDue)
+			if err != nil {
+				return err
+			}
+			if nextStatement.Valid != nextDue.Valid {
+				return &accountUpdateRejected{"账单日与还款日须同时设置或同时清除"}
+			}
+			if _, err := tx.ExecContext(r.Context(),
+				`UPDATE accounts SET statement_day=?,due_day=? WHERE id=? AND household_id=? AND status<>'deleted'`,
+				nullInt64(nextStatement), nullInt64(nextDue), id, p.HouseholdID); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.ExecContext(r.Context(), `UPDATE accounts SET
 			name=COALESCE(?,name), status=COALESCE(?,status),
@@ -235,11 +342,14 @@ func (a *API) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		return audit(r.Context(), tx, p, "update_account", "account", id, "{}")
 	})
+	var rejected *accountUpdateRejected
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeErr(w, 404, "not_found", "账户不存在")
 	case errors.Is(err, errInvalidAccountOwner):
 		writeErr(w, 400, "invalid_request", err.Error())
+	case errors.As(err, &rejected):
+		writeErr(w, 400, "invalid_request", rejected.msg)
 	case err != nil:
 		internalErr(w, err)
 	default:

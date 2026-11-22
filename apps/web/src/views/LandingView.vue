@@ -14,12 +14,13 @@ const loginOpen = computed(() => route.path === '/login')
 const expired = computed(() => session.sessionExpired.value)
 
 // Only capabilities backed by the shipped bookkeeping module are labelled 已支持.
-// Credit statements, instalments, investments and statement imports were retired.
+// The V1 credit-statement/instalment/investment/import modules stay retired; the
+// narrow per-card repayment-cash plan is supported.
 const features = [
   { icon: PenLine, title: '日常记账', desc: '支出、收入与账户转账；分类图标网格加自定义数字键盘，几秒记一笔。' },
   { icon: ClipboardList, title: '按天账单', desc: '按天分组与日小计，备注 / 分类搜索，日历按日筛选，点行更正、长按或菜单删除。' },
   { icon: PieChart, title: '图表分析', desc: '环形图看占比，分类排行按金额降序，支持月 / 年与支出 / 收入切换。' },
-  { icon: Wallet, title: '资产与转账', desc: '现金与信用卡两类账户、净资产汇总、账户之间行内转账，余额由流水自动计算。' },
+  { icon: Wallet, title: '资产与转账', desc: '现金与信用卡两类账户、净资产汇总、账户之间行内转账；可设账单日与还款日，估算发薪日前要还的现金。' },
   { icon: Users, title: '家庭与预算', desc: '家庭成员标记、月度预算进度，管理员还可以邀请成员、审批申请并查看审计日志。' },
   { icon: ShieldCheck, title: '数据自主', desc: '数据库保存在你自己的服务器；HttpOnly 会话、CSRF 校验与按家庭隔离的查询。' },
 ]

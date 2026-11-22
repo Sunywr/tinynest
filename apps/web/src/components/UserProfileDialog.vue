@@ -99,7 +99,8 @@ async function uploadAvatar(event: Event) {
       <label v-if="!avatarImage">头像（文字或表情） <input v-model="draft.avatar" :disabled="busy || processingAvatar" /></label>
       <label>上传头像图片 <input type="file" accept="image/*" :disabled="busy || processingAvatar" @change="uploadAvatar" /></label>
       <label>生日 <DatePicker v-model="draft.birthday" min="1900-01-01" :max="today()" open-on-click /></label>
-      <label>每月发薪日 <input v-model="draft.payday" type="number" min="1" max="31" /></label>
+      <label>每月发薪日 <input v-model="draft.payday" type="number" min="1" max="31" step="1" inputmode="numeric" /></label>
+      <p class="form-hint">发薪日用于「信用卡还款计划」估算发薪日前需准备的现金；月底按当月最后一天处理。</p>
       <label>邮箱 <input v-model="draft.email" readonly type="email" maxlength="254" /></label>
       <button class="primary" :disabled="busy || processingAvatar">保存资料</button>
     </form>

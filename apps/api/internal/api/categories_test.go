@@ -9,22 +9,45 @@ func TestCategoriesAreSingleLevel(t *testing.T) {
 	defer ts.Close()
 	defer database.Close()
 
-	// No parent_id / level columns exist at all.
-	rows, err := database.Query(`PRAGMA table_info(categories)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
+	// No parent_id / level columns exist at all. Query the active dialect's
+	// catalog so the same regression runs on SQLite and MySQL.
 	columns := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull, pk int
-		var dflt any
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+	if database.IsMySQL() {
+		rows, err := database.Query(`SELECT column_name FROM information_schema.columns
+			WHERE table_schema=DATABASE() AND table_name='categories'`)
+		if err != nil {
 			t.Fatal(err)
 		}
-		columns[name] = true
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			columns[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		rows, err := database.Query(`PRAGMA table_info(categories)`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name, typ string
+			var notNull, pk int
+			var dflt any
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+				t.Fatal(err)
+			}
+			columns[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if columns["parent_id"] || columns["level"] {
 		t.Fatalf("categories must not have parent_id/level, got %v", columns)

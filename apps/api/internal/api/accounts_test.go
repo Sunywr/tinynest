@@ -105,3 +105,68 @@ func TestAccountJournalListsOpeningBalance(t *testing.T) {
 		t.Fatalf("unexpected journal: %v", items)
 	}
 }
+
+func TestCreditAccountCycleSettings(t *testing.T) {
+	ts, c, database := newTestServer(t)
+	defer database.Close()
+	defer ts.Close()
+
+	created := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "credit", "name": "账单卡", "statement_day": 5, "due_day": 23,
+	})
+	id := created["id"].(string)
+	path := "/api/v1/accounts/" + id
+	if number(created["statement_day"]) != 5 || number(created["due_day"]) != 23 {
+		t.Fatalf("create did not return cycle: %v", created)
+	}
+	got := c.mustOK("GET", path, nil)
+	if number(got["statement_day"]) != 5 || number(got["due_day"]) != 23 {
+		t.Fatalf("get did not return cycle: %v", got)
+	}
+
+	// A partial update is merged with the stored pair; it must not clear the
+	// other half accidentally.
+	c.mustOK("PATCH", path, map[string]any{"due_day": 25})
+	if got := c.mustOK("GET", path, nil); number(got["statement_day"]) != 5 || number(got["due_day"]) != 25 {
+		t.Fatalf("partial cycle update did not merge: %v", got)
+	}
+
+	// Clearing one half of a configured pair is rejected.
+	if code, _ := c.do("PATCH", path, map[string]any{"due_day": nil}); code != 400 {
+		t.Fatalf("one-sided clear returned %d, want 400", code)
+	}
+
+	// Explicit null on both fields clears the configuration.
+	c.mustOK("PATCH", path, map[string]any{"statement_day": nil, "due_day": nil})
+	if got := c.mustOK("GET", path, nil); got["statement_day"] != nil || got["due_day"] != nil {
+		t.Fatalf("clear cycle failed: %v", got)
+	}
+
+	for _, body := range []map[string]any{
+		{"statement_day": 0, "due_day": 23},
+		{"statement_day": 5, "due_day": 32},
+		{"statement_day": 5.5, "due_day": 23},
+	} {
+		if code, _ := c.do("PATCH", path, body); code != 400 {
+			t.Fatalf("invalid cycle %v returned %d, want 400", body, code)
+		}
+	}
+
+	if code, _ := c.do("POST", "/api/v1/accounts", map[string]any{
+		"kind": "credit", "name": "半边卡", "statement_day": 5,
+	}); code != 400 {
+		t.Fatalf("one-sided create returned %d, want 400", code)
+	}
+	if code, _ := c.do("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "现金卡", "statement_day": 5, "due_day": 23,
+	}); code != 400 {
+		t.Fatalf("cash cycle create returned %d, want 400", code)
+	}
+
+	cash := c.mustOK("POST", "/api/v1/accounts", map[string]any{"kind": "cash", "name": "现金账户"})
+	if code, _ := c.do("PATCH", "/api/v1/accounts/"+cash["id"].(string), map[string]any{
+		"statement_day": 5, "due_day": 23,
+	}); code != 400 {
+		t.Fatalf("cash cycle patch returned %d, want 400", code)
+	}
+}

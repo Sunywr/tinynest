@@ -1,12 +1,13 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ArrowLeftRight, Plus, X } from 'lucide-vue-next'
 import AccountForm from '../components/AccountForm.vue'
 import AccountRow from '../components/AccountRow.vue'
 import AppSkeleton from '../components/AppSkeleton.vue'
+import CreditDebtPanel from '../components/CreditDebtPanel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import TransferForm from '../components/TransferForm.vue'
-import { api, type Account } from '../services/api'
+import { api, type Account, type CreditDebtPlan } from '../services/api'
 import { formatMinor } from '../services/format'
 import { useSession } from '../composables/useSession'
 
@@ -14,9 +15,11 @@ type JournalRow = { id: string; occurred_on: string; change_minor?: number; amou
 
 const session = useSession()
 const accounts = ref<Account[]>([])
+const plan = ref<CreditDebtPlan | null>(null)
 const loading = ref(true)
 const error = ref('')
 const formOpen = ref(false)
+const formAccount = ref<Account | null>(null)
 const transferOpen = ref(false)
 const journalFor = ref<Account | null>(null)
 const journal = ref<JournalRow[]>([])
@@ -37,12 +40,34 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    accounts.value = (await api.accounts()).items
+    const body = await api.accountsWithDebt()
+    accounts.value = body.items
+    plan.value = body.credit_debt
   } catch (e) {
     error.value = e instanceof Error ? e.message : '账户加载失败'
   } finally {
     loading.value = false
   }
+}
+
+function openCreate() {
+  formAccount.value = null
+  formOpen.value = true
+}
+
+function openConfigure(accountId: string) {
+  const account = accounts.value.find(item => item.id === accountId)
+  if (!account) {
+    void load()
+    return
+  }
+  formAccount.value = account
+  formOpen.value = true
+}
+
+function closeForm() {
+  formOpen.value = false
+  formAccount.value = null
 }
 
 async function openJournal(account: Account) {
@@ -77,7 +102,7 @@ onMounted(() => void load())
         <h1 class="page-title">资产</h1>
         <p class="page-sub">净资产 = 资产合计 − 负债合计</p>
       </div>
-      <button v-if="canWrite" type="button" class="btn-primary add-account" @click="formOpen = true">
+      <button v-if="canWrite" type="button" class="btn-primary add-account" @click="openCreate">
         <Plus :size="17" aria-hidden="true" /> 新增账户
       </button>
     </header>
@@ -91,9 +116,12 @@ onMounted(() => void load())
       </div>
     </section>
 
+    <CreditDebtPanel v-if="plan && plan.cards.length && !error" :plan="plan" :can-write="canWrite"
+      @configure="openConfigure" />
+
     <p class="info-line" role="note">
-      账户类型只有「现金」和「信用卡」两种。信用卡是负债账户：支出会增加欠款，还款按账户之间的转账处理；
-      这里只记录欠款，不包含账单、分期、利息或投资账户（均未开发）。
+      账户类型只有「现金」和「信用卡」两种。信用卡是负债账户：支出会增加欠款，还款按账户之间的转账处理。
+      可为信用卡设置账单日与还款日，页面按已入账流水估算发薪日前需准备的现金；不提供银行级出账、分期、利息、最低还款或自动扣款。
     </p>
 
     <p v-if="error" class="inline-error" role="alert">
@@ -124,7 +152,7 @@ onMounted(() => void load())
     </template>
 
     <EmptyState v-if="empty" title="还没有账户" hint="先创建一个现金账户，就可以开始记账了。"
-      :action-label="canWrite ? '新增账户' : ''" @action="formOpen = true" />
+      :action-label="canWrite ? '新增账户' : ''" @action="openCreate" />
 
     <section v-if="journalFor" class="card journal-card" aria-label="账户流水">
       <header class="group-head">
@@ -143,7 +171,7 @@ onMounted(() => void load())
       </ul>
     </section>
 
-    <AccountForm v-if="formOpen" @close="formOpen = false" @saved="load" />
+    <AccountForm v-if="formOpen" :account="formAccount" @close="closeForm" @saved="load" />
     <TransferForm v-if="transferOpen" :accounts="active" @close="transferOpen = false" @saved="load" />
   </section>
 </template>

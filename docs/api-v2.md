@@ -1,8 +1,9 @@
-﻿# TinyNest V2 · API 契约
+# TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
 > 契约范围：**55 条业务路由**（按「方法 + 路径」计）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 55。
 > 路由总数由 `TestRouteBudget` 冻结为 ≤55；新增路由必须先删除或合并同类路由，否则测试失败。
+> 信用卡还款计划不是新路由，而是 `GET /accounts?include=credit_debt` 的可选投影；`include` 只接受空值或 `credit_debt`。
 
 ## 1. 通用约定
 
@@ -123,15 +124,40 @@
 
 | 方法 | 路径 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
-| GET | `/accounts` | 无 | 200 `{items:[{id,kind,subtype,name,owner_member_id,status,note,balance_minor}]}`（排除 `status=deleted`；逐账户由分录重建余额） | 401 |
-| POST | `/accounts` | `kind`（`cash` / `credit`）、`name`（1–100 字）、`subtype?`、`owner_member_id?`、`note?`、`opening_minor?`（≥0） | 201 `{id,name,kind,ledger_code,opening_minor,balance_minor}`；创建时同步写 `ledger_accounts`，期初余额写分录 | 400 `invalid_request` / `invalid_amount` |
-| GET | `/accounts/{id}` | 无 | 200 `{id,kind,subtype,name,owner_member_id,status,note,ledger_code,balance_minor}` | 404 |
-| PATCH | `/accounts/{id}` | `name?` / `subtype?` / `owner_member_id?` / `note?` / `status?`（`active` / `disabled`） | 200 `{id}` | 400、404 |
+| GET | `/accounts` | 查询 `include?`（空或 `credit_debt`） | 200 `{items:[{id,kind,subtype,name,owner_member_id,status,note,statement_day,due_day,balance_minor}], credit_debt?}`（排除 `status=deleted`；逐账户由分录重建余额；`include=credit_debt` 时追加还款计划投影） | 400（`include` 非法）、401 |
+| POST | `/accounts` | `kind`（`cash` / `credit`）、`name`（1–100 字）、`subtype?`、`owner_member_id?`、`note?`、`opening_minor?`（≥0）、`statement_day?` / `due_day?`（1–31，仅 `credit`，必须同时提供） | 201 `{id,name,kind,ledger_code,opening_minor,balance_minor,statement_day,due_day}`；创建时同步写 `ledger_accounts`，期初余额写分录 | 400 `invalid_request` / `invalid_amount` |
+| GET | `/accounts/{id}` | 无 | 200 `{id,kind,subtype,name,owner_member_id,status,note,statement_day,due_day,ledger_code,balance_minor}` | 404 |
+| PATCH | `/accounts/{id}` | `name?` / `subtype?` / `owner_member_id?` / `note?` / `status?`（`active` / `disabled`）/ `statement_day?` / `due_day?`（1–31 或显式 `null`；合并后两字段必须同时有值或同时为空，仅 `credit`） | 200 `{id}` | 400、404 |
 | DELETE | `/accounts/{id}` | 无 | 200 `{id,status:"deleted"}`；软删除，历史分录与余额保留 | 404 |
 | GET | `/accounts/{id}/journal` | 无 | 200 `{items:[{id,occurred_on,kind,reversal_of,change_minor}],limit:100}`；最多最近 100 条，`change_minor` 正数=借方净增 | 404 |
 | POST | `/accounts/transfers` | `from_account_id`、`to_account_id`、`amount_minor`（>0）、`occurred_on`、`note?`；可选 `Idempotency-Key` | 201 `{id,entry_id,status:"posted"}`；重复幂等键返回 200 `{id,status:"posted",replayed:true}` | 400 `invalid_amount` / `invalid_request`（同账户、信用卡作为转出账户被拒）、500 |
 
 说明：`cash -> cash` 为普通转账（净资产不变）；`cash -> credit` 按**信用卡还款**入账（借贷记 `2010` / 贷 `1010`，不重复计支出）；`credit -> cash` 被拒绝。
+
+`statement_day` 是账单截止日（日），`due_day` 是每月还款日（日）。账单周期起点由上一账单截止日次日推导；还款日取严格晚于账单截止日的第一个 `due_day`，跨月自动顺延。两列均可空；空表示「未配置」，不参与发薪日前现金计算。修改配置不会改写历史分录或账单，只会让派生计划按当前配置重算。
+
+### 7.1 信用卡还款计划投影
+
+`GET /accounts?include=credit_debt` 追加只读字段。所有金额为整数分；没有发薪日或没有任何已配置卡时，汇总金额为 `null`（不是 0）。单张未配置卡的 `cash_needed_minor` 为 `null`，但其欠款仍计入 `total_debt_minor`。
+
+| 字段 | 说明 |
+| --- | --- |
+| `today` | 当前 Asia/Shanghai 业务日 |
+| `payday` / `next_payday` / `days_until_payday` | 当前用户 `users.payday`、严格晚于今天的下一个发薪日、相差天数；未设置时为 `null` |
+| `complete` | 发薪日已设置且所有信用卡都配置了账单日/还款日 |
+| `unconfigured_cards` | 未配置的信用卡数量 |
+| `cash_available_minor` | 启用中现金账户截至今天的余额合计 |
+| `cash_needed_minor` | 到期日 ≤ 下次发薪日的未还金额合计（含逾期）；无发薪日或没有任何已配置卡时为 `null` |
+| `cash_gap_minor` | `max(0, cash_needed_minor − cash_available_minor)`；无发薪日或没有任何已配置卡时为 `null` |
+| `total_debt_minor` | 所有信用卡未还金额合计（含未出账与逾期，不含溢缴款） |
+| `overdue_minor` / `unbilled_minor` | 已配置卡的逾期 / 未出账金额合计 |
+| `cards[]` | 未删除信用卡列表；字段见下 |
+
+每张卡字段：`account_id`、`name`、`status`、`configured`、`statement_day`、`due_day`、`total_debt_minor`、`unbilled_minor`、`overdue_minor`、`credit_balance_minor`、`cash_needed_minor`、`next_due_on`、`next_due_minor`、`next_due_period_start_on`、`next_due_period_end_on`、`current_cycle`（`{start_on,end_on,due_on}` 或 `null`）。
+
+- 还款按到期日从早到晚 FIFO 冲抵；还款多于欠款形成 `credit_balance_minor` 溢缴款。
+- 期初欠款视为在账户创建时已出账，按创建日之前最近的账单截止日归期。
+- 已冲正/已删除/已更正的旧流水不计入；统计从 `journal_lines` + 当前有效 `transactions` 派生，不写分录、不缓存。
 
 ## 8. 流水（5 条）
 

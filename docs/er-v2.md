@@ -1,7 +1,8 @@
-﻿# TinyNest V2 · 数据模型与 ER
+# TinyNest V2 · 数据模型与 ER
 
 > 依据：`apps/api/internal/db/migrations/001_core.sql`（SQLite 21 张表）、`002_bookkeeping.sql`（SQLite 4 张表）、
-> `apps/api/internal/db/mysql/` 下同名 MySQL 文件，以及 `internal/db/migrate.go` 创建的 `schema_migrations`。
+> `003_category_style.sql`（分类颜色）与 `004_credit_cycle.sql`（信用卡账单日/还款日），以及
+> `apps/api/internal/db/mysql/` 下同名 MySQL 文件与 `internal/db/migrate.go` 创建的 `schema_migrations`。
 > 数量口径：**25 张业务表**，加迁移账本 `schema_migrations` 后运行时 **26 张**；SQLite 与 MySQL 表集一致。
 > 金额一律整数分（`*_minor`），业务日期为 Asia/Shanghai 的 `YYYY-MM-DD`，其余时间戳为 RFC3339 UTC 文本。
 
@@ -98,7 +99,7 @@ erDiagram
 | 表 | 关键列 | 约束与说明 |
 | --- | --- | --- |
 | `categories` | `id`、`household_id`、`kind`、`name`、`emoji`、`color`、`sort`、`active`、`created_at` | `kind` CHECK `income`/`expense`；单层分类，无 `parent_id`；`active`：1 启用、0 停用、-1 已删除；索引 `idx_categories_household(household_id,kind,active,sort)` |
-| `accounts` | `id`、`household_id`、`kind`、`subtype`、`name`、`owner_member_id`、`ledger_code`、`status`、`note`、`created_at` | `kind` CHECK `cash`/`credit`；`UNIQUE(household_id, ledger_code)`；`status` ∈ `active`/`disabled`/`deleted`；`ledger_code` 指向 `journal_lines.account_code` |
+| `accounts` | `id`、`household_id`、`kind`、`subtype`、`name`、`owner_member_id`、`ledger_code`、`status`、`note`、`statement_day`、`due_day`、`created_at` | `kind` CHECK `cash`/`credit`；`UNIQUE(household_id, ledger_code)`；`status` ∈ `active`/`disabled`/`deleted`；`ledger_code` 指向 `journal_lines.account_code`；`statement_day` / `due_day` 可空、仅 `credit` 使用，API 校验 1–31，不建账单表 |
 | `transactions` | `id`、`household_id`、`type`、`amount_minor`、`currency`、`occurred_on`、`category_id`、`account_id`、`to_account_id`、`member_id`、`note`、`status`、`entry_id`、`idempotency_key`、`created_by`、`created_at` | `type` CHECK `expense`/`income`/`transfer`；`amount_minor > 0`；`status` CHECK `posted`/`reversed`；`idempotency_key` 唯一；索引 `idx_tx_household_date`、`idx_tx_category`、`idx_tx_account` |
 | `budgets` | `household_id`、`month`、`amount_minor` | 主键 `(household_id, month)`；`month` 为 `YYYY-MM`；`amount_minor` 由 API 校验 ≥0，DDL 无 CHECK；未设置预算时没有行（读取返回 `null`） |
 
@@ -137,12 +138,13 @@ erDiagram
 5. 删除流水 = 冲正；更正（PATCH）= 同一事务内「冲正原流水 + 写入替换流水」；已冲正流水再次操作返回 409。
 6. 统计只对 `journal_lines` 求和，因此冲正后收入/支出/预算已用自动净额归零，无需额外回写。
 7. 账户余额 = `SUM(debit_minor - credit_minor)` 按 `account_code` + 家庭范围聚合；信用卡账户余额为负表示欠款。
+8. 信用卡还款计划不是账务事实：`accounts.statement_day` / `due_day` 只是配置；计划由 `journal_lines` + 当前有效 `transactions` + `users.payday` 即时派生，不写分录、不建账单表、不缓存。
 
-对应实现：`internal/ledger/entry.go`（`Validate` / `Reverse`）、`internal/api/transactions.go`（`reversePosted`、更正与删除）、`internal/api/stats.go`（派生统计）。
+对应实现：`internal/ledger/entry.go`（`Validate` / `Reverse`）、`internal/api/transactions.go`（`reversePosted`、更正与删除）、`internal/api/stats.go`（派生统计）、`internal/api/credit_debt.go`（还款计划）。
 
 ## 10. 迁移策略
 
-- 每个方言只有版本 1–2：`001_core.sql` 建身份、审计与内核 21 张表；`002_bookkeeping.sql` 建记账 4 张表。
+- 每个方言当前有版本 1–4：`001_core.sql` 建身份、审计与内核 21 张表；`002_bookkeeping.sql` 建记账 4 张表；`003_category_style.sql` 增加分类颜色；`004_credit_cycle.sql` 增加信用卡账单日/还款日两列（均不改写历史表结构语义）。
 - 迁移器按文件名前 3 位版本升序应用，记录 SHA-256 校验和并校验连续性；SQLite 整文件单事务，MySQL 逐条执行且文件必须可重跑。
 - 新库由 V2 二进制从零建立 `schema_meta.baseline=v2`；V1 旧库不升级，按 [新库切换手册](plans/v2-cutover-runbook.md) 处理。
 - 默认分类由 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()` 幂等写入，不使用 SQL 种子文件。

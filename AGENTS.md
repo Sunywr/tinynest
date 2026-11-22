@@ -2,7 +2,8 @@
 
 > **状态说明（2026-11-22）**：本文件已从 V0.1 规范升级为 **V2 记账重置** 的运维手册。
 > V2 删除了信用账单、分期、负债、到期调度、投资、股票自选、账单导入、信用账单邮件、项目、仪表盘与退款模块，
-> 只保留身份/权限/家庭/邮件、复式记账内核与 V2 记账 API。生产数据库**不做 V1 原地升级**，
+> 只保留身份/权限/家庭/邮件、复式记账内核与 V2 记账 API。当前新增的「信用卡还款计划」只是 `accounts` 上
+> 账单日/还款日配置 + 只读派生统计，不恢复 V1 的 `credit_statements` 账单表、分期或利息。生产数据库**不做 V1 原地升级**，
 > 清理与切换由用户按 [生产清理手册](docs/plans/v2-prod-purge-runbook.md) 与
 > [新库切换手册](docs/plans/v2-cutover-runbook.md) 执行；未执行前相关结论一律 `UNVERIFIED`。
 > Phase 0 与 V0.1 只作为历史归档，不再约束当前代码；历史交付见
@@ -49,6 +50,7 @@
 - **所有财务查询必须在 SQL 层按 `household_id` 限定**，不得先全库聚合再在应用层过滤；`journal_lines` 通过 `journal_entries.household_id` 关联限定。
 - 业务日期统一 Asia/Shanghai，使用可注入时钟 `API.businessToday()` / `businessDate()`；审计、会话等时间戳仍以 UTC 存储。
 - 统计只认科目编码：收入 `4010:%`（贷−借）、支出 `5010:%`（借−贷），分类 id 由 `SUBSTR(account_code, 6)` 解析；转账与信用卡还款不计入收支（见 `internal/api/stats.go`）。
+- 信用卡还款计划是**只读派生**：从 `journal_lines` + 当前有效 `transactions` + `users.payday` 计算，不写分录、不改余额、不缓存；不新增账单表。查询同样必须按 `household_id` 限定。
 
 ### 安全配置（必须显式）
 
@@ -65,8 +67,8 @@
 
 - V2 是一次**基线重置**：不支持 V1 旧库原地升级。数据库必须由 V2 二进制在空库上建立 `schema_meta.baseline=v2`；旧库按切换手册新建库 + 导入身份数据，禁止把 V2 二进制指向旧库。
 - **不得绕过 baseline 守卫**：`internal/db/migrate.go` 在 `schema_meta.baseline` 缺失或不为 `v2`、出现不认识的迁移版本、校验和不一致时拒绝启动。不要通过改守卫、改 `schema_meta`、删迁移账本等方式强行启动。
-- 两个方言各只有 2 个迁移文件：`001_core.sql`（21 张表）与 `002_bookkeeping.sql`（4 张表），嵌入在 `internal/db/migrations/`（SQLite）与 `internal/db/mysql/`（MySQL）。
-- SQLite 迁移文件与账本行在同一事务执行；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重复执行**（只用 `CREATE TABLE IF NOT EXISTS` 与内联索引，不用 `CREATE INDEX`/`ALTER`）。
+- 两个方言当前各有 4 个迁移文件：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张表）、`003_category_style.sql`（分类颜色）与 `004_credit_cycle.sql`（信用卡账单日/还款日），嵌入在 `internal/db/migrations/`（SQLite）与 `internal/db/mysql/`（MySQL）。
+- SQLite 迁移文件与账本行在同一事务执行；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重复执行**。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；确需 `ALTER TABLE` 时用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法），不能裸写会重复失败的 ALTER。
 - 默认分类来自 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()`，不要再加 SQL 种子文件或启动期 `UPDATE`。
 - 数据库只在后端 B 机；V2 运行时 26 张表（25 张业务表 + 迁移账本 `schema_migrations`）。
 
@@ -91,11 +93,11 @@
 | 状态 | 模块 |
 | --- | --- |
 | 保留 | 初始化与认证、会话/CSRF、家庭成员与邀请审批、管理员与审计日志、托管邮箱 SMTP 与邮箱验证/找回、站点管理员 |
-| 保留 | 复式记账内核、`categories`、`accounts`（`cash` / `credit`）、`transactions`（支出/收入/转账）、`stats`（summary / categories / daily / monthly）、`budgets` |
+| 保留 | 复式记账内核、`categories`、`accounts`（`cash` / `credit`，含可空账单日/还款日配置）、`transactions`（支出/收入/转账）、`stats`（summary / categories / daily / monthly）、`budgets`、信用卡还款计划（`GET /accounts?include=credit_debt` 只读派生） |
 | 保留 | 前端五界面：账单 / 记账面板 / 图表 / 资产 / 我的；账户行内转账；前端 xlsx 导出；PWA |
 | 退役 | 信用账单、分期、负债、到期调度、投资、股票自选、账单导入、信用账单邮件（IMAP）、项目、仪表盘、退款、家庭公告 |
 
-退役模块的路由、视图、测试与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。
+退役模块的路由、视图、测试与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。
 
 ## Phase 0（历史，仅存档，不再约束当前代码）
 

@@ -251,11 +251,16 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 		t.Errorf("re-running migrations should be a no-op, got %v", applied)
 	}
 	var tables int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables); err != nil {
+	if database.IsMySQL() {
+		err = database.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()`).Scan(&tables)
+	} else {
+		err = database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
-	// 21 core + 4 bookkeeping + schema_migrations = 26 tables (SQLite also adds
-	// sqlite_sequence because of AUTOINCREMENT).
+	// 21 core + 4 bookkeeping + schema_migrations = 26 tables. SQLite also adds
+	// sqlite_sequence because of AUTOINCREMENT, so the check is a lower bound.
 	if tables < 26 {
 		t.Errorf("expected the full V2 schema, got %d tables", tables)
 	}

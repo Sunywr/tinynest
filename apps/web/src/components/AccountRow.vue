@@ -8,6 +8,10 @@ const props = defineProps<{ account: Account; memberName?: string }>()
 const emit = defineEmits<{ select: [] }>()
 
 const isCredit = computed(() => props.account.kind === 'credit')
+const cycleText = computed(() => {
+  if (props.account.statement_day == null || props.account.due_day == null) return '未设置账单日'
+  return `账单日 ${props.account.statement_day} 日 · 还款日 ${props.account.due_day} 日`
+})
 const balance = computed(() => {
   const raw = props.account.balance_minor ?? 0
   return isCredit.value ? -Math.abs(raw) : raw
@@ -26,7 +30,7 @@ const balanceText = computed(() => {
     <span class="account-body">
       <span class="account-name">{{ account.name }}</span>
       <span class="account-sub">
-        {{ isCredit ? '信用卡 · 负债账户' : '现金账户' }}
+        {{ isCredit ? '信用卡 · ' + cycleText : '现金账户' }}
         <em v-if="memberName"> · {{ memberName }}</em>
         <em v-else-if="account.note"> · {{ account.note }}</em>
       </span>

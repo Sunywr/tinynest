@@ -1,6 +1,6 @@
 # 运行与部署指引（服务器 A/B 完全独立）
 
-> 适用版本：**V2 记账重置**。数据层为 V2 基线：两个方言各 2 个迁移文件、运行时 26 张表；不支持 V1 旧库原地升级。
+> 适用版本：**V2 记账重置**。数据层为 V2 基线：两个方言各 4 个迁移文件、运行时 26 张表；不支持 V1 旧库原地升级。
 > 生产清理与新库切换由用户执行，步骤与证据要求以 [生产清理手册](plans/v2-prod-purge-runbook.md) 与 [新库切换手册](plans/v2-cutover-runbook.md) 为准。
 > 本地开发见 [DEVELOPMENT.md](DEVELOPMENT.md)，架构与边界见 [architecture.md](architecture.md)，安全底线见 [security.md](security.md)。
 
@@ -58,9 +58,9 @@
 
 ## 4. 数据库迁移与基线
 
-- 迁移文件：SQLite `apps/api/internal/db/migrations/001_core.sql`、`002_bookkeeping.sql`；MySQL `apps/api/internal/db/mysql/` 下同名文件。文件名前 3 位是版本号。
+- 迁移文件：SQLite `apps/api/internal/db/migrations/001_core.sql`、`002_bookkeeping.sql`、`003_category_style.sql`、`004_credit_cycle.sql`；MySQL `apps/api/internal/db/mysql/` 下同名文件。文件名前 3 位是版本号。
 - 单一迁移器 `internal/db/migrate.go` 按版本升序应用，记录 SHA-256 校验和，校验版本连续性与已应用版本校验和；`schema_meta` 写入 `baseline=v2`。
-- SQLite 迁移与账本行在同一事务；MySQL DDL 隐式提交，因此每个 MySQL 迁移文件必须可重跑（只允许 `CREATE TABLE IF NOT EXISTS` 与内联索引）。
+- SQLite 迁移与账本行在同一事务；MySQL DDL 隐式提交，因此每个 MySQL 迁移文件必须可重跑。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；`ALTER TABLE` 用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法）。
 - 迁移只在版本推进时执行一次；不存在 V1 时期每次启动执行 `UPDATE categories ...` 的副作用；默认分类由 Go 代码幂等写入。
 - 不支持 V1 旧库原地升级；旧库按 [新库切换手册](plans/v2-cutover-runbook.md) 新建库并导入 11 张身份表，旧库保留为回滚点 ≥30 天。
 
@@ -137,6 +137,6 @@ SQL
 ## 10. 未验证（UNVERIFIED）
 
 - 本文命令未在本次文档编写环境执行；双服务器实际连通、证书链、防火墙与 iPhone 实机安装未验证。
-- 生产 MySQL 运行时链路（含 `readyz` 的 `mysql_ping_and_migrations` 实际输出）未在本环境执行。
+- 生产 MySQL 运行时链路（含 `readyz` 的 `mysql_ping_and_migrations` 实际输出）未在本环境执行；本机隔离 MySQL 8.0.46（TCP 3307）已通过迁移、核心 API、`TestMySQLPurgeDrill`、`TestMySQLIdentityCutoverDrill` 与 dump/restore 对账，但不能替代生产 B 机 Unix socket + 受限账号链路。
 - 生产清理与新库切换未执行；实际表名、驱动版本与耗时以生产输出为准。
 - 生产备份/恢复演练与异地副本校验未执行。

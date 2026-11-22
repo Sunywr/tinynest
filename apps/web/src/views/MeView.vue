@@ -37,6 +37,8 @@ const profile = computed<UserProfile>(() => ({
   member_name: me.value?.member_name || session.currentMember.value?.name,
   avatar: me.value?.avatar,
   email: me.value?.email,
+  birthday: (me.value?.birthday as string | undefined) || '',
+  payday: (me.value?.payday as number | undefined) ?? undefined,
 }))
 const month = monthKey()
 const [from, to] = monthRange(month)
@@ -57,6 +59,12 @@ async function logout() {
   } finally {
     loggingOut.value = false
   }
+}
+
+async function profileSaved() {
+  profileOpen.value = false
+  toast('资料已保存')
+  await session.refreshMe()
 }
 </script>
 
@@ -125,7 +133,7 @@ async function logout() {
     <button type="button" class="btn-danger logout-btn" @click="logoutOpen = true">退出登录</button>
 
     <UserProfileDialog v-if="profileOpen" :profile="profile" @close="profileOpen = false"
-      @saved="profileOpen = false; toast('资料已保存')" />
+      @saved="profileSaved" />
     <MembersEditor v-if="membersOpen" @close="membersOpen = false" />
     <CategoryEditor v-if="categoryOpen" @close="categoryOpen = false" />
     <BudgetEditor v-if="budgetOpen" :month="month" @close="budgetOpen = false" @saved="budgetOpen = false" />

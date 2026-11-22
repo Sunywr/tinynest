@@ -14,24 +14,26 @@ var errInvalidAccountOwner = errors.New("归属成员不存在或已停用")
 
 // accountInfo is the persisted shape of one account row.
 type accountInfo struct {
-	ID      string
-	Kind    string
-	Name    string
-	Code    string
-	Status  string
-	Subtype sql.NullString
-	Owner   sql.NullString
-	Note    sql.NullString
+	ID           string
+	Kind         string
+	Name         string
+	Code         string
+	Status       string
+	Subtype      sql.NullString
+	Owner        sql.NullString
+	Note         sql.NullString
+	StatementDay sql.NullInt64
+	DueDay       sql.NullInt64
 }
 
 func scanAccount(row *sql.Row) (accountInfo, error) {
 	var info accountInfo
 	err := row.Scan(&info.ID, &info.Kind, &info.Name, &info.Code, &info.Status,
-		&info.Subtype, &info.Owner, &info.Note)
+		&info.Subtype, &info.Owner, &info.Note, &info.StatementDay, &info.DueDay)
 	return info, err
 }
 
-const accountColumns = `id,kind,name,ledger_code,status,subtype,owner_member_id,note`
+const accountColumns = `id,kind,name,ledger_code,status,subtype,owner_member_id,note,statement_day,due_day`
 
 // loadAccount returns one household-scoped account in any status.
 func loadAccount(ctx context.Context, q db.Queryer, householdID, id string) (accountInfo, error) {

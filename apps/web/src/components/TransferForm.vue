@@ -56,7 +56,7 @@ async function submit() {
         <button type="button" class="icon-btn" aria-label="关闭转账表单" @click="emit('close')"><X :size="20" /></button>
       </header>
       <div class="form-body">
-        <p class="form-hint">转账只在账户之间移动资金，不计入收入或支出。信用卡还款请用「信用卡 → 现金账户」方向。</p>
+        <p class="form-hint">转账只在账户之间移动资金，不计入收入或支出。信用卡还款请用「现金账户 → 信用卡」方向。</p>
         <div class="form-row">
           <span class="field-label">从账户</span>
           <SmartSelect v-model="form.from" :options="accountOptions" placeholder="选择转出账户" :disabled="busy" />

@@ -1,6 +1,6 @@
 # TinyNest · 小家 · 开发与本地验证
 
-**当前基线：V2 记账重置**。保留身份/权限/家庭/邮件与复式记账内核；信用账单、分期、负债、投资、导入等 V1 模块已退役。唯一视觉主题是 **A · 奶油团子**（见 [设计规范](design-system.md)）。
+**当前基线：V2 记账重置**。保留身份/权限/家庭/邮件与复式记账内核（含信用卡账单日/还款日与只读还款计划）；信用账单、分期、负债、投资、导入等 V1 模块已退役。唯一视觉主题是 **A · 奶油团子**（见 [设计规范](design-system.md)）。
 
 当前进度、已退役模块与未验证项见 [当前进度](project-status.md)。V1/Phase 0 报告仅作历史归档（[V0.1 实施报告](reviews/v1-implementation-report.md)、[Phase 0 执行报告](execution-report.md)）。
 
@@ -11,7 +11,7 @@
 | Go | `go.mod` 声明 `go 1.22`；`go mod tidy -diff` 门禁需要 Go ≥ 1.23，CI 固定 1.23.6 |
 | Node / npm | Node 22（CI 固定）；仓库用 `package-lock.json`，统一 `npm ci` |
 | Python | 3.11+；仅用于 `scripts/verify-brand.py` 等辅助脚本 |
-| MySQL | 仅生产方言；本地默认 SQLite。MySQL 演练需要独立 MySQL 8 实例 |
+| MySQL | 仅生产方言；本地默认 SQLite。MySQL 演练需要独立 MySQL 8 实例；Windows 可用隔离 TCP 实例 + `TINYNEST_TEST_MYSQL_TCP`，见 §6 |
 
 **Go 工具链可能不在 PATH 上**（本机常见情况）：把 Go 的 `bin` 目录临时加入 `PATH` 再执行命令，例如 PowerShell：
 
@@ -38,7 +38,7 @@ npm.cmd run test:e2e
 先阅读 `apps/api/.env.example`（示例配置，勿提交真实值）。本地用 SQLite 时不需要 MySQL 与邮件密钥；`TINYNEST_COOKIE_SECURE` **必须显式**设置。
 
 ```bash
-# 终端 1：Go API（启动时自动应用 V2 迁移 001、002）
+# 终端 1：Go API（启动时自动应用 V2 迁移 001–004）
 cd apps/api
 mkdir -p data
 export TINYNEST_DATA_DIR=./data
@@ -134,9 +134,9 @@ tinynest/
 
 ## 5. 数据库迁移（V2）
 
-- 每个方言只有 **版本 1–2**：`migrations/001_core.sql` + `002_bookkeeping.sql`（SQLite）与 `internal/db/mysql/` 下同名文件（MySQL）。文件名前 3 位是版本号。
+- 每个方言当前有 **版本 1–4**：`migrations/001_core.sql`、`002_bookkeeping.sql`、`003_category_style.sql`、`004_credit_cycle.sql`（SQLite）与 `internal/db/mysql/` 下同名文件（MySQL）。文件名前 3 位是版本号。
 - 单一迁移器 `internal/db/migrate.go` 按版本升序应用缺失版本，记录 SHA-256 校验和，校验版本连续性与已应用版本的校验和；`schema_meta` 写入 `baseline=v2`。
-- SQLite 的迁移文件与账本行在同一事务；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重跑**（只允许 `CREATE TABLE IF NOT EXISTS` 与内联索引）。
+- SQLite 的迁移文件与账本行在同一事务；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重跑**。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；需要 `ALTER TABLE` 时用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法）。
 - `schema_meta.baseline` 缺失/不是 `v2`、出现二进制不认识的版本、校验和不一致时启动失败，中文错误指向 [新库切换手册](plans/v2-cutover-runbook.md)。**不得绕过守卫**。
 - 默认分类由 `db.DefaultCategories` + `db.SeedForHousehold()` 幂等写入；不要再引入 SQL 种子文件或启动期 `UPDATE`。
 - 新增迁移只能追加新版本文件，且必须补：空库全量迁移、重复迁移 no-op、校验和篡改拒绝、baseline 不符拒绝、`PRAGMA quick_check` / `foreign_key_check` 测试。
@@ -167,8 +167,25 @@ git grep -nI -E '[[:blank:]]+$' -- '*.md' '*.go' '*.ts' '*.vue' '*.css' '*.py' '
 python3 scripts/verify-brand.py
 ```
 
+### Windows 本机隔离 MySQL（TCP）
+
+生产仍通过 Unix socket 连接；Windows 没有 Unix socket，测试用 `mysql_windows_test.go` 的 TCP shim 把 `unix` 拨号重定向到本机 TCP 实例。隔离实例必须绑定 `127.0.0.1`，每个集成测试使用独立空库（`POST /api/v1/setup` 单次有效）：
+
+```powershell
+$env:TINYNEST_TEST_MYSQL_TCP='127.0.0.1:3307'
+$env:TINYNEST_TEST_MYSQL_SOCKET='tcp'  # 占位；shim 会改用 TCP
+$env:TINYNEST_TEST_MYSQL_USER='tinynest_drill'
+$env:TINYNEST_TEST_MYSQL_PASSWORD_FILE='<受保护的口令文件>'
+$env:TINYNEST_TEST_MYSQL_DATABASE='<每个测试独立空库>'
+go test ./internal/api -run '^TestBookkeepingLifecycle$' -count=1
+go test ./internal/dbadmin -run '^TestMySQLPurgeDrill$' -count=1
+```
+
+- 本机已用 MySQL 8.0.46 隔离实例验证 24 条 API 测试、2 条 dbadmin drill 与 dump/restore 对账；生产 Unix socket 与 `readyz` 仍未验证。
+- `internal/api/mysql_windows_test.go` 与 `internal/dbadmin/mysql_windows_test.go` 只在 `TINYNEST_TEST_MYSQL_TCP` 设置时注册拨号器；Linux CI 仍使用 `scripts/mysql-ci-drill.sh` 的 Unix socket 路径。
+
 - `scripts/check-phase0.sh` / `.ps1` 名字保留历史，实际执行品牌校验、Go test/vet 与前端构建；V2 的完整门禁以 `.github/workflows/ci.yml` 为准（Go build/test/race/vet/tidy、MySQL Unix socket 与备份恢复演练、Web typecheck/build、Playwright E2E、全树行尾空白检查）。
-- 本机没有 MySQL / gcc 时，`go test -race`、`scripts/mysql-ci-drill.sh` 与 MySQL drill 用例会跳过或无法执行，结论标 `UNVERIFIED`。
+- 本机没有 MySQL / gcc 时，`go test -race`、`scripts/mysql-ci-drill.sh` 与 MySQL drill 用例会跳过或无法执行，结论标 `UNVERIFIED`；Windows 隔离 MySQL 按上一节执行。
 - `scripts/db_drill.py` 是 V0.1 时期的 SQLite 迁移/备份恢复演练脚本，V2 下未重新验证；V2 的迁移与基线行为以 `internal/db/migrate_test.go` 和清理/切换手册为准。
 
 ## 7. 本地运行 `tinynest-admin`

@@ -1,4 +1,4 @@
-﻿/** TinyNest V2 API client. Only same-origin relative /api/v1 paths are used.
+/** TinyNest V2 API client. Only same-origin relative /api/v1 paths are used.
  *  No host, credential, certificate or database path is ever present in browser code.
  *  All amounts are integer minor units (cents); formatting lives in format.ts. */
 
@@ -112,8 +112,45 @@ export type Account = {
   owner_member_id?: string | null
   status: string
   note?: string | null
+  statement_day?: number | null
+  due_day?: number | null
   balance_minor: number
 }
+export type CreditDebtCycle = { start_on: string; end_on: string; due_on: string }
+export type CreditDebtCard = {
+  account_id: string
+  name: string
+  status: string
+  configured: boolean
+  statement_day: number | null
+  due_day: number | null
+  total_debt_minor: number
+  unbilled_minor: number
+  overdue_minor: number
+  credit_balance_minor: number
+  cash_needed_minor: number | null
+  next_due_on: string | null
+  next_due_minor: number
+  next_due_period_start_on: string | null
+  next_due_period_end_on: string | null
+  current_cycle: CreditDebtCycle | null
+}
+export type CreditDebtPlan = {
+  today: string
+  payday: number | null
+  next_payday: string | null
+  days_until_payday: number | null
+  complete: boolean
+  unconfigured_cards: number
+  cash_available_minor: number
+  cash_needed_minor: number | null
+  cash_gap_minor: number | null
+  total_debt_minor: number
+  overdue_minor: number
+  unbilled_minor: number
+  cards: CreditDebtCard[]
+}
+export type AccountsWithDebt = { items: Account[]; credit_debt: CreditDebtPlan }
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type Transaction = {
   id: string
@@ -222,11 +259,25 @@ export const api = {
   deleteCategory: (id: string) => del(`/categories/${encodeURIComponent(id)}`),
 
   accounts: () => get<{ items: Account[] }>('/accounts'),
+  accountsWithDebt: () => get<AccountsWithDebt>('/accounts?include=credit_debt'),
   account: (id: string) => get<Account & { items?: unknown[] }>(`/accounts/${encodeURIComponent(id)}`),
-  createAccount: (body: { kind: 'cash' | 'credit'; name: string; subtype?: string | null; note?: string | null; owner_member_id?: string | null }) =>
-    post<Account>('/accounts', body),
-  updateAccount: (id: string, body: { name?: string; note?: string | null; status?: string; owner_member_id?: string | null }) =>
-    patch<Account>(`/accounts/${encodeURIComponent(id)}`, body),
+  createAccount: (body: {
+    kind: 'cash' | 'credit'
+    name: string
+    subtype?: string | null
+    note?: string | null
+    owner_member_id?: string | null
+    statement_day?: number | null
+    due_day?: number | null
+  }) => post<Account>('/accounts', body),
+  updateAccount: (id: string, body: {
+    name?: string
+    note?: string | null
+    status?: string
+    owner_member_id?: string | null
+    statement_day?: number | null
+    due_day?: number | null
+  }) => patch<Account>(`/accounts/${encodeURIComponent(id)}`, body),
   deleteAccount: (id: string) => del(`/accounts/${encodeURIComponent(id)}`),
   accountJournal: (id: string) =>
     get<{ items: { id: string; occurred_on: string; change_minor?: number; amount_minor?: number; note?: string | null; reversal_of?: string | null }[] }>(
