@@ -24,7 +24,7 @@ func NewMux(dataDir string, opts ...Options) *http.ServeMux {
 	mux := http.NewServeMux()
 	phase := "0"
 	if opt.Register != nil {
-		phase = "v0.1"
+		phase = "v2"
 	}
 	mux.HandleFunc("/api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if !getOnly(w, r) {

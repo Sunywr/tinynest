@@ -225,7 +225,7 @@ func main() {
 			slog.Error("shutdown error", "error", err)
 		}
 	}()
-	slog.Info("TinyNest API started", "listen", listen, "phase", "v0.1")
+	slog.Info("TinyNest API started", "listen", listen, "phase", "v2")
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("API failed", "error", err)
 		os.Exit(1)
