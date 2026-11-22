@@ -140,6 +140,7 @@ tinynest/
 - `schema_meta.baseline` 缺失/不是 `v2`、出现二进制不认识的版本、校验和不一致时启动失败，中文错误指向 [新库切换手册](plans/v2-cutover-runbook.md)。**不得绕过守卫**。
 - 默认分类由 `db.DefaultCategories` + `db.SeedForHousehold()` 幂等写入；不要再引入 SQL 种子文件或启动期 `UPDATE`。
 - 新增迁移只能追加新版本文件，且必须补：空库全量迁移、重复迁移 no-op、校验和篡改拒绝、baseline 不符拒绝、`PRAGMA quick_check` / `foreign_key_check` 测试。
+- **生产 Linux 二进制必须使用 LF 换行的嵌入迁移文件构建**。Windows 工作树若为 CRLF，直接 `go build` 会把 CRLF 写进 `//go:embed`，导致生产 `schema_migrations` 的 checksum 校验失败（2026-11-22 部署曾复现并回退）。构建前用 `git archive` 取 LF 文件，或显式把 `internal/db/migrations/*.sql` 与 `internal/db/mysql/*.sql` 归一化为 LF；不要修改生产账本或绕过守卫。仓库 `.gitattributes` 已为这些 SQL 声明 `eol=lf`。
 
 ## 6. 验证命令
 

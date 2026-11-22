@@ -38,5 +38,9 @@ server {
     location = /manifest.webmanifest { types { application/manifest+json webmanifest; } try_files $uri =404; }
     location = /sw.js { add_header Cache-Control "no-cache" always; try_files $uri =404; }
     location = /index.html { add_header Cache-Control "no-cache" always; try_files $uri =404; }
+    # The SPA has a /assets route while Vite also emits an /assets/ directory.
+    # Without these exact locations, /assets would 301 to /assets/ and return 403.
+    location = /assets { add_header Cache-Control "no-cache" always; try_files /index.html =404; }
+    location = /assets/ { return 301 /assets; }
     location / { try_files $uri $uri/ /index.html; }
 }

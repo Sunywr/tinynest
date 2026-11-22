@@ -62,6 +62,7 @@
 - 单一迁移器 `internal/db/migrate.go` 按版本升序应用，记录 SHA-256 校验和，校验版本连续性与已应用版本校验和；`schema_meta` 写入 `baseline=v2`。
 - SQLite 迁移与账本行在同一事务；MySQL DDL 隐式提交，因此每个 MySQL 迁移文件必须可重跑。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；`ALTER TABLE` 用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法）。
 - 迁移只在版本推进时执行一次；不存在 V1 时期每次启动执行 `UPDATE categories ...` 的副作用；默认分类由 Go 代码幂等写入。
+- 生产 Linux 二进制必须用 **LF** 的嵌入迁移文件构建。Windows CRLF 工作树直接 `go build` 会使 `schema_migrations` 的 checksum 不匹配并拒绝启动；用 `git archive` 取 LF 文件或归一化两套 `internal/db/**/*.sql` 后再交叉编译，不要修改生产账本或守卫。
 - 不支持 V1 旧库原地升级；旧库按 [新库切换手册](plans/v2-cutover-runbook.md) 新建库并导入 11 张身份表，旧库保留为回滚点 ≥30 天。
 
 ## 5. MySQL 8

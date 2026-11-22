@@ -11,11 +11,12 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 | --- | --- |
 | V2 代码（后端 / 前端 / 迁移 / 运维 CLI） | 已完成，代码可清点（见 §3） |
 | 信用卡还款计划（2026-11-22 增补） | 已完成：信用卡账户账单日/还款日配置 + `GET /accounts?include=credit_debt` 只读派生；不新增路由/表，不恢复 V1 信用账单模块 |
+| 信用卡还款计划生产发布（2026-11-22） | **已完成**：后端/前端 `v2-9fc30b1` 上线；生产迁移 1–4；`healthz`/`readyz` 200；静态资源哈希与前后端 release 核对通过；登录后真实账本冒烟待用户验证。见 [发布证据](reviews/v2-credit-plan-deployment-evidence.md) |
 | V2 文档（AGENTS / README / 开发 / 架构 / 安全 / 部署 / API / ER / 账务 / 验收） | 已完成（含本次还款计划口径） |
 | V2 测试代码 | 已就位：Go 115 个 Test 函数、Playwright 78 条用例 |
 | 生产清理（P5） | **已执行**：删除 3,975 行业务数据、身份 29 行保留，见 [清理证据](reviews/v2-purge-evidence.md) |
 | 生产新库切换与身份导入（P5） | **已执行**：`tinynest_v2` + 身份导入（users 摘要一致），见 [切换证据](reviews/v2-cutover-evidence.md) |
-| 生产环境、iPhone 实机、A→B 私网 TLS、性能实测 | `UNVERIFIED`（除公网 HTTP 冒烟外均未取得证据） |
+| iPhone 实机、A↔B 私网 TLS、生产性能 | `UNVERIFIED`（公网 HTTP 冒烟与发布健康检查已通过） |
 
 ## 2. 本版本交付
 
@@ -72,6 +73,7 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 - **生产清理执行**：`purge --execute` / `verify` 未在生产或生产副本上执行，输出与耗时未知。
 - **生产新库切换**：`identity-export` / `identity-import`、表数与 `baseline=v2` 的实际输出未在生产数据上核对。
 - **iPhone 实机**：主屏 PWA、安全区、返回手势未在真机验证。
+- **信用卡还款计划登录后冒烟**：未使用真实账号口令登录；需用户登录后在「资产」页新建/配置信用卡并确认面板与编辑流程。
 - **A↔B 私网 TLS**：双服务器链路只有部署模板，未实测连通与证书链。
 - **生产性能**：LCP / CLS、分页与统计在真实数据量下的表现未标定。
 - 2026-11-22 本轮已执行 `go test ./...`、`npm.cmd run typecheck`、`npm.cmd run build`（生成 dist）、Playwright **78/78**、本机隔离 MySQL 回归；race 与生产现场仍未执行。
