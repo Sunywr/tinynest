@@ -10,7 +10,7 @@ import (
 	"tinynest/api/internal/db"
 )
 
-// newTestAdmin opens a throwaway SQLite database with every migration applied.
+// newTestAdmin opens a throwaway SQLite database with the V2 baseline applied.
 func newTestAdmin(t *testing.T) *Admin {
 	t.Helper()
 	database, err := db.Open(filepath.Join(t.TempDir(), "tinynest.sqlite3"))
@@ -47,9 +47,8 @@ type fixture struct {
 	category  string
 }
 
-// seedAll populates every identity table and every purge table, including the
-// self-referencing journal_entry and category rows that would trip a naive
-// delete order.
+// seedAll populates every identity table and the V2 business tables, including a
+// reversal entry that exercises the self-referencing journal_entries foreign key.
 func seedAll(t *testing.T, admin *Admin) fixture {
 	t.Helper()
 	ctx := context.Background()
@@ -92,102 +91,31 @@ func seedAll(t *testing.T, admin *Admin) fixture {
 
 	// Chart of accounts, two accounts and a balanced pair of entries. je2 is a
 	// reversal, which exercises the self-referencing foreign key on
-	// journal_entries. The category row gets a child so parent_id must be
-	// detached too.
+	// journal_entries.
 	mustExec(t, admin, `INSERT INTO ledger_accounts (id, household_id, code, name, category) VALUES (?,?,?,?,?)`,
 		"la1", f.household, "1010:acct1", "现金", 1)
 	mustExec(t, admin, `INSERT INTO accounts (id, household_id, kind, name, ledger_code) VALUES (?,?,?,?,?)`,
 		f.account, f.household, "cash", "钱包", "1010:acct1")
-	mustExec(t, admin, `INSERT INTO categories (id, household_id, parent_id, kind, name, level) VALUES (?,?,?,?,?,?)`,
-		"cat_child", f.household, f.category, "expense", "子分类", 2)
 	mustExec(t, admin, `INSERT INTO journal_entries (id, household_id, biz_type, biz_id, occurred_on) VALUES (?,?,?,?,?)`,
 		"je1", f.household, "expense", "tx1", "2026-11-01")
 	mustExec(t, admin, `INSERT INTO journal_entries (id, household_id, biz_type, biz_id, occurred_on, reversal_of) VALUES (?,?,?,?,?,?)`,
 		"je2", f.household, "reversal", "tx1", "2026-11-02", "je1")
 	mustExec(t, admin, `INSERT INTO journal_lines (entry_id, line_no, account_code, debit_minor, credit_minor) VALUES (?,?,?,?,?)`,
-		"je1", 1, "5010:" + f.category, 1000, 0)
+		"je1", 1, "5010:"+f.category, 1000, 0)
 	mustExec(t, admin, `INSERT INTO journal_lines (entry_id, line_no, account_code, debit_minor, credit_minor) VALUES (?,?,?,?,?)`,
 		"je1", 2, "1010:acct1", 0, 1000)
 	mustExec(t, admin, `INSERT INTO journal_lines (entry_id, line_no, account_code, debit_minor, credit_minor) VALUES (?,?,?,?,?)`,
 		"je2", 1, "1010:acct1", 1000, 0)
 	mustExec(t, admin, `INSERT INTO journal_lines (entry_id, line_no, account_code, debit_minor, credit_minor) VALUES (?,?,?,?,?)`,
-		"je2", 2, "5010:" + f.category, 0, 1000)
+		"je2", 2, "5010:"+f.category, 0, 1000)
 	mustExec(t, admin, `INSERT INTO account_opening_balances (id, account_id, amount_minor, entry_id) VALUES (?,?,?,?)`,
-		"aob1", f.account, 500, "je1")
-	mustExec(t, admin, `INSERT INTO projects (id, household_id, name) VALUES (?,?,?)`, "prj1", f.household, "装修")
-	mustExec(t, admin, `INSERT INTO transactions (id, household_id, type, amount_minor, occurred_on, status, entry_id, account_id) VALUES (?,?,?,?,?,?,?,?)`,
-		"tx1", f.household, "expense", 1000, "2026-11-01", "posted", "je1", f.account)
-	mustExec(t, admin, `INSERT INTO transactions (id, household_id, type, amount_minor, occurred_on, status, entry_id, account_id) VALUES (?,?,?,?,?,?,?,?)`,
-		"tx2", f.household, "income", 2000, "2026-11-02", "posted", "je2", f.account)
-	mustExec(t, admin, `INSERT INTO transaction_splits (transaction_id, line_no, category_id, project_id, amount_minor) VALUES (?,?,?,?,?)`,
-		"tx1", 1, f.category, "prj1", 1000)
-	mustExec(t, admin, `INSERT INTO refunds (id, household_id, transaction_id, split_id, category_id, amount_minor, refund_on, destination_type, destination_id, entry_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		"rf1", f.household, "tx1", 1, f.category, 100, "2026-11-03", "cash", f.account, "je2")
-
-	// Credit module.
-	mustExec(t, admin, `INSERT INTO credit_instruments (id, household_id, kind, name, cycle_start_day, cycle_end_day, due_day, ledger_code) VALUES (?,?,?,?,?,?,?,?)`,
-		"ci1", f.household, "credit_card", "招行卡", 5, 4, 20, "2010:ci1")
-	mustExec(t, admin, `INSERT INTO credit_statements (id, household_id, instrument_id, cycle_start_on, cycle_end_on, due_on) VALUES (?,?,?,?,?,?)`,
-		"cs1", f.household, "ci1", "2026-10-05", "2026-11-04", "2026-11-20")
-	mustExec(t, admin, `INSERT INTO credit_statement_items (statement_id, source_type, source_id, amount_minor, occurred_on) VALUES (?,?,?,?,?)`,
-		"cs1", "transaction", "tx1", 1000, "2026-11-01")
-	mustExec(t, admin, `INSERT INTO credit_payments (id, household_id, statement_id, amount_minor, paid_on, from_account_id, entry_id) VALUES (?,?,?,?,?,?,?)`,
-		"cp1", f.household, "cs1", 500, "2026-11-20", f.account, "je2")
-	mustExec(t, admin, `INSERT INTO credit_instrument_changes (id, household_id, instrument_id, changed_fields) VALUES (?,?,?,?)`,
-		"cic1", f.household, "ci1", "due_day")
-	mustExec(t, admin, `INSERT INTO credit_statement_adjustments (id, household_id, statement_id, field, old_value, new_value, reason) VALUES (?,?,?,?,?,?,?)`,
-		"csa1", f.household, "cs1", "due_on", "2026-11-20", "2026-11-21", "账单核对")
-	mustExec(t, admin, `INSERT INTO credit_statement_provisions (statement_id, household_id, target_minor) VALUES (?,?,?)`,
-		"cs1", f.household, 500)
-
-	// Installments.
-	mustExec(t, admin, `INSERT INTO installment_contracts (id, household_id, source_transaction_id, name, principal_minor, periods, first_due_on, ledger_code) VALUES (?,?,?,?,?,?,?,?)`,
-		"ic1", f.household, "tx1", "手机分期", 3000, 3, "2026-12-01", "2020:ic1")
-	mustExec(t, admin, `INSERT INTO installment_schedule_items (id, contract_id, installment_no, due_on, principal_minor, total_minor) VALUES (?,?,?,?,?,?)`,
-		"isi1", "ic1", 1, "2026-12-01", 1000, 1000)
-	mustExec(t, admin, `INSERT INTO installment_payments (id, schedule_item_id, amount_minor, paid_on, channel, channel_id, entry_id) VALUES (?,?,?,?,?,?,?)`,
-		"ip1", "isi1", 1000, "2026-12-01", "cash", f.account, "je2")
-	mustExec(t, admin, `INSERT INTO installment_adjustments (id, household_id, contract_id, action, payload_json, reason) VALUES (?,?,?,?,?,?)`,
-		"ia1", f.household, "ic1", "reschedule", "{}", "改期")
-
-	// Debt.
-	mustExec(t, admin, `INSERT INTO debt_contracts (id, household_id, kind, name) VALUES (?,?,?,?)`,
-		"dc1", f.household, "mortgage", "房贷")
-	mustExec(t, admin, `INSERT INTO debt_schedule_items (id, contract_id, installment_no, due_on) VALUES (?,?,?,?)`,
-		"dsi1", "dc1", 1, "2026-12-01")
-	mustExec(t, admin, `INSERT INTO debt_payments (id, schedule_item_id, amount_minor, paid_on, channel, channel_id, entry_id) VALUES (?,?,?,?,?,?,?)`,
-		"dp1", "dsi1", 1000, "2026-12-01", "cash", f.account, "je2")
-
-	// Scheduler, investments, mail-to-statement imports, watchlist, audit.
-	mustExec(t, admin, `INSERT INTO schedule_due_items (id, household_id, source_type, source_id, biz_key, due_on, amount_minor) VALUES (?,?,?,?,?,?,?)`,
-		"du1", f.household, "credit_statement", "cs1", "cs1:2026-11-20", "2026-11-20", 500)
-	mustExec(t, admin, `INSERT INTO schedule_runs (id, household_id, run_on, "trigger", status) VALUES (?,?,?,?,?)`,
-		"sr1", f.household, "2026-11-22", "startup_backfill", "ok")
-	mustExec(t, admin, `INSERT INTO investment_assets (id, household_id, code, name, kind, account_id, ledger_code) VALUES (?,?,?,?,?,?,?)`,
-		"ia1", f.household, "601398", "工商银行", "stock", f.account, "1040:ia1")
-	mustExec(t, admin, `INSERT INTO investment_fee_rules (id, account_id, effective_from) VALUES (?,?,?)`,
-		"ifr1", f.account, "2026-01-01")
-	mustExec(t, admin, `INSERT INTO investment_trades (id, household_id, asset_id, side, trade_on, quantity_scaled, price_scaled, gross_minor, computed_fee_minor, fee_minor, net_minor, from_account_id, position_cost_before_minor, position_cost_after_minor, entry_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"it1", f.household, "ia1", "buy", "2026-11-02", 1000000, 500000, 5000, 5, 5, 5005, f.account, 0, 5005, "je2")
-	mustExec(t, admin, `INSERT INTO investment_dividends (id, household_id, asset_id, received_on, gross_minor, net_minor, to_account_id, to_ledger_code, entry_id) VALUES (?,?,?,?,?,?,?,?,?)`,
-		"idv1", f.household, "ia1", "2026-11-03", 100, 80, f.account, "1010:acct1", "je1")
-	mustExec(t, admin, `INSERT INTO investment_valuations (asset_id, valued_on, price_scaled, market_value_minor) VALUES (?,?,?,?)`,
-		"ia1", "2026-11-20", 500000, 5000)
-	mustExec(t, admin, `INSERT INTO investment_positions (asset_id) VALUES (?)`, "ia1")
-
-	// Credit-card statement mail pipeline.
-	mustExec(t, admin, `INSERT INTO credit_mailboxes (id, household_id, host, username, folder, password_cipher, enabled, version, tested_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-		"cmb1", f.household, "imap.example.invalid", "me@example.invalid", "INBOX", "cipher", 1, 1, "2026-11-01T00:00:00Z")
-	mustExec(t, admin, `INSERT INTO credit_mail_bindings (instrument_id, household_id, mailbox_id, category_id, subject_keyword, card_tail) VALUES (?,?,?,?,?,?)`,
-		"ci1", f.household, "cmb1", f.category, "账单", "1234")
-	mustExec(t, admin, `INSERT INTO credit_mail_previews (instrument_id, household_id, generation, synchronized_at, statements_json, choices_json) VALUES (?,?,?,?,?,?)`,
-		"ci1", f.household, 1, "2026-11-01T00:00:00Z", "[]", "[]")
-
-	// Statement imports.
-	mustExec(t, admin, `INSERT INTO statement_import_rows (household_id, id, source, profile, uploaded_by, binding_key, reference_hash, payload) VALUES (?,?,?,?,?,?,?,?)`,
-		f.household, "sir1", "wechat", "微信账单", f.user, "b1", "hash", "{}")
-	mustExec(t, admin, `INSERT INTO statement_import_bindings (household_id, binding_key, account_id, card_id) VALUES (?,?,?,?)`,
-		f.household, "b1", f.account, "1234")
+		"aob1", f.account, 500, "je2")
+	mustExec(t, admin, `INSERT INTO transactions (id, household_id, type, amount_minor, occurred_on, status, entry_id, account_id, category_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"tx1", f.household, "expense", 1000, "2026-11-01", "posted", "je1", f.account, f.category)
+	mustExec(t, admin, `INSERT INTO transactions (id, household_id, type, amount_minor, occurred_on, status, entry_id, account_id, category_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"tx2", f.household, "expense", 2000, "2026-11-02", "reversed", "je2", f.account, f.category)
+	mustExec(t, admin, `INSERT INTO budgets (household_id, month, amount_minor) VALUES (?,?,?)`,
+		f.household, "2026-11", 5000)
 
 	// Audit trail.
 	mustExec(t, admin, `INSERT INTO audit_logs (household_id, actor, action, entity, entity_id) VALUES (?,?,?,?,?)`,
@@ -235,21 +163,9 @@ func TestPurgeTableListsAreConsistent(t *testing.T) {
 		position[table] = i
 	}
 	parents := map[string][]string{
-		"refunds":                  {"transactions", "transaction_splits", "categories", "journal_entries"},
-		"transaction_splits":       {"transactions", "categories", "projects"},
 		"transactions":             {"accounts", "journal_entries"},
 		"journal_lines":            {"journal_entries"},
 		"account_opening_balances": {"accounts", "journal_entries"},
-		"credit_statement_items":   {"credit_statements"},
-		"credit_payments":          {"credit_statements", "accounts", "journal_entries"},
-		"installment_contracts":    {"transactions"},
-		"installment_payments":     {"journal_entries"},
-		"debt_payments":            {"journal_entries"},
-		"investment_assets":        {"accounts"},
-		"investment_trades":        {"investment_assets", "accounts", "journal_entries"},
-		"investment_dividends":     {"investment_assets", "accounts", "journal_entries"},
-		"investment_fee_rules":     {"accounts"},
-		"credit_mail_bindings":     {"credit_mailboxes"},
 	}
 	for child, refs := range parents {
 		childPos, ok := position[child]
@@ -283,7 +199,7 @@ func TestPurgeEmptiesBusinessDataAndKeepsIdentity(t *testing.T) {
 	}
 	// Sanity: the fixture must actually populate the core business tables,
 	// otherwise a passing purge proves nothing.
-	for _, table := range []string{"transactions", "journal_entries", "journal_lines", "credit_statements", "investment_assets", "audit_logs", "household_members"} {
+	for _, table := range []string{"transactions", "journal_entries", "journal_lines", "categories", "audit_logs", "household_members"} {
 		if count := before.purgeCount(table); count.Rows == 0 {
 			t.Fatalf("fixture did not populate %s", table)
 		}
@@ -406,9 +322,6 @@ func TestPurgeKeepAuditPreservesHistory(t *testing.T) {
 	if kept.Rows == 0 {
 		t.Fatal("keep-audit should preserve audit_logs rows")
 	}
-	if result.After.purgeCount("schedule_runs").Rows == 0 {
-		t.Fatal("keep-audit should preserve schedule_runs rows")
-	}
 	if _, err := admin.Verify(ctx, nil, false); err == nil {
 		t.Fatal("verify must report the retained audit rows")
 	}
@@ -426,8 +339,9 @@ func TestPurgeReseedCategoriesLeavesOnlySystemDefaults(t *testing.T) {
 	if len(result.Reseeded) != 1 || result.Reseeded[0] != "hh1" {
 		t.Fatalf("unexpected reseed list %v", result.Reseeded)
 	}
-	if result.After.purgeCount("categories").Rows == 0 {
-		t.Fatal("expected default categories to be reseeded")
+	if result.After.purgeCount("categories").Rows != int64(len(db.DefaultCategories)) {
+		t.Fatalf("expected %d default categories, got %d",
+			len(db.DefaultCategories), result.After.purgeCount("categories").Rows)
 	}
 	// The strict verify is rejected, the opt-in one accepts exactly the reseed.
 	if _, err := admin.Verify(ctx, nil, false); err == nil {
@@ -496,9 +410,10 @@ func TestVerifyDetectsNewBusinessRow(t *testing.T) {
 	if _, err := admin.Purge(ctx, PurgeOptions{}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	// A new project row after the purge must be caught even though the journal
+	// A new category row after the purge must be caught even though the journal
 	// stayed empty: the guard covers every business table, not only the ledger.
-	mustExec(t, admin, `INSERT INTO projects (id, household_id, name) VALUES (?,?,?)`, "prj_late", "hh1", "漏网")
+	mustExec(t, admin, `INSERT INTO categories (id, household_id, kind, name) VALUES (?,?,?,?)`,
+		"cat_late", "hh1", "expense", "漏网")
 	if _, err := admin.Verify(ctx, nil, false); err == nil {
 		t.Fatal("verify must fail when a business row reappears")
 	}

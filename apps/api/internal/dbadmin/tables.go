@@ -31,9 +31,9 @@ var PurgeGroups = []Group{
 		Tables: []string{"journal_entries", "journal_lines", "account_opening_balances"},
 	},
 	{
-		Name:   "记账流水",
-		Note:   "流水、拆分与退款",
-		Tables: []string{"transactions", "transaction_splits", "refunds"},
+		Name:   "记账数据",
+		Note:   "流水、拆分、退款与月度预算",
+		Tables: []string{"transactions", "transaction_splits", "refunds", "budgets"},
 	},
 	{
 		Name:   "信用账单",
@@ -162,6 +162,8 @@ var deleteOrder = []string{
 	"schedule_runs",
 	"stock_quotes",
 	"mail_queue",
+	// V2 bookkeeping extras (absent from a v1 schema; skipped automatically).
+	"budgets",
 	"household_invites",
 	"household_user_members",
 	"household_members",

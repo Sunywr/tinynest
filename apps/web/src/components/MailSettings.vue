@@ -1,25 +1,21 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { request } from '../services/api'
-const props=defineProps<{ role: string }>()
 const emit=defineEmits<{identityUpdated:[]}>()
 const identity=ref<any>(null), config=ref<any>(null), error=ref(''), message=ref(''), busy=ref(false)
 const credentials=reactive({password:'',current_password:'',test_recipient:''})
 const binding=reactive({email:'',current_password:'',code:'',old_code:'',new_password:'',confirm_password:''})
 const proofs=reactive<Record<string,string>>({})
-const announcement=reactive({title:'',body:''}), preview=ref<number|null>(null)
 const cooldown=reactive<Record<string,number>>({})
-const statuses=ref<any[]>([])
 const post=(p:string,b:any)=>request(p,{method:'POST',body:JSON.stringify(b)})
 async function run(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';message.value='';try{await fn()}catch(e){error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false}}
-async function load(){identity.value=await request('/auth/me/mail');if(identity.value.site_admin)config.value=await request('/site/mail');if(props.role==='admin')statuses.value=(await request('/household/mail/announcements')).items}
+async function load(){identity.value=await request('/auth/me/mail');if(identity.value.site_admin)config.value=await request('/site/mail');}
 onMounted(()=>run(load))
 async function challenge(purpose:string){await run(async()=>{if(Date.now()<(cooldown[purpose]||0))throw Error('请在60秒后重发');const r=await post('/auth/me/mail/challenge',{email:binding.email,purpose,current_password:binding.current_password});proofs[purpose]=r.challenge_id;cooldown[purpose]=Date.now()+60000;message.value='验证码已排队发送，10分钟内有效；同一邮箱每天最多3封邮件。'})}
 function proof(purpose:string,code:string){return{challenge_id:proofs[purpose]||'',code}}
 async function bind(){await run(async()=>{await post('/auth/me/mail/confirm',{email:binding.email,current_password:binding.current_password,proof:proof('bind',binding.code),old_proof:proof('old_email',binding.old_code)});binding.code='';binding.old_code='';binding.current_password='';await load();emit('identityUpdated');message.value='邮箱已验证'})}
 async function password(){await run(async()=>{if(binding.new_password!==binding.confirm_password)throw Error('两次密码不一致');await post('/auth/me/password',{current_password:binding.current_password,new_password:binding.new_password,proof:proof('password',binding.code)});binding.new_password='';binding.current_password='';binding.code='';window.dispatchEvent(new CustomEvent('tinynest:session-expired'))})}
 async function saveConfig(){await run(async()=>{try{if(!config.value.config.from)config.value.config.from=config.value.config.username;await post('/site/mail',{...credentials,config:config.value.config,version:config.value.version});await load();message.value='测试邮件已被SMTP接受，配置已生效'}finally{credentials.password='';credentials.current_password=''}})}
-async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=await post('/household/mail/announcements',{...announcement,preview:isPreview,expected_count:preview.value});if(isPreview){preview.value=r.recipient_count}else{preview.value=null;announcement.title='';announcement.body='';await load();message.value='公告已加入发送队列'}})}
 </script>
 <template>
 <section class="card mail-settings" aria-label="邮箱与安全">
@@ -43,7 +39,6 @@ async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=a
 <label>新密码<input v-model="binding.new_password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"></label>
 <label>确认新密码<input v-model="binding.confirm_password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"></label>
 <button class="btn-primary" :disabled="busy">验证并修改密码</button></form>
-<label class="mail-toggle"><input v-model="identity.announcements" type="checkbox" :disabled="busy" @change="run(async()=>{await post('/auth/me/mail/preferences',{announcements:identity.announcements});message='偏好已保存'})">接收家庭公告邮件</label>
 </template>
 <form class="system-mail" v-if="config" @submit.prevent="saveConfig"><h2>系统邮件 · 仅站点管理员</h2>
 <p>配置版本 {{config.version}} · 今日已用 {{config.used_today}} 封 · 公告 {{config.announcements_today}} 封</p>
@@ -61,14 +56,7 @@ async function sendAnnouncement(isPreview:boolean){await run(async()=>{const r=a
 <label>当前登录密码<input v-model="credentials.current_password" type="password" autocomplete="current-password" required></label>
 <button class="btn-primary" :disabled="busy||!config.key_ready">测试并保存配置</button><p>测试失败保留旧配置；密码保存后不再显示。</p>
 </form>
-<form class="announcement-mail" v-if="role==='admin'" @submit.prevent="sendAnnouncement(true)"><h2>家庭公告邮件</h2>
-<p>只发送给本家庭已验证且接收公告的成员。</p>
-<label>标题<input v-model="announcement.title" required maxlength="200" @input="preview=null"></label>
-<label>正文<textarea v-model="announcement.body" required maxlength="20000" rows="5" @input="preview=null"></textarea></label>
-<button :disabled="busy">预览收件人数与额度</button>
-<div v-if="preview!==null"><h3>{{announcement.title}}</h3><p class="mail-preview">{{announcement.body}}</p><p>将发送给 {{preview}} 位成员。</p><button type="button" class="btn-primary" :disabled="busy||preview===0" @click="sendAnnouncement(false)">确认发送公告</button></div>
-<p v-for="s in statuses" :key="s.status">{{({'queued':'排队中','sending':'发送中','smtp_accepted':'SMTP已接受','failed':'失败','expired':'已过期','cancelled':'已取消','daily_limit':'已达邮箱每日上限'} as Record<string,string>)[s.status]||s.status}}：{{s.count}}</p>
-</form></section>
+</section>
 </template>
 <style scoped>
 .mail-settings{margin:24px 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start;color:var(--text)}

@@ -23,8 +23,8 @@ import (
 // testSetupToken is a test-only bootstrap value, never a real credential.
 const testSetupToken = "test-only-bootstrap-token-8f3a91c2"
 
-// remEnv is an isolated, empty V0.1 database + real HTTP server used by the
-// remediation regression tests. It never touches a real SQLite file.
+// remEnv is an isolated, empty V2 database + real HTTP server. It never touches
+// a real SQLite file.
 type remEnv struct {
 	t        *testing.T
 	ts       *httptest.Server
@@ -45,7 +45,7 @@ func newRemEnv(t *testing.T, opts Options) *remEnv {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	expected, err := db.EmbeddedVersions()
+	expected, err := database.ExpectedVersions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,9 +128,60 @@ func setupPayload(name, user string) map[string]any {
 	}
 }
 
+// --- bookkeeping helpers shared with two-household isolation tests -----------
+
+func (c *remClient) mustCall(method, path string, body any) remResult {
+	c.t.Helper()
+	result := c.call(method, path, body, nil)
+	if result.Status < 200 || result.Status >= 300 {
+		c.t.Fatalf("%s %s => %d %v", method, path, result.Status, result.Body)
+	}
+	return result
+}
+
+func (c *remClient) firstCategory(kind string) string {
+	c.t.Helper()
+	for _, item := range c.mustCall("GET", "/api/v1/categories", nil).Body["items"].([]any) {
+		row := item.(map[string]any)
+		if row["kind"] == kind {
+			return row["id"].(string)
+		}
+	}
+	c.t.Fatalf("no %s category found", kind)
+	return ""
+}
+
+func (c *remClient) createAccount(kind, name string, opening int64) string {
+	c.t.Helper()
+	return c.mustCall("POST", "/api/v1/accounts", map[string]any{
+		"kind": kind, "name": name, "opening_minor": opening,
+	}).Body["id"].(string)
+}
+
+func (c *remClient) accountBalance(id string) int64 {
+	c.t.Helper()
+	return number(c.mustCall("GET", "/api/v1/accounts/"+id, nil).Body["balance_minor"])
+}
+
+func (c *remClient) createExpense(amount int64, on, category, account string) string {
+	c.t.Helper()
+	return c.mustCall("POST", "/api/v1/transactions", map[string]any{
+		"type": "expense", "amount_minor": amount, "occurred_on": on,
+		"category_id": category, "account_id": account,
+	}).Body["id"].(string)
+}
+
+func (c *remClient) createIncome(amount int64, on, category, account string) string {
+	c.t.Helper()
+	return c.mustCall("POST", "/api/v1/transactions", map[string]any{
+		"type": "income", "amount_minor": amount, "occurred_on": on,
+		"category_id": category, "account_id": account,
+	}).Body["id"].(string)
+}
+
 // ---------------------------------------------------------------------------
 // FIX-01: POST /api/v1/setup must require an explicitly configured one-time
-// bootstrap token. Regression test written BEFORE the fix.
+// bootstrap token.
 // ---------------------------------------------------------------------------
 
 func TestSetupRequiresBootstrapToken(t *testing.T) {
@@ -227,9 +278,9 @@ func TestSetupConcurrentBootstrapOnlyOneSucceeds(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FIX-02: financial aggregates and due-item projection MUST be scoped to the
-// authenticated household inside SQL, not filtered after a global SUM.
-// Two households live in the SAME temporary SQLite database on purpose.
+// FIX-02: financial aggregates MUST be scoped to the authenticated household
+// inside SQL, not filtered after a global SUM. Two households live in the SAME
+// temporary database on purpose and use IDENTICAL ledger subject codes.
 // ---------------------------------------------------------------------------
 
 type isoHousehold struct {
@@ -262,6 +313,10 @@ func bootstrapHousehold(t *testing.T, e *remEnv, suffix string) isoHousehold {
 		"sess_iso_"+suffix, h.user, auth.HashToken(h.raw), h.csrf, "2099-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	// A real household always has the default single-level category set.
+	if err := db.SeedForHousehold(context.Background(), e.database, h.id); err != nil {
+		t.Fatal(err)
+	}
 	return h
 }
 
@@ -273,157 +328,16 @@ func (h isoHousehold) client(t *testing.T, base string) *remClient {
 	return c
 }
 
-// insertBalancedJournal writes one self-balanced journal entry per household.
-// Subject codes are identical across households, so any aggregate that forgets
-// e.household_id immediately leaks the other household's numbers.
-func insertBalancedJournal(t *testing.T, e *remEnv, h isoHousehold, scale int64) {
-	t.Helper()
-	entryID := "je_iso_" + h.id
-	if _, err := e.database.Exec(`
-		INSERT INTO journal_entries(id,household_id,biz_type,biz_id,occurred_on,currency,status,created_by)
-		VALUES(?,?,?,?,?,'CNY','posted','isolation-test')`,
-		entryID, h.id, "manual", "biz_iso_"+h.id, "2026-11-12"); err != nil {
-		t.Fatal(err)
-	}
-	type line struct {
-		code   string
-		dr, cr int64
-	}
-	lines := []line{
-		{"1010:" + h.id, 500000 * scale, 0},
-		{"4010:salary", 0, 500000 * scale},
-		{"5010:food", 30000 * scale, 0},
-		{"1010:" + h.id, 0, 30000 * scale},
-		{"1010:" + h.id, 200000 * scale, 0},
-		{"3010:equity", 0, 200000 * scale},
-		{"3010:equity", 100000 * scale, 0},
-		{"2010:credit", 0, 100000 * scale},
-	}
-	for i, l := range lines {
-		if _, err := e.database.Exec(
-			`INSERT INTO journal_lines(entry_id,line_no,account_code,debit_minor,credit_minor) VALUES(?,?,?,?,?)`,
-			entryID, i+1, l.code, l.dr, l.cr); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func insertPendingInstallment(t *testing.T, e *remEnv, h isoHousehold, due string, amount int64) string {
-	t.Helper()
-	contractID := "inst_contract_" + h.id
-	itemID := "inst_item_" + h.id
-	if _, err := e.database.Exec(`
-		INSERT INTO installment_contracts(id,household_id,name,principal_minor,total_fee_minor,periods,first_due_on,ledger_code)
-		VALUES(?,?,?,?,?,?,?,?)`,
-		contractID, h.id, "隔离分期", amount, 0, 1, due, "2020:"+h.id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.database.Exec(`
-		INSERT INTO installment_schedule_items(id,contract_id,installment_no,due_on,principal_minor,fee_minor,total_minor,paid_minor,status)
-		VALUES(?,?,?,?,?,?,?,?,'pending')`,
-		itemID, contractID, 1, due, amount, 0, amount, 0); err != nil {
-		t.Fatal(err)
-	}
-	return itemID
-}
-
-func TestHouseholdIsolation(t *testing.T) {
-	fixed := time.Date(2026, 11, 13, 4, 0, 0, 0, time.UTC)
-	e := newRemEnv(t, Options{
-		Clock:      func() time.Time { return fixed },
-		SetupToken: testSetupToken,
-	})
-	a := bootstrapHousehold(t, e, "a")
-	b := bootstrapHousehold(t, e, "b")
-	insertBalancedJournal(t, e, a, 1)
-	insertBalancedJournal(t, e, b, 2)
-	ca, cb := a.client(t, e.ts.URL), b.client(t, e.ts.URL)
-
-	path := "/api/v1/dashboard/summary?from=2026-01-01&to=2026-12-31"
-	ra := ca.call("GET", path, nil, nil)
-	rb := cb.call("GET", path, nil, nil)
-	if ra.Status != 200 || rb.Status != 200 {
-		t.Fatalf("[FIX-02] dashboard summary failed: A=%d %v B=%d %v", ra.Status, ra.Body, rb.Status, rb.Body)
-	}
-	type pair struct{ a, b int64 }
-	want := map[string]pair{
-		"income_minor":    {500000, 1000000},
-		"expense_minor":   {30000, 60000},
-		"cashflow_minor":  {670000, 1340000},
-		"net_worth_minor": {570000, 1140000},
-	}
-	for field, w := range want {
-		if got := number(ra.Body[field]); got != w.a {
-			t.Errorf("[FIX-02] household A %s = %d, want %d (cross-household leak?)", field, got, w.a)
-		}
-		if got := number(rb.Body[field]); got != w.b {
-			t.Errorf("[FIX-02] household B %s = %d, want %d (cross-household leak?)", field, got, w.b)
-		}
-	}
-	// assets / liabilities feed net_worth; assert the two households differ.
-	if number(ra.Body["net_worth_minor"]) == number(rb.Body["net_worth_minor"]) {
-		t.Error("[FIX-02] two households must not share a net worth figure")
-	}
-
-	// --- due-item projection: each household sees only its own pending items ---
-	itemA := insertPendingInstallment(t, e, a, "2026-11-18", 100000)
-	itemB := insertPendingInstallment(t, e, b, "2026-11-20", 200000)
-	genA := ca.call("POST", "/api/v1/schedule/generate", map[string]any{}, nil)
-	genB := cb.call("POST", "/api/v1/schedule/generate", map[string]any{}, nil)
-	if number(genA.Body["generated"]) != 1 {
-		t.Errorf("[FIX-02] household A should project exactly its own item, got %v", genA.Body["generated"])
-	}
-	if number(genB.Body["generated"]) != 1 {
-		t.Errorf("[FIX-02] household B should project exactly its own item, got %v", genB.Body["generated"])
-	}
-	var cntA, cntB int
-	_ = e.database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items WHERE household_id=?`, a.id).Scan(&cntA)
-	_ = e.database.QueryRow(`SELECT COUNT(*) FROM schedule_due_items WHERE household_id=?`, b.id).Scan(&cntB)
-	if cntA != 1 || cntB != 1 {
-		t.Errorf("[FIX-02] due items misattributed: A=%d B=%d (want 1/1)", cntA, cntB)
-	}
-	var srcA, srcB string
-	_ = e.database.QueryRow(`SELECT source_id FROM schedule_due_items WHERE household_id=?`, a.id).Scan(&srcA)
-	_ = e.database.QueryRow(`SELECT source_id FROM schedule_due_items WHERE household_id=?`, b.id).Scan(&srcB)
-	if srcA != itemA || srcB != itemB {
-		t.Errorf("[FIX-02] due item source cross-contamination: A=%s(want %s) B=%s(want %s)", srcA, itemA, srcB, itemB)
-	}
-}
-
-func TestHouseholdIsolationOnDetailEndpoints(t *testing.T) {
-	fixed := time.Date(2026, 11, 13, 4, 0, 0, 0, time.UTC)
-	e := newRemEnv(t, Options{Clock: func() time.Time { return fixed }, SetupToken: testSetupToken})
-	a := bootstrapHousehold(t, e, "a")
-	b := bootstrapHousehold(t, e, "b")
-	accID := "acc_iso_a"
-	if _, err := e.database.Exec(
-		`INSERT INTO accounts(id,household_id,kind,name,ledger_code) VALUES(?,?,?,?,?)`,
-		accID, a.id, "cash", "隔离账户", "1010:"+accID); err != nil {
-		t.Fatal(err)
-	}
-	cb := b.client(t, e.ts.URL)
-	list := cb.call("GET", "/api/v1/accounts", nil, nil)
-	items, _ := list.Body["items"].([]any)
-	if len(items) != 0 {
-		t.Errorf("[FIX-02] household B must not see household A's accounts, got %d", len(items))
-	}
-	detail := cb.call("GET", "/api/v1/accounts/"+accID+"/balance", nil, nil)
-	if detail.Status != 404 {
-		t.Errorf("[FIX-02] household B must not read A's account balance, got %d", detail.Status)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // FIX-03: every computed business date must use the injectable Asia/Shanghai
-// clock. Audit/session timestamps stay UTC. Tests MUST be reproducible and not
-// depend on the host timezone or the real wall clock.
+// clock. Audit/session timestamps stay UTC.
 // ---------------------------------------------------------------------------
 
 func createAccountWithOpening(t *testing.T, e *remEnv, h isoHousehold, amount int64) string {
 	t.Helper()
 	c := h.client(t, e.ts.URL)
 	r := c.call("POST", "/api/v1/accounts", map[string]any{
-		"kind": "cash", "name": "业务日账户", "opening_balance_minor": amount,
+		"kind": "cash", "name": "业务日账户", "opening_minor": amount,
 	}, nil)
 	if r.Status != 201 {
 		t.Fatalf("[FIX-03] create account failed: %d %v", r.Status, r.Body)
@@ -469,73 +383,28 @@ func TestBusinessDateOpeningBalanceBoundaries(t *testing.T) {
 	}
 }
 
-func TestBusinessDateReversalUsesShanghaiDay(t *testing.T) {
-	clk := time.Date(2026, 11, 13, 16, 0, 0, 0, time.UTC)
-	const want = "2026-11-14" // Beijing 2026-11-14 00:00
-	e := newRemEnv(t, Options{Clock: func() time.Time { return clk }, SetupToken: testSetupToken})
-	h := bootstrapHousehold(t, e, "rev")
-	if _, err := e.database.Exec(
-		`INSERT INTO categories(id,household_id,kind,name,level) VALUES(?,?,?,?,1)`,
-		"cat_rev", h.id, "expense", "餐饮"); err != nil {
-		t.Fatal(err)
-	}
-	accID := createAccountWithOpening(t, e, h, 0)
-	c := h.client(t, e.ts.URL)
-	tx := c.call("POST", "/api/v1/transactions", map[string]any{
-		"type": "expense", "amount_minor": 10000, "occurred_on": "2026-11-12",
-		"payment_kind": "cash", "account_id": accID,
-		"splits": []any{map[string]any{"category_id": "cat_rev", "amount_minor": 10000}},
-	}, nil)
-	if tx.Status != 201 {
-		t.Fatalf("[FIX-03] create transaction failed: %d %v", tx.Status, tx.Body)
-	}
-	txID, _ := tx.Body["id"].(string)
-	rev := c.call("POST", "/api/v1/transactions/"+txID+"/replace", map[string]any{
-		"type": "expense", "amount_minor": 10000, "occurred_on": "2026-11-12",
-		"payment_kind": "cash", "account_id": accID,
-		"splits": []any{map[string]any{"category_id": "cat_rev", "amount_minor": 10000}},
-	}, nil)
-	if rev.Status != 201 {
-		t.Fatalf("[FIX-03] reverse failed: %d %v", rev.Status, rev.Body)
-	}
-	var occurred string
-	if err := e.database.QueryRow(
-		`SELECT occurred_on FROM journal_entries WHERE biz_type='reversal' AND household_id=?`, h.id).Scan(&occurred); err != nil {
-		t.Fatal(err)
-	}
-	if occurred != want {
-		t.Errorf("[FIX-03] reversal occurred_on=%s, want %s (Asia/Shanghai business day)", occurred, want)
-	}
-}
-
-func TestBusinessDateDueItemsAndDefaultPeriod(t *testing.T) {
+func TestBusinessDateDefaultStatsPeriod(t *testing.T) {
 	clk := time.Date(2030, 1, 1, 4, 0, 0, 0, time.UTC) // Beijing 2030-01-01 12:00
 	e := newRemEnv(t, Options{Clock: func() time.Time { return clk }, SetupToken: testSetupToken})
-	h := bootstrapHousehold(t, e, "due")
-	insertPendingInstallment(t, e, h, "2030-01-20", 100000)
+	h := bootstrapHousehold(t, e, "period")
 	c := h.client(t, e.ts.URL)
-
-	gen := c.call("POST", "/api/v1/schedule/generate", map[string]any{}, nil)
-	if number(gen.Body["generated"]) != 1 {
-		t.Errorf("[FIX-03] due-item horizon must use the business clock, got generated=%v", gen.Body["generated"])
+	summary := c.call("GET", "/api/v1/stats/summary", nil, nil)
+	if summary.Status != 200 {
+		t.Fatalf("[FIX-03] stats summary failed: %d %v", summary.Status, summary.Body)
 	}
-	items := c.call("GET", "/api/v1/schedule/due-items?days=30", nil, nil)
-	list, _ := items.Body["items"].([]any)
-	if len(list) != 1 {
-		t.Errorf("[FIX-03] due-items listing must use the business clock, got %d items", len(list))
+	if summary.Body["from"] != "2030-01-01" || summary.Body["to"] != "2030-01-01" {
+		t.Errorf("[FIX-03] default reporting period must follow the Beijing business day, got from=%v to=%v",
+			summary.Body["from"], summary.Body["to"])
 	}
-	dash := c.call("GET", "/api/v1/dashboard/summary", nil, nil)
-	period, _ := dash.Body["period"].(map[string]any)
-	if period == nil || period["from"] != "2030-01-01" {
-		t.Errorf("[FIX-03] default reporting period must follow the business clock, got %v", dash.Body["period"])
+	monthly := c.call("GET", "/api/v1/stats/monthly?months=1", nil, nil)
+	months, _ := monthly.Body["months"].([]any)
+	if len(months) != 1 || months[0].(map[string]any)["month"] != "2030-01" {
+		t.Errorf("[FIX-03] default monthly window must follow the Beijing business month, got %v", monthly.Body["months"])
 	}
 }
 
 // ---------------------------------------------------------------------------
 // FIX-04: session cookie security must be an explicit deployment decision.
-// r.TLS is ALWAYS nil behind the Nginx TLS terminator, so relying on it silently
-// downgrades production cookies. X-Forwarded-Proto is honored ONLY from
-// explicitly configured trusted proxy sources (never from an arbitrary client).
 // ---------------------------------------------------------------------------
 
 func loginPost(t *testing.T, e *remEnv, h isoHousehold, extra map[string]string) remResult {
@@ -573,9 +442,9 @@ func TestSessionCookieSecureCanBeDisabledForLocalDev(t *testing.T) {
 	if r.Status != 200 {
 		t.Fatalf("[FIX-04] login failed: %d %v", r.Status, r.Body)
 	}
-	cookie := r.Header.Get("Set-Cookie")
-	if strings.Contains(cookie, "Secure") {
-		t.Errorf("[FIX-04] explicitly disabled Secure must be honored for local plain HTTP, got: %s", cookie)
+	if strings.Contains(r.Header.Get("Set-Cookie"), "Secure") {
+		t.Errorf("[FIX-04] explicitly disabled Secure must be honored for local plain HTTP, got: %s",
+			r.Header.Get("Set-Cookie"))
 	}
 }
 
@@ -615,8 +484,7 @@ func TestSessionCookieIgnoresUntrustedForwardedProto(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // FIX-05: failed-login throttling must be configurable, testable, bounded in
-// time (no permanent DoS of the legitimate owner), concurrency-safe, scoped by
-// IP+principal, and must never log passwords or tokens.
+// time, concurrency-safe and must never log passwords or tokens.
 // ---------------------------------------------------------------------------
 
 // serve issues a request with a controllable RemoteAddr so per-IP buckets can

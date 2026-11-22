@@ -1,18 +1,15 @@
 import { expect, test } from '@playwright/test'
-import fs from 'node:fs'
-import path from 'node:path'
 
-// Public landing, controlled bootstrap and motion acceptance. Real Microsoft
-// Edge + real Go API + isolated SQLite (playwright.config.ts). No mocks.
-const SETUP_TOKEN = process.env.E2E_SETUP_TOKEN || 'e2e-setup-token-0123456789abcdef'
+// Public landing + session gate + PWA shell. Real Go API + isolated SQLite
+// (playwright.config.ts). No mocks except where a test explicitly simulates an
+// expired session.
+const SETUP_TOKEN = 'e2e-setup-token-0123456789abcdef'
 const HERO = '家的每一笔，都值得被温柔记录。'
 const CTA = '进入我的小家'
-const ARTIFACTS = path.resolve('e2e/artifacts')
+const ARTIFACTS = 'e2e/artifacts'
 
 test.describe.configure({ mode: 'serial' })
 
-// Idempotent operator-side bootstrap: 201 on an empty DB, 409 once initialized.
-// This is intentionally an API call, never a public UI flow.
 async function ensureInitialized(page: import('@playwright/test').Page) {
   const res = await page.request.post('/api/v1/setup', {
     data: { household_name: 'E2E 小家', username: 'admin', password: 'correct-horse-battery' },
@@ -30,16 +27,15 @@ async function loginViaDialog(page: import('@playwright/test').Page) {
   await page.goto('/')
   await ensureInitialized(page)
   await openDialog(page)
-  await page.getByLabel('用户名').fill('admin')
-  await page.getByLabel('密码').fill('correct-horse-battery')
-  await page.locator('form').getByRole('button', { name: '登录' }).click()
-  await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
+  const dialog = page.getByRole('dialog', { name: '欢迎回家' })
+  await dialog.getByLabel('用户名').fill('admin')
+  await dialog.getByLabel('密码').fill('correct-horse-battery')
+  await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 }
 
-const PRIVATE_PATHS = [
-  '/dashboard/', '/transactions', '/accounts', '/credit-', '/installments',
-  '/debts', '/investments/', '/projects', '/categories', '/schedule/',
-]
+const PRIVATE_PATHS = ['/stats/', '/transactions', '/accounts', '/categories', '/budgets/', '/admin/', '/household/']
 
 test('L01 未登录首页是产品介绍，默认没有登录表单和初始化入口', async ({ page }) => {
   await page.goto('/')
@@ -72,7 +68,7 @@ test('L03 点击「进入我的小家」才出现登录模态框', async ({ page
   const dialog = page.getByRole('dialog', { name: '欢迎回家' })
   await expect(dialog).toHaveAttribute('aria-modal', 'true')
   await expect(dialog.getByLabel('用户名')).toBeVisible()
-  await expect(page.getByRole('button', { name: '进入我的小家' })).toBeVisible()
+  await expect(page.getByRole('button', { name: CTA })).toBeVisible()
 })
 
 test('L04 Escape 关闭登录框', async ({ page }) => {
@@ -87,11 +83,9 @@ test('L05 关闭后焦点返回 CTA，Tab 焦点被困在模态框内', async ({
   await page.goto('/')
   await openDialog(page)
   const dialog = page.getByRole('dialog', { name: '欢迎回家' })
-  // Focus starts on the username field and cycles inside the dialog.
   await expect(dialog.getByLabel('用户名')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
-  const inside = await page.evaluate(() =>
-    !!document.activeElement?.closest('.login-dialog'))
+  const inside = await page.evaluate(() => !!document.activeElement?.closest('.login-dialog'))
   expect(inside).toBe(true)
   await page.getByRole('button', { name: '关闭登录' }).click()
   await expect(page.getByRole('button', { name: CTA })).toBeFocused()
@@ -101,60 +95,60 @@ test('L06 错误凭据显示友好错误且不泄露账号是否存在', async (
   await page.goto('/')
   await ensureInitialized(page)
   await openDialog(page)
-  await page.getByLabel('用户名').fill('does-not-exist')
-  await page.getByLabel('密码').fill('wrong-password-123')
-  await page.locator('form').getByRole('button', { name: '登录' }).click()
+  const dialog = page.getByRole('dialog', { name: '欢迎回家' })
+  await dialog.getByLabel('用户名').fill('does-not-exist')
+  await dialog.getByLabel('密码').fill('wrong-password-123')
+  await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('用户名或密码错误')
   await expect(page.getByRole('alert')).not.toContainText('不存在')
   await expect(page.getByRole('dialog')).toBeVisible()
 })
 
-test('L07 正确登录进入家庭财务驾驶舱', async ({ page }) => {
+test('L07 正确登录进入家庭账本（账单页）', async ({ page }) => {
   await loginViaDialog(page)
-  await expect(page.locator('.website')).toBeVisible()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /回到本月/ })).toBeVisible()
 })
 
-test('L08 已登录刷新或直接访问 / 仍停留在驾驶舱', async ({ page }) => {
+test('L08 已登录刷新或直接访问 / 仍停留在账本', async ({ page }) => {
   await loginViaDialog(page)
   await page.reload()
-  await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
   await page.goto('/')
-  await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
   await expect(page.getByRole('heading', { name: HERO })).toHaveCount(0)
 })
 
 test('L09 未登录深链访问受保护路由被安全拦截', async ({ page }) => {
-  await page.goto('/dashboard')
+  await page.goto('/bills')
   await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
-  await expect(page.locator('.website')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCount(0)
   await expect.poll(() => new URL(page.url()).pathname).toBe('/')
 })
 
 test('L10 会话过期不闪现私人余额，回到公开页并给出中性提示', async ({ page }) => {
   await loginViaDialog(page)
-  await expect(page.locator('.statamount').first()).toBeVisible()
-  await page.route('**/api/v1/dashboard/summary*', route => route.fulfill({
-    status: 401, contentType: 'application/json',
+  await page.route('**/api/v1/accounts*', route => route.fulfill({
+    status: 401,
+    contentType: 'application/json',
     body: JSON.stringify({ error: { code: 'unauthorized', message: '请先登录' } }),
   }))
-  await page.locator('.home-period > summary').click()
-  await page.getByRole('button', { name: '应用周期' }).click()
+  await page.getByRole('link', { name: '资产' }).click()
   await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
   await expect(page.getByText('登录状态已过期，请重新进入')).toBeVisible()
-  await expect(page.locator('.statamount')).toHaveCount(0)
-  await page.unroute('**/api/v1/dashboard/summary*')
+  await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCount(0)
+  await expect(page.locator('.landing')).not.toContainText('¥')
 })
 
 test('L11 登出回到公开首页并清除私人页面状态', async ({ page }) => {
   await loginViaDialog(page)
-  await expect(page.locator('.statamount').first()).toBeVisible()
-  await page.getByRole('button', { name: '登出' }).click()
+  await page.getByRole('link', { name: '我的' }).click()
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await page.getByRole('dialog', { name: '要退出登录吗？' }).getByRole('button', { name: '退出登录' }).click()
   await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
-  await expect(page.locator('.website')).toHaveCount(0)
-  await expect(page.locator('.statamount')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCount(0)
   await page.goBack()
-  await expect(page.locator('.statamount')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
 })
 
 test('L12 已初始化环境直接调用 setup 不能创建或覆盖管理员', async ({ page }) => {
@@ -166,12 +160,8 @@ test('L12 已初始化环境直接调用 setup 不能创建或覆盖管理员', 
   })
   expect(res.status()).toBe(409)
   expect((await res.json()).error.code).toBe('conflict')
-  // The original admin still works: no second admin overwrote it.
-  await openDialog(page)
-  await page.getByLabel('用户名').fill('admin')
-  await page.getByLabel('密码').fill('correct-horse-battery')
-  await page.locator('form').getByRole('button', { name: '登录' }).click()
-  await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
+  await loginViaDialog(page)
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
 })
 
 test('L13 按钮使用统一过渡并尊重减少动态效果设置', async ({ page }) => {
@@ -204,12 +194,11 @@ test('L14 390 / 768 / 1440px 三视口无横向溢出且 CTA 与表单可用', a
   for (const width of [1440, 768, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
     await page.goto('/')
-    // Capture the settled state, not the (sub-400ms) entrance animation frame.
     await page.waitForTimeout(520)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     expect(overflow, `landing overflow @ ${width}px`).toBeLessThanOrEqual(1)
     await expect(page.getByRole('button', { name: CTA })).toBeVisible()
-    await page.screenshot({ path: path.join(ARTIFACTS, `landing-${width}.png`), fullPage: false })
+    await page.screenshot({ path: `${ARTIFACTS}/landing-${width}.png`, fullPage: false })
     await expect(page.getByRole('button', { name: CTA })).toBeEnabled()
     await openDialog(page)
     await expect(page.getByLabel('用户名')).toBeVisible()
@@ -226,18 +215,17 @@ test('iPhone 安装图标可从根路径获取', async ({ page, request }) => {
   const icon = await request.get('/apple-touch-icon.png')
   expect(icon.ok()).toBe(true)
   expect(icon.headers()['content-type']).toContain('image/png')
-  expect((await icon.body()).readUInt32BE(16)).toBe(180)
-  expect((await icon.body()).readUInt32BE(20)).toBe(180)
+  const bytes = await icon.body()
+  expect(bytes.readUInt32BE(16)).toBe(180)
+  expect(bytes.readUInt32BE(20)).toBe(180)
 })
 
 test('L15 PWA SW 更新清除旧壳，/api 不被缓存，离线页无初始化入口', async ({ page }) => {
   const sw = await (await page.request.get('/sw.js')).text()
-  expect(sw).toContain("const CACHE = 'tinynest-shell-v0.2-landing-2'")
+  expect(sw).toContain("const CACHE = 'tinynest-shell-v0.3-bookkeeping-1'")
   expect(sw).toContain("url.pathname.startsWith('/api/')")
-  expect(sw).toContain("cache.addAll(SHELL)")
+  expect(sw).toContain('cache.addAll(SHELL)')
   const offline = await (await page.request.get('/offline.html')).text()
-  // Neutral operator wording ("不提供初始化入口") is allowed; actual entry
-  // points (form, tab, token field, admin-creation link) must be absent.
   expect(offline).not.toContain('首次初始化')
   expect(offline).not.toContain('创建管理员')
   expect(offline).not.toContain('<form')
@@ -248,21 +236,21 @@ test('L15 PWA SW 更新清除旧壳，/api 不被缓存，离线页无初始化�
 
   await page.goto('/')
   const cacheInfo = await page.evaluate(async () => {
-    if (!('serviceWorker' in navigator)) return { supported: false, caches: [] as string[] }
+    if (!('serviceWorker' in navigator)) return { supported: false, caches: [] as string[], apiEntries: [] as string[] }
     await navigator.serviceWorker.register('/sw.js')
     await navigator.serviceWorker.ready
     const keys = await caches.keys()
-    const apiEntries: string[] = []
+    const entries: string[] = []
     for (const key of keys) {
       const cache = await caches.open(key)
       for (const req of await cache.keys()) {
-        if (new URL(req.url).pathname.startsWith('/api/')) apiEntries.push(req.url)
+        if (new URL(req.url).pathname.startsWith('/api/')) entries.push(req.url)
       }
     }
-    return { supported: true, caches: keys, apiEntries }
+    return { supported: true, caches: keys, apiEntries: entries }
   })
   expect(cacheInfo.supported).toBe(true)
-  expect(cacheInfo.caches.some(k => k === 'tinynest-shell-v0.2-landing-2')).toBe(true)
+  expect(cacheInfo.caches.some(key => key === 'tinynest-shell-v0.3-bookkeeping-1')).toBe(true)
   expect(cacheInfo.apiEntries).toEqual([])
 })
 
@@ -278,80 +266,86 @@ test('L16 登录期间刷新与后退不产生重定向循环', async ({ page })
   await page.goBack()
   await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
 })
 
-test('L17 公开首页明确展示已支持的账单导入', async ({ page }) => {
+test('L17 公开首页如实展示当前记账能力，不宣称已退役模块', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.feature-card')).toHaveCount(6)
   await expect(page.locator('.feature-status', { hasText: '已支持' })).toHaveCount(6)
-  await expect(page.locator('.feature-card', { hasText: '家庭协作' })).toContainText('导入账单')
+  await expect(page.locator('.feature-card', { hasText: '日常记账' })).toContainText('数字键盘')
+  await expect(page.locator('.feature-card', { hasText: '图表分析' })).toContainText('分类排行')
+  await expect(page.locator('.feature-card', { hasText: '资产与转账' })).toContainText('信用卡')
+  const landingText = await page.locator('.landing').innerText()
+  for (const retired of ['信用账单', '分期', '投资', '导入账单', '股票']) {
+    expect(landingText).not.toContain(retired)
+  }
   await expect(page.getByRole('link', { name: /GitHub 仓库/ })).toHaveAttribute('href', 'https://github.com/Sunywr/tinynest')
 })
 
-test('L18 本机 LCP/CLS 可复现测量（记录样本，不冒充生产验收）', async ({ page }) => {
+test('L18 本机 LCP/CLS 可复现测量（记录样本，不冒充生产验收）', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     const w = window as unknown as { __perf: { lcp: number; cls: number } }
     w.__perf = { lcp: 0, cls: 0 }
     try {
       new PerformanceObserver(list => {
-        for (const e of list.getEntries()) w.__perf.lcp = e.startTime
+        for (const entry of list.getEntries()) w.__perf.lcp = entry.startTime
       }).observe({ type: 'largest-contentful-paint', buffered: true })
       new PerformanceObserver(list => {
-        for (const e of list.getEntries()) {
-          const shift = e as unknown as { value: number; hadRecentInput: boolean }
+        for (const entry of list.getEntries()) {
+          const shift = entry as unknown as { value: number; hadRecentInput: boolean }
           if (!shift.hadRecentInput) w.__perf.cls += shift.value
         }
       }).observe({ type: 'layout-shift', buffered: true })
-    } catch { /* unsupported entry type on this browser */ }
+    } catch {
+      /* unsupported entry type on this browser */
+    }
   })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/')
   await expect(page.getByRole('heading', { name: HERO })).toBeVisible()
   await page.waitForTimeout(1200)
   const perf = await page.evaluate(() => (window as unknown as { __perf: { lcp: number; cls: number } }).__perf)
-  fs.mkdirSync(ARTIFACTS, { recursive: true })
-  fs.writeFileSync(path.join(ARTIFACTS, 'landing-perf.json'), JSON.stringify({
-    sample: 'single local dev-server load, Microsoft Edge on Windows, 1440x900, no network throttling',
-    measured_at: new Date().toISOString(),
-    lcp_ms: Math.round(perf.lcp),
-    cls: Number(perf.cls.toFixed(4)),
-    note: 'Local Vite dev server sample only. NOT a production/iPhone/throttled measurement.',
-  }, null, 2))
+  await testInfo.attach('landing-perf.json', {
+    body: JSON.stringify({
+      sample: 'single local dev-server load, 1440x900, no network throttling',
+      measured_at: new Date().toISOString(),
+      lcp_ms: Math.round(perf.lcp),
+      cls: Number(perf.cls.toFixed(4)),
+      note: 'Local Vite dev server sample only. NOT a production/iPhone/throttled measurement.',
+    }, null, 2),
+    contentType: 'application/json',
+  })
   expect(perf.lcp).toBeGreaterThan(0)
   expect(perf.cls).toBeGreaterThanOrEqual(0)
 })
 
 test('刷新保留当前菜单，退出后清除菜单位置', async ({ page }) => {
   await loginViaDialog(page)
-  for (const [menu, heading] of [
-    ['记账流水', '记账流水'], ['家庭账户', '家庭账户'], ['信用账单', '信用账单'],
-    ['分期与负债', '分期与固定负债'], ['投资', '投资账本'], ['设置', '设置'],
+  for (const [menu, path] of [
+    ['账单', '/bills'], ['图表', '/charts'], ['资产', '/assets'], ['我的', '/me'],
   ]) {
-    await page.locator('nav').getByRole('button', { name: menu }).click()
-    await expect(page.locator('h1')).toHaveText(heading)
+    await page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: menu }).click()
+    await expect.poll(() => new URL(page.url()).pathname).toBe(path)
     await page.reload()
-    await expect(page.locator('h1')).toHaveText(heading)
+    await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
   }
-  const loggedOut=page.waitForResponse(response=>response.url().endsWith('/api/v1/auth/session')&&response.request().method()==='DELETE'&&response.ok())
-  await page.getByRole('button', { name: '登出' }).click()
-  await loggedOut
-  await expect(page.getByRole('button',{name:CTA})).toBeVisible()
-  await expect(page.locator('nav.nav')).toHaveCount(0)
+  await page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '我的' }).click()
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await page.getByRole('dialog', { name: '要退出登录吗？' }).getByRole('button', { name: '退出登录' }).click()
+  await expect(page.getByRole('button', { name: CTA })).toBeVisible()
   await loginViaDialog(page)
-  await expect(page.getByText('今天也要好好生活呀')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
 })
 
-
-test('注册与找回密码清楚说明邮箱每日3封上限',async({page})=>{
- await page.goto('/')
- await openDialog(page)
- await page.getByRole('button',{name:'注册新账号'}).click()
- const dialog=page.getByRole('dialog',{name:'欢迎回家'})
- await expect(dialog.getByText('同一邮箱每天最多3封邮件',{exact:false})).toBeVisible()
- await expect(dialog.getByLabel('注册邮箱')).toBeVisible()
- await expect(dialog.getByLabel('邮箱验证码',{exact:true})).toHaveAttribute('maxlength','6')
- await page.getByRole('button',{name:'返回登录',exact:true}).click()
- await page.getByRole('button',{name:'忘记密码'}).click()
- await expect(page.locator('.password-recovery').getByText('同一邮箱每天最多3封邮件',{exact:false})).toBeVisible()
+test('注册与找回密码清楚说明邮箱每日3封上限', async ({ page }) => {
+  await page.goto('/')
+  await openDialog(page)
+  await page.getByRole('button', { name: '注册新账号' }).click()
+  const dialog = page.getByRole('dialog', { name: '欢迎回家' })
+  await expect(dialog.getByText('同一邮箱每天最多3封邮件', { exact: false })).toBeVisible()
+  await expect(dialog.getByLabel('注册邮箱')).toBeVisible()
+  await expect(dialog.getByLabel('邮箱验证码', { exact: true })).toHaveAttribute('maxlength', '6')
+  await page.getByRole('button', { name: '返回登录', exact: true }).click()
+  await page.getByRole('button', { name: '忘记密码' }).click()
+  await expect(page.locator('.password-recovery').getByText('同一邮箱每天最多3封邮件', { exact: false })).toBeVisible()
 })

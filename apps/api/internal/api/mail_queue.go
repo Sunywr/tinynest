@@ -2,111 +2,14 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"time"
 )
 
-func (a *API) handleAnnouncements(w http.ResponseWriter, r *http.Request) {
-	p, _ := principal(r)
-	if r.Method == "GET" {
-		rows, e := a.DB.QueryContext(r.Context(), `SELECT status,COUNT(*) FROM mail_queue WHERE household_id=? AND kind='announcement' GROUP BY status`, p.HouseholdID)
-		if e != nil {
-			internalErr(w, e)
-			return
-		}
-		defer rows.Close()
-		items := []map[string]any{}
-		for rows.Next() {
-			var s string
-			var n int
-			if e = rows.Scan(&s, &n); e != nil {
-				internalErr(w, e)
-				return
-			}
-			items = append(items, map[string]any{"status": s, "count": n})
-		}
-		writeJSON(w, 200, map[string]any{"items": items})
-		return
-	}
-	var in struct {
-		Title         string `json:"title"`
-		Body          string `json:"body"`
-		Preview       bool   `json:"preview"`
-		ExpectedCount int    `json:"expected_count"`
-	}
-	if decode(r, &in) != nil || len(in.Title) < 1 || len(in.Title) > 200 || len(in.Body) < 1 || len(in.Body) > 20000 {
-		writeErr(w, 400, "invalid_request", "请填写标题和正文")
-		return
-	}
-	a.mailMu.Lock()
-	defer a.mailMu.Unlock()
-	c, _, _, e := a.mailConfig(r.Context())
-	if e != nil || !c.Enabled || len(a.opts.MailKey) != 32 {
-		writeErr(w, 503, "mail_unavailable", "邮件服务未启用")
-		return
-	}
-	count := 0
-	e = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		rows, e := tx.QueryContext(r.Context(), `SELECT u.id,i.email FROM users u JOIN email_identities i ON i.owner=u.id LEFT JOIN mail_preferences p ON p.user_id=u.id WHERE u.household_id=? AND u.status='active' AND COALESCE(p.announcements,1)=1`, p.HouseholdID)
-		if e != nil {
-			return e
-		}
-		type recipient struct{ id, email string }
-		list := []recipient{}
-		for rows.Next() {
-			var v recipient
-			if e = rows.Scan(&v.id, &v.email); e != nil {
-				rows.Close()
-				return e
-			}
-			list = append(list, v)
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
-			return e
-		}
-		count = len(list)
-		var used, ann int
-		_ = tx.QueryRowContext(r.Context(), `SELECT total,announcements FROM mail_daily_usage WHERE day=?`, a.businessDate()).Scan(&used, &ann)
-		var queued int
-		if e = tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM mail_queue WHERE kind='announcement' AND status IN ('queued','sending') AND expires_at>?`, a.nowUTC()).Scan(&queued); e != nil {
-			return e
-		}
-		if count+queued+used > c.DailyLimit || count+queued+ann > c.AnnouncementLimit {
-			return errors.New("quota")
-		}
-		for _, recipient := range list {
-			if err := a.checkRecipientBudget(r.Context(), tx, recipient.email); err != nil {
-				return err
-			}
-		}
-		if in.Preview {
-			return nil
-		}
-		if count != in.ExpectedCount {
-			return errors.New("recipients changed")
-		}
-		for _, v := range list {
-			if e = a.enqueueMail(r.Context(), tx, p.HouseholdID, v.id, v.email, "announcement", in.Title, in.Body+"\n\n可在小家设置中关闭公告邮件。", a.now().UTC().Add(24*time.Hour).Format(time.RFC3339)); e != nil {
-				return e
-			}
-		}
-		return audit(r.Context(), tx, p, "send_announcement", "mail_queue", "", `{}`)
-	})
-	if e != nil {
-		if errors.Is(e, errRecipientDailyLimit) {
-			writeErr(w, 429, "email_daily_limit", "部分收件邮箱已达每日3封上限，请明天再试")
-		} else {
-			writeErr(w, 409, "announcement_rejected", "额度不足或收件人已变化，请重新预览")
-		}
-		return
-	}
-	writeJSON(w, 200, map[string]any{"recipient_count": count, "preview": in.Preview, "status": "queued"})
-}
+// StartMailWorker drains the encrypted mail queue on a short tick. The queue is
+// the only path that talks to SMTP, so request handlers never block on a remote
+// mail server.
 func (a *API) StartMailWorker(ctx context.Context) {
 	go func() {
 		tick := time.NewTicker(2 * time.Second)
@@ -121,6 +24,7 @@ func (a *API) StartMailWorker(ctx context.Context) {
 		}
 	}()
 }
+
 func (a *API) processMail(ctx context.Context) {
 	a.mailMu.Lock()
 	defer a.mailMu.Unlock()
@@ -141,6 +45,8 @@ func (a *API) processMail(ctx context.Context) {
 		return
 	}
 	if kind == "announcement" {
+		// An announcement queued before a preference change must not be delivered
+		// after the recipient opted out.
 		var n int
 		e = a.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM users u JOIN email_identities i ON i.owner=u.id LEFT JOIN mail_preferences p ON p.user_id=u.id WHERE u.id=? AND u.household_id=? AND u.status='active' AND i.email=? AND COALESCE(p.announcements,1)=1`, user, hh, to).Scan(&n)
 		if e != nil {

@@ -187,7 +187,15 @@ func (a *Admin) Purge(ctx context.Context, opts PurgeOptions) (PurgeResult, erro
 
 	err = a.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		for _, statement := range DetachSelfReferences() {
-			if !schema.Has(strings.Fields(statement)[1]) {
+			fields := strings.Fields(statement)
+			if len(fields) < 4 || !schema.Has(fields[1]) {
+				continue
+			}
+			// A table can survive across schema generations with a different
+			// column set (e.g. V2 categories no longer has parent_id). Only run
+			// the detach statement when the column actually exists.
+			column := strings.SplitN(fields[3], "=", 2)[0]
+			if !a.hasColumn(ctx, tx, fields[1], column) {
 				continue
 			}
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -491,6 +499,24 @@ func appliedVersions(ctx context.Context, q db.Queryer) ([]int, error) {
 		out = append(out, version)
 	}
 	return out, rows.Err()
+}
+
+// hasColumn reports whether a table in the current schema has the given column.
+// Older and newer schema generations share table names with different columns,
+// so detach statements must be verified instead of assumed.
+func (a *Admin) hasColumn(ctx context.Context, q db.Queryer, table, column string) bool {
+	var query string
+	var args []any
+	if a.DB.IsMySQL() {
+		query = `SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema=DATABASE() AND table_name=? AND column_name=?`
+		args = []any{table, column}
+	} else {
+		query = `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`
+		args = []any{table, column}
+	}
+	var count int
+	return q.QueryRowContext(ctx, query, args...).Scan(&count) == nil && count > 0
 }
 
 // --- assertions -------------------------------------------------------------

@@ -104,11 +104,9 @@ func (a *API) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
 				WHERE u.household_id=? AND b.member_id=?)
 			OR EXISTS(SELECT 1 FROM household_invites WHERE household_id=? AND member_id=?)
 			OR EXISTS(SELECT 1 FROM accounts WHERE household_id=? AND owner_member_id=?)
-			OR EXISTS(SELECT 1 FROM transactions WHERE household_id=? AND member_id=?)
-			OR EXISTS(SELECT 1 FROM debt_contracts WHERE household_id=? AND member_id=?)
-			OR EXISTS(SELECT 1 FROM credit_instruments WHERE household_id=? AND member_id=?)`,
+			OR EXISTS(SELECT 1 FROM transactions WHERE household_id=? AND member_id=?)`,
 			p.HouseholdID, id, p.HouseholdID, id, p.HouseholdID, id,
-			p.HouseholdID, id, p.HouseholdID, id, p.HouseholdID, id).Scan(&used); err != nil {
+			p.HouseholdID, id).Scan(&used); err != nil {
 			return err
 		}
 		if used {

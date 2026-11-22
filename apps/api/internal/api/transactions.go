@@ -1,84 +1,205 @@
 package api
 
 import (
-	"crypto/sha256"
+	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
-	"time"
+	"strings"
 
 	"tinynest/api/internal/db"
 	"tinynest/api/internal/ledger"
 	"tinynest/api/internal/money"
 )
 
-func (a *API) registerTransactions(mux *http.ServeMux) {
-	a.route(mux, "GET /api/v1/transactions", a.handleListTransactions)
-	a.route(mux, "POST /api/v1/transactions", a.handleCreateTransaction)
-	a.route(mux, "GET /api/v1/transactions/{id}", a.handleGetTransaction)
-	a.route(mux, "DELETE /api/v1/transactions/{id}", a.handleDeleteTransaction)
-	a.route(mux, "POST /api/v1/transactions/{id}/replace", a.handleCreateTransaction)
-	a.route(mux, "POST /api/v1/refunds", a.handleCreateRefund)
-	a.route(mux, "GET /api/v1/refunds/by-transaction/{id}", a.handleListRefunds)
+// --- shared helpers ---------------------------------------------------------
+
+const findReplayQuery = `SELECT id FROM transactions WHERE idempotency_key=? AND household_id=?`
+
+// findReplayedTransaction returns the already-committed transaction for an
+// idempotency key, or "" when the key is unused.
+func findReplayedTransaction(r *http.Request, q db.Queryer, householdID, key string) (string, error) {
+	var id string
+	err := q.QueryRowContext(r.Context(), findReplayQuery, key, householdID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
-type splitInput struct {
-	CategoryID  string  `json:"category_id"`
-	ProjectID   *string `json:"project_id"`
+// lookupReplay re-reads the key AFTER a failed transaction rolled back: a
+// concurrent request may have committed the same key while this one ran.
+func (a *API) lookupReplay(r *http.Request, householdID, key string) (string, error) {
+	var id string
+	err := a.DB.QueryRowContext(r.Context(), findReplayQuery, key, householdID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// transactionValues is one fully-resolved "流水" row (used by POST and PATCH).
+type transactionValues struct {
+	Type        string
+	Amount      money.Minor
+	OccurredOn  string
+	CategoryID  *string
+	AccountID   *string
+	ToAccountID *string
+	MemberID    *string
+	Note        *string
+}
+
+type transferInput struct {
+	FromAccountID string
+	ToAccountID   string
+	Amount        money.Minor
+	OccurredOn    string
+	Note          *string
+	MemberID      *string
+	Key           string
+}
+
+func trimPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*s)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+// buildTransactionEntry validates the business references and returns the
+// balanced journal entry. Nothing is persisted here; the caller commits it with
+// the transaction row in one database transaction.
+func (a *API) buildTransactionEntry(ctx context.Context, q db.Queryer, householdID string, v transactionValues, txID, entryID string) (*ledger.Entry, error) {
+	c := ledger.Context{EntryID: entryID, BizID: txID, OccurredOn: v.OccurredOn}
+	switch v.Type {
+	case "transfer":
+		if v.AccountID == nil || v.ToAccountID == nil {
+			return nil, errors.New("转账需要 account_id 与 to_account_id")
+		}
+		from, err := loadActiveAccount(ctx, q, householdID, *v.AccountID)
+		if err != nil {
+			return nil, errors.New("转出账户不存在或已停用")
+		}
+		to, err := loadActiveAccount(ctx, q, householdID, *v.ToAccountID)
+		if err != nil {
+			return nil, errors.New("转入账户不存在或已停用")
+		}
+		if from.ID == to.ID {
+			return nil, errors.New("转出与转入账户不能相同")
+		}
+		if from.Kind == "credit" {
+			return nil, errors.New("信用卡账户不能作为转出账户；还款请选择现金账户转入信用卡")
+		}
+		if to.Kind == "credit" {
+			// Repayment of a credit account: 借 信用卡欠款 / 贷 现金.
+			return ledger.RepayCredit(c, from.ID, to.ID, v.Amount)
+		}
+		return ledger.Transfer(c, from.ID, to.ID, v.Amount)
+
+	case "expense", "income":
+		if v.CategoryID == nil {
+			return nil, errors.New("支出和收入必须选择分类")
+		}
+		kind, err := loadCategoryKind(ctx, q, householdID, *v.CategoryID)
+		if err != nil {
+			return nil, errors.New("分类不存在或已停用")
+		}
+		if kind != v.Type {
+			return nil, errors.New("分类方向与流水类型不匹配")
+		}
+		if v.AccountID == nil {
+			return nil, errors.New("请选择账户")
+		}
+		account, err := loadActiveAccount(ctx, q, householdID, *v.AccountID)
+		if err != nil {
+			return nil, errors.New("账户不存在或已停用")
+		}
+		splits := []ledger.Split{{CategoryID: *v.CategoryID, Amount: v.Amount}}
+		if v.Type == "income" {
+			if account.Kind != "cash" {
+				return nil, errors.New("收入必须记入现金账户")
+			}
+			return ledger.Income(c, account.ID, splits, v.Amount)
+		}
+		if account.Kind == "credit" {
+			return ledger.CreditExpense(c, account.ID, splits, v.Amount)
+		}
+		return ledger.CashExpense(c, account.ID, splits, v.Amount)
+	}
+	return nil, errors.New("type 必须为 expense/income/transfer")
+}
+
+// insertTransactionRow writes the public transaction row. The journal entry
+// (entryID) must already be persisted in the same database transaction.
+func insertTransactionRow(ctx context.Context, tx *sql.Tx, householdID string, v transactionValues, txID, entryID, key, actor string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO transactions
+		(id,household_id,type,amount_minor,currency,occurred_on,category_id,account_id,to_account_id,member_id,note,status,entry_id,idempotency_key,created_by)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,'posted',?,?,?)`,
+		txID, householdID, v.Type, int64(v.Amount), "CNY", v.OccurredOn,
+		v.CategoryID, v.AccountID, v.ToAccountID, v.MemberID, v.Note, entryID, nullableKey(key), actor)
+	return err
+}
+
+// saveTransfer books cash -> cash or cash -> credit, records the transfer flow
+// and audits it. Used by POST /transactions (type=transfer) and
+// POST /accounts/transfers.
+func (a *API) saveTransfer(r *http.Request, tx *sql.Tx, p Principal, in transferInput, txID, entryID string) error {
+	if err := a.validateMemberInput(r, tx, p.HouseholdID, in.MemberID); err != nil {
+		return err
+	}
+	values := transactionValues{
+		Type:        "transfer",
+		Amount:      in.Amount,
+		OccurredOn:  in.OccurredOn,
+		AccountID:   &in.FromAccountID,
+		ToAccountID: &in.ToAccountID,
+		MemberID:    in.MemberID,
+		Note:        in.Note,
+	}
+	entry, err := a.buildTransactionEntry(r.Context(), tx, p.HouseholdID, values, txID, entryID)
+	if err != nil {
+		return err
+	}
+	if err := db.SaveEntry(r.Context(), tx, entry, p.HouseholdID, in.Key, p.Username); err != nil {
+		return err
+	}
+	if err := insertTransactionRow(r.Context(), tx, p.HouseholdID, values, txID, entryID, in.Key, p.Username); err != nil {
+		return err
+	}
+	return audit(r.Context(), tx, p, "create_transfer", "transaction", txID, "")
+}
+
+// --- POST /transactions -----------------------------------------------------
+
+type transactionRequest struct {
+	Type        string  `json:"type"`
 	AmountMinor int64   `json:"amount_minor"`
+	OccurredOn  string  `json:"occurred_on"`
+	CategoryID  *string `json:"category_id"`
+	AccountID   *string `json:"account_id"`
+	ToAccountID *string `json:"to_account_id"`
+	MemberID    *string `json:"member_id"`
 	Note        *string `json:"note"`
-}
-
-type txInput struct {
-	Type               string       `json:"type"`
-	AmountMinor        int64        `json:"amount_minor"`
-	Currency           string       `json:"currency"`
-	OccurredOn         string       `json:"occurred_on"`
-	PaymentKind        string       `json:"payment_kind"`
-	AccountID          *string      `json:"account_id"`
-	ToAccountID        *string      `json:"to_account_id"`
-	CreditInstrumentID *string      `json:"credit_instrument_id"`
-	MemberID           *string      `json:"member_id"`
-	Merchant           *string      `json:"merchant"`
-	Note               *string      `json:"note"`
-	Splits             []splitInput `json:"splits"`
-}
-
-func validDate(s string) bool {
-	_, err := time.Parse("2006-01-02", s)
-	return err == nil
-}
-
-func (a *API) validateCategory(ctx *sql.Tx, r *http.Request, householdID, catID, kind string) error {
-	var gotKind string
-	if err := ctx.QueryRowContext(r.Context(),
-		`SELECT kind FROM categories WHERE id=? AND household_id=? AND active=1`, catID, householdID).Scan(&gotKind); err != nil {
-		return errors.New("分类不存在或已停用")
-	}
-	if gotKind != kind {
-		return errors.New("分类方向与交易类型不匹配")
-	}
-	return nil
-}
-
-func (a *API) validateAccount(ctx *sql.Tx, r *http.Request, householdID, accID string) (string, error) {
-	var code string
-	err := ctx.QueryRowContext(r.Context(),
-		`SELECT ledger_code FROM accounts WHERE id=? AND household_id=? AND status='active'`, accID, householdID).Scan(&code)
-	return code, err
 }
 
 func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	var in txInput
+	var in transactionRequest
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
-	total := money.Minor(in.AmountMinor)
-	if err := money.MustPositive(total); err != nil || !validDate(in.OccurredOn) {
+	amount := money.Minor(in.AmountMinor)
+	if err := money.MustPositive(amount); err != nil || !validDate(in.OccurredOn) {
 		writeErr(w, 400, "invalid_amount", "金额必须为正整数分，日期须为 YYYY-MM-DD")
 		return
 	}
@@ -86,202 +207,180 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid_request", "type 必须为 expense/income/transfer")
 		return
 	}
-	if in.Currency == "" {
-		in.Currency = "CNY"
+	values := transactionValues{
+		Type:        in.Type,
+		Amount:      amount,
+		OccurredOn:  in.OccurredOn,
+		CategoryID:  trimPtr(in.CategoryID),
+		AccountID:   trimPtr(in.AccountID),
+		ToAccountID: trimPtr(in.ToAccountID),
+		MemberID:    trimPtr(in.MemberID),
+		Note:        in.Note,
 	}
 	key := idempotencyKey(r)
-	replaceID := r.PathValue("id")
-	if replaceID != "" && key != "" {
-		key = fmt.Sprintf("replace:%x", sha256.Sum256([]byte(p.HouseholdID+"\x00"+replaceID+"\x00"+key)))
-	}
-	const findExisting = `SELECT id FROM transactions WHERE idempotency_key=? AND household_id=?`
-	var existing string
 	txID, entryID := newID("tx"), newID("je")
-	c := ledger.Context{EntryID: entryID, BizID: txID, OccurredOn: in.OccurredOn}
-
+	var replayID string
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		if key != "" {
-			err := tx.QueryRowContext(r.Context(), findExisting, key, p.HouseholdID).Scan(&existing)
-			if !errors.Is(err, sql.ErrNoRows) {
+			existing, err := findReplayedTransaction(r, tx, p.HouseholdID, key)
+			if err != nil {
 				return err
 			}
+			if existing != "" {
+				replayID = existing
+				return nil
+			}
 		}
-		return a.saveTransaction(tx, r, p, in, key, replaceID, c)
+		if values.Type == "transfer" {
+			return a.saveTransfer(r, tx, p, transferInput{
+				FromAccountID: derefString(values.AccountID),
+				ToAccountID:   derefString(values.ToAccountID),
+				Amount:        values.Amount,
+				OccurredOn:    values.OccurredOn,
+				Note:          values.Note,
+				MemberID:      values.MemberID,
+				Key:           key,
+			}, txID, entryID)
+		}
+		if err := a.validateMemberInput(r, tx, p.HouseholdID, values.MemberID); err != nil {
+			return err
+		}
+		entry, err := a.buildTransactionEntry(r.Context(), tx, p.HouseholdID, values, txID, entryID)
+		if err != nil {
+			return err
+		}
+		if err := db.SaveEntry(r.Context(), tx, entry, p.HouseholdID, key, p.Username); err != nil {
+			return err
+		}
+		if err := insertTransactionRow(r.Context(), tx, p.HouseholdID, values, txID, entryID, key, p.Username); err != nil {
+			return err
+		}
+		return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, "")
 	})
-	if err != nil && key != "" && existing == "" {
-		// Another database client may commit the same key after our lookup.
-		// Read again after our transaction has been rolled back.
-		var committed string
-		if lookupErr := a.DB.QueryRowContext(r.Context(), findExisting, key, p.HouseholdID).Scan(&committed); lookupErr == nil {
-			existing, err = committed, nil
+	if err != nil && key != "" && replayID == "" {
+		if committed, lookupErr := a.lookupReplay(r, p.HouseholdID, key); lookupErr == nil && committed != "" {
+			replayID, err = committed, nil
 		}
+	}
+	if replayID != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"id": replayID, "status": "posted", "replayed": true})
+		return
 	}
 	if err != nil {
 		writeErr(w, 400, "invalid_request", err.Error())
 		return
 	}
-	if existing != "" {
-		writeJSON(w, http.StatusOK, map[string]any{"id": existing, "status": "posted", "replayed": true})
-		return
-	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": txID, "entry_id": entryID, "status": "posted"})
 }
 
-func (a *API) saveTransaction(tx *sql.Tx, r *http.Request, p Principal, in txInput, key, replaceID string, c ledger.Context) error {
-	total := money.Minor(in.AmountMinor)
-	txID, entryID := c.BizID, c.EntryID
-	if in.MemberID != nil {
-		status, err := a.lockMember(r, tx, p.HouseholdID, *in.MemberID)
-		if err != nil || status != "active" {
-			return errors.New("家庭成员不存在或已停用")
-		}
+func derefString(s *string) string {
+	if s == nil {
+		return ""
 	}
-	if replaceID != "" {
-		if err := a.reverseTransaction(tx, r, p, replaceID, newID("je"), false); err != nil {
-			return err
-		}
-	}
-	var entry *ledger.Entry
-	var err error
-	var splits []splitInput
-
-	switch in.Type {
-	case "transfer":
-		if in.AccountID == nil || in.ToAccountID == nil {
-			return errors.New("转账需要 account_id 与 to_account_id")
-		}
-		if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
-			return errors.New("转出账户不存在")
-		}
-		if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.ToAccountID); err != nil {
-			return errors.New("转入账户不存在")
-		}
-		entry, err = ledger.Transfer(c, *in.AccountID, *in.ToAccountID, total)
-		if err != nil {
-			return err
-		}
-
-	case "expense", "income":
-		if len(in.Splits) == 0 {
-			return errors.New("至少需要一条分类拆分行")
-		}
-		ls := make([]ledger.Split, 0, len(in.Splits))
-		kind := "expense"
-		if in.Type == "income" {
-			kind = "income"
-		}
-		for _, s := range in.Splits {
-			if err := a.validateCategory(tx, r, p.HouseholdID, s.CategoryID, kind); err != nil {
-				return err
-			}
-			if s.ProjectID != nil {
-				var n int
-				if err := tx.QueryRowContext(r.Context(),
-					`SELECT COUNT(*) FROM projects WHERE id=? AND household_id=? AND status='active'`, *s.ProjectID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-					return errors.New("项目不存在")
-				}
-			}
-			ls = append(ls, ledger.Split{CategoryID: s.CategoryID, Amount: money.Minor(s.AmountMinor)})
-		}
-		splits = in.Splits
-
-		if in.Type == "expense" && in.PaymentKind == "credit" {
-			if in.CreditInstrumentID == nil {
-				return errors.New("信用消费需要 credit_instrument_id")
-			}
-			var n int
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT COUNT(*) FROM credit_instruments WHERE id=? AND household_id=? AND status='active'`,
-				*in.CreditInstrumentID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-				return errors.New("信用工具不存在")
-			}
-			entry, err = ledger.CreditExpense(c, *in.CreditInstrumentID, ls, total)
-		} else if in.Type == "expense" {
-			if in.AccountID == nil {
-				return errors.New("现金支出需要 account_id")
-			}
-			if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
-				return errors.New("付款账户不存在")
-			}
-			entry, err = ledger.CashExpense(c, *in.AccountID, ls, total)
-		} else {
-			if in.AccountID == nil {
-				return errors.New("收入需要 account_id")
-			}
-			if _, err = a.validateAccount(tx, r, p.HouseholdID, *in.AccountID); err != nil {
-				return errors.New("收款账户不存在")
-			}
-			entry, err = ledger.Income(c, *in.AccountID, ls, total)
-		}
-	}
-	if err != nil {
-		return err
-	}
-	if err := db.SaveEntry(r.Context(), tx, entry, p.HouseholdID, key, p.Username); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(r.Context(), `
-		INSERT INTO transactions(id,household_id,type,amount_minor,currency,occurred_on,
-		  account_id,to_account_id,credit_instrument_id,member_id,merchant,note,status,entry_id,idempotency_key,created_by)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'posted',?,?,?)`,
-		txID, p.HouseholdID, in.Type, int64(total), in.Currency, in.OccurredOn,
-		in.AccountID, in.ToAccountID, in.CreditInstrumentID, in.MemberID, in.Merchant, in.Note,
-		entryID, nullableKey(key), p.Username); err != nil {
-		return err
-	}
-	for i, s := range splits {
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO transaction_splits(transaction_id,line_no,category_id,project_id,amount_minor,note)
-			VALUES(?,?,?,?,?,?)`, txID, i+1, s.CategoryID, s.ProjectID, s.AmountMinor, s.Note); err != nil {
-			return err
-		}
-	}
-	if in.Type == "expense" && in.PaymentKind == "credit" {
-		if err := a.assignStatement(r, tx, p, *in.CreditInstrumentID, "transaction", txID, int64(total), in.OccurredOn); err != nil {
-			return err
-		}
-	}
-	return audit(r.Context(), tx, p, "create_transaction", "transaction", txID, replaceID)
+	return *s
 }
 
-func nullableKey(k string) any {
-	if k == "" {
-		return nil
-	}
-	return k
+// --- GET /transactions ------------------------------------------------------
+
+const transactionSelect = `
+	SELECT t.id,t.type,t.amount_minor,t.currency,t.occurred_on,
+	       t.category_id,c.name,c.emoji,
+	       t.account_id,a.name,t.to_account_id,b.name,
+	       t.member_id,t.note,t.status,t.entry_id,t.created_at
+	FROM transactions t
+	LEFT JOIN categories c ON c.id=t.category_id AND c.household_id=t.household_id
+	LEFT JOIN accounts a ON a.id=t.account_id AND a.household_id=t.household_id
+	LEFT JOIN accounts b ON b.id=t.to_account_id AND b.household_id=t.household_id
+	WHERE t.household_id=?`
+
+type transactionRow struct {
+	ID            string
+	Type          string
+	AmountMinor   int64
+	Currency      string
+	OccurredOn    string
+	CategoryID    sql.NullString
+	CategoryName  sql.NullString
+	CategoryEmoji sql.NullString
+	AccountID     sql.NullString
+	AccountName   sql.NullString
+	ToAccountID   sql.NullString
+	ToAccountName sql.NullString
+	MemberID      sql.NullString
+	Note          sql.NullString
+	Status        string
+	EntryID       string
+	CreatedAt     string
 }
 
-const visibleTransaction = ` AND NOT EXISTS (
-	SELECT 1 FROM audit_logs a WHERE a.household_id=transactions.household_id
-	  AND a.entity='transaction' AND a.action='delete_transaction' AND a.entity_id=transactions.id)`
+func (row transactionRow) public() map[string]any {
+	return map[string]any{
+		"id": row.ID, "type": row.Type, "amount_minor": row.AmountMinor, "currency": row.Currency,
+		"occurred_on": row.OccurredOn,
+		"category_id": nullString(row.CategoryID), "category_name": nullString(row.CategoryName),
+		"category_emoji": nullString(row.CategoryEmoji),
+		"account_id":     nullString(row.AccountID), "account_name": nullString(row.AccountName),
+		"to_account_id": nullString(row.ToAccountID), "to_account_name": nullString(row.ToAccountName),
+		"member_id": nullString(row.MemberID), "note": nullString(row.Note),
+		"status": row.Status, "entry_id": row.EntryID, "created_at": row.CreatedAt,
+	}
+}
 
 func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
-	q := r.URL.Query()
-	from, to := q.Get("from"), q.Get("to")
-	txType := q.Get("type")
-	limit := 200
-	if raw := q.Get("limit"); raw != "" {
-		var err error
-		limit, err = strconv.Atoi(raw)
-		if err != nil || limit < 1 || limit > 200 {
+	query := r.URL.Query()
+	from, to := query.Get("from"), query.Get("to")
+	if from != "" && !validDate(from) || to != "" && !validDate(to) {
+		writeErr(w, 400, "invalid_request", "from/to 须为 YYYY-MM-DD")
+		return
+	}
+	txType := query.Get("type")
+	if txType != "" && txType != "expense" && txType != "income" && txType != "transfer" {
+		writeErr(w, 400, "invalid_request", "type 必须为 expense/income/transfer")
+		return
+	}
+	limit := 50
+	if raw := query.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 200 {
 			writeErr(w, 400, "invalid_request", "每页条数须为 1 至 200")
 			return
 		}
+		limit = n
 	}
-	query := `
-		SELECT id,type,amount_minor,occurred_on,account_id,to_account_id,credit_instrument_id,
-		       merchant,note,status,entry_id,
-		       (SELECT COALESCE(GROUP_CONCAT(DISTINCT c.name),'') FROM transaction_splits s JOIN categories c ON c.id=s.category_id AND c.household_id=transactions.household_id WHERE s.transaction_id=transactions.id),
-		       (SELECT COALESCE(SUM(r.amount_minor),0) FROM refunds r JOIN journal_entries e ON e.id=r.entry_id AND e.household_id=r.household_id WHERE r.household_id=transactions.household_id AND r.transaction_id=transactions.id AND e.status='posted')
-		FROM transactions WHERE household_id=?
-		  AND (?='' OR occurred_on>=?) AND (?='' OR occurred_on<=?) AND (?='' OR type=?)` + visibleTransaction
-	args := []any{p.HouseholdID, from, from, to, to, txType, txType}
-	ctx := r.Context()
-	if cursor := q.Get("cursor"); cursor != "" {
-		var date, created string
-		err := a.DB.QueryRowContext(ctx, `SELECT occurred_on,created_at FROM transactions
-			WHERE household_id=? AND id=?`, p.HouseholdID, cursor).Scan(&date, &created)
+
+	sqlQuery := transactionSelect
+	args := []any{p.HouseholdID}
+	if from != "" {
+		sqlQuery += ` AND t.occurred_on>=?`
+		args = append(args, from)
+	}
+	if to != "" {
+		sqlQuery += ` AND t.occurred_on<=?`
+		args = append(args, to)
+	}
+	if txType != "" {
+		sqlQuery += ` AND t.type=?`
+		args = append(args, txType)
+	}
+	if categoryID := strings.TrimSpace(query.Get("category_id")); categoryID != "" {
+		sqlQuery += ` AND t.category_id=?`
+		args = append(args, categoryID)
+	}
+	if accountID := strings.TrimSpace(query.Get("account_id")); accountID != "" {
+		sqlQuery += ` AND (t.account_id=? OR t.to_account_id=?)`
+		args = append(args, accountID, accountID)
+	}
+	if keyword := strings.TrimSpace(query.Get("q")); keyword != "" {
+		pattern := "%" + keyword + "%"
+		sqlQuery += ` AND (COALESCE(t.note,'') LIKE ? OR COALESCE(c.name,'') LIKE ?)`
+		args = append(args, pattern, pattern)
+	}
+	if cursor := strings.TrimSpace(query.Get("cursor")); cursor != "" {
+		var occurredOn, createdAt string
+		err := a.DB.QueryRowContext(r.Context(),
+			`SELECT occurred_on,created_at FROM transactions WHERE id=? AND household_id=?`,
+			cursor, p.HouseholdID).Scan(&occurredOn, &createdAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, 400, "invalid_request", "流水分页游标无效")
 			return
@@ -290,11 +389,13 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 			internalErr(w, err)
 			return
 		}
-		query += ` AND (occurred_on, created_at, id) < (?, ?, ?)`
-		args = append(args, date, created, cursor)
+		sqlQuery += ` AND (t.occurred_on, t.created_at, t.id) < (?, ?, ?)`
+		args = append(args, occurredOn, createdAt, cursor)
 	}
-	query += ` ORDER BY occurred_on DESC, created_at DESC, id DESC LIMIT ?`
-	rows, err := a.DB.QueryContext(ctx, query, append(args, limit+1)...)
+	sqlQuery += ` ORDER BY t.occurred_on DESC, t.created_at DESC, t.id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	rows, err := a.DB.QueryContext(r.Context(), sqlQuery, args...)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -302,19 +403,15 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, typ, occurred, status, entryID, categoryNames string
-		var amount, refunded int64
-		var acc, toAcc, ci, merchant, note *string
-		if err := rows.Scan(&id, &typ, &amount, &occurred, &acc, &toAcc, &ci, &merchant, &note, &status, &entryID, &categoryNames, &refunded); err != nil {
+		var row transactionRow
+		if err := rows.Scan(&row.ID, &row.Type, &row.AmountMinor, &row.Currency, &row.OccurredOn,
+			&row.CategoryID, &row.CategoryName, &row.CategoryEmoji,
+			&row.AccountID, &row.AccountName, &row.ToAccountID, &row.ToAccountName,
+			&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt); err != nil {
 			internalErr(w, err)
 			return
 		}
-		items = append(items, map[string]any{
-			"id": id, "type": typ, "amount_minor": amount, "occurred_on": occurred,
-			"account_id": acc, "to_account_id": toAcc, "credit_instrument_id": ci,
-			"merchant": merchant, "note": note, "status": status, "entry_id": entryID,
-			"category_names": categoryNames, "refunded_minor": refunded,
-		})
+		items = append(items, row.public())
 	}
 	if err := rows.Err(); err != nil {
 		internalErr(w, err)
@@ -325,407 +422,294 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 		nextCursor = items[limit-1]["id"]
 	}
-	writeJSON(w, 200, map[string]any{"items": items, "total": len(items), "next_cursor": nextCursor})
+	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": nextCursor})
 }
 
-// loadEntry rebuilds a ledger.Entry from persisted lines (used for reversals).
-func loadEntry(ctx *sql.Tx, r *http.Request, entryID string) (*ledger.Entry, error) {
-	e := &ledger.Entry{ID: entryID}
-	var err error
-	err = ctx.QueryRowContext(r.Context(),
-		`SELECT biz_type,biz_id,occurred_on,currency,status FROM journal_entries WHERE id=?`, entryID).
-		Scan(&e.BizType, &e.BizID, &e.OccurredOn, &e.Currency, &e.Status)
+// --- GET /transactions/{id} -------------------------------------------------
+
+func (a *API) loadTransactionRow(ctx context.Context, q db.Queryer, householdID, id string, forUpdate bool) (transactionRow, error) {
+	query := transactionSelect + ` AND t.id=?`
+	if forUpdate && a.DB.IsMySQL() {
+		query += ` FOR UPDATE`
+	}
+	var row transactionRow
+	err := q.QueryRowContext(ctx, query, householdID, id).Scan(
+		&row.ID, &row.Type, &row.AmountMinor, &row.Currency, &row.OccurredOn,
+		&row.CategoryID, &row.CategoryName, &row.CategoryEmoji,
+		&row.AccountID, &row.AccountName, &row.ToAccountID, &row.ToAccountName,
+		&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt)
+	return row, err
+}
+
+func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
+	p, _ := principal(r)
+	row, err := a.loadTransactionRow(r.Context(), a.DB, p.HouseholdID, r.PathValue("id"), false)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, 404, "not_found", "流水不存在")
+		return
+	}
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	lines, err := a.journalLines(r, p.HouseholdID, row.EntryID)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	out := row.public()
+	out["journal_lines"] = lines
+	writeJSON(w, 200, out)
+}
+
+func (a *API) journalLines(r *http.Request, householdID, entryID string) ([]map[string]any, error) {
+	rows, err := a.DB.QueryContext(r.Context(), `
+		SELECT l.account_code,l.debit_minor,l.credit_minor FROM journal_lines l
+		JOIN journal_entries e ON e.id=l.entry_id
+		WHERE e.id=? AND e.household_id=? ORDER BY l.line_no`, entryID, householdID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := ctx.QueryContext(r.Context(),
+	defer rows.Close()
+	lines := []map[string]any{}
+	for rows.Next() {
+		var code string
+		var dr, cr int64
+		if err := rows.Scan(&code, &dr, &cr); err != nil {
+			return nil, err
+		}
+		lines = append(lines, map[string]any{"account": code, "debit_minor": dr, "credit_minor": cr})
+	}
+	return lines, rows.Err()
+}
+
+// --- reversal engine --------------------------------------------------------
+
+// loadEntry rebuilds a ledger.Entry from persisted lines (used for reversals).
+func loadEntry(ctx context.Context, q db.Queryer, householdID, entryID string) (*ledger.Entry, error) {
+	entry := &ledger.Entry{ID: entryID}
+	err := q.QueryRowContext(ctx,
+		`SELECT biz_type,biz_id,occurred_on,currency,status FROM journal_entries WHERE id=? AND household_id=?`,
+		entryID, householdID).
+		Scan(&entry.BizType, &entry.BizID, &entry.OccurredOn, &entry.Currency, &entry.Status)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.QueryContext(ctx,
 		`SELECT account_code,debit_minor,credit_minor,memo FROM journal_lines WHERE entry_id=? ORDER BY line_no`, entryID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var l ledger.Line
+		var line ledger.Line
 		var dr, cr int64
-		var memo *string
-		if err := rows.Scan(&l.Account, &dr, &cr, &memo); err != nil {
+		var memo sql.NullString
+		if err := rows.Scan(&line.Account, &dr, &cr, &memo); err != nil {
 			return nil, err
 		}
-		l.Debit, l.Credit = money.Minor(dr), money.Minor(cr)
-		if memo != nil {
-			l.Memo = *memo
+		line.Debit, line.Credit = money.Minor(dr), money.Minor(cr)
+		if memo.Valid {
+			line.Memo = memo.String
 		}
-		e.Lines = append(e.Lines, l)
+		entry.Lines = append(entry.Lines, line)
 	}
-	return e, rows.Err()
+	return entry, rows.Err()
 }
 
-func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
-	p, _ := principal(r)
-	id := r.PathValue("id")
-	var typ, occurred, status, entryID string
-	var amount int64
-	var acc, toAcc, instrument, member, merchant, note *string
-	var currency string
-	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT type,amount_minor,occurred_on,status,entry_id,account_id,to_account_id,credit_instrument_id,member_id,merchant,note,currency FROM transactions WHERE id=? AND household_id=?`+visibleTransaction,
-		id, p.HouseholdID).Scan(&typ, &amount, &occurred, &status, &entryID, &acc, &toAcc, &instrument, &member, &merchant, &note, &currency)
+// reversePosted books the compensating entry, marks the original journal entry
+// reversed and the public transaction reversed. The reversal keeps the original
+// occurred_on so per-period statistics net to zero instead of leaking the
+// correction into another month. Callers must hold the transaction row lock.
+func (a *API) reversePosted(ctx context.Context, tx *sql.Tx, p Principal, row transactionRow, reversalEntryID string) error {
+	original, err := loadEntry(ctx, tx, p.HouseholdID, row.EntryID)
 	if err != nil {
-		writeErr(w, 404, "not_found", "流水不存在")
-		return
+		return errors.New("原分录不存在，无法冲正")
 	}
-	lines, err := a.DB.QueryContext(r.Context(), `
-		SELECT l.account_code,l.debit_minor,l.credit_minor FROM journal_lines l
-		JOIN journal_entries e ON e.id=l.entry_id
-		WHERE e.id=? AND e.household_id=? ORDER BY l.line_no`, entryID, p.HouseholdID)
-	if err != nil {
-		internalErr(w, err)
-		return
-	}
-	defer lines.Close()
-	journal := []map[string]any{}
-	paymentKind := "cash"
-	for lines.Next() {
-		var code string
-		var dr, cr int64
-		if err := lines.Scan(&code, &dr, &cr); err != nil {
-			internalErr(w, err)
-			return
-		}
-		if instrument != nil && code == ledger.CreditSubject(*instrument) {
-			paymentKind = "credit"
-		}
-		journal = append(journal, map[string]any{"account": code, "debit_minor": dr, "credit_minor": cr})
-	}
-	if err := lines.Err(); err != nil {
-		internalErr(w, err)
-		return
-	}
-	splitRows, err := a.DB.QueryContext(r.Context(), `
-		SELECT s.category_id,s.project_id,s.amount_minor,s.note FROM transaction_splits s
-		JOIN transactions t ON t.id=s.transaction_id
-		WHERE t.id=? AND t.household_id=? ORDER BY s.line_no`, id, p.HouseholdID)
-	if err != nil {
-		internalErr(w, err)
-		return
-	}
-	defer splitRows.Close()
-	splits := []splitInput{}
-	for splitRows.Next() {
-		var split splitInput
-		if err := splitRows.Scan(&split.CategoryID, &split.ProjectID, &split.AmountMinor, &split.Note); err != nil {
-			internalErr(w, err)
-			return
-		}
-		splits = append(splits, split)
-	}
-	if err := splitRows.Err(); err != nil {
-		internalErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{
-		"account_id": acc, "to_account_id": toAcc, "credit_instrument_id": instrument,
-		"member_id": member, "merchant": merchant, "note": note, "currency": currency, "splits": splits,
-		"payment_kind": paymentKind,
-		"id":           id, "type": typ, "amount_minor": amount, "occurred_on": occurred,
-		"status": status, "entry_id": entryID, "journal_lines": journal,
-	})
-}
-
-var errTransactionNotPosted = errors.New("只有本家庭已入账流水可以删除或修改")
-
-func (a *API) handleDeleteTransaction(w http.ResponseWriter, r *http.Request) {
-	p, _ := principal(r)
-	id := r.PathValue("id")
-	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		err := a.reverseTransaction(tx, r, p, id, newID("je"), true)
-		if !errors.Is(err, errTransactionNotPosted) {
-			return err
-		}
-		var deleted int
-		return tx.QueryRowContext(r.Context(), `SELECT 1 FROM audit_logs
-			WHERE household_id=? AND entity='transaction' AND action='delete_transaction' AND entity_id=? LIMIT 1`,
-			p.HouseholdID, id).Scan(&deleted)
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		writeErr(w, http.StatusNotFound, "not_found", "未找到可删除的流水")
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusConflict, "conflict", err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// reverseTransaction compensates the journal and credit bill in the caller's transaction.
-func (a *API) reverseTransaction(tx *sql.Tx, r *http.Request, p Principal, id, revID string, deleting bool) error {
-	res, err := tx.ExecContext(r.Context(),
-		`UPDATE transactions SET status='reversed' WHERE id=? AND household_id=? AND status='posted'`, id, p.HouseholdID)
+	reversal, err := original.Reverse(reversalEntryID, row.OccurredOn)
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil || n != 1 {
-		return errTransactionNotPosted
-	}
-	query := `SELECT id FROM installment_contracts WHERE source_transaction_id=? AND household_id=? LIMIT 1`
-	if a.DB.IsMySQL() {
-		query += " FOR UPDATE"
-	}
-	var linkedID string
-	err = tx.QueryRowContext(r.Context(), query, id, p.HouseholdID).Scan(&linkedID)
-	if err == nil {
-		return errors.New("分期流水请在分期合同中撤销")
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err := db.SaveEntry(ctx, tx, reversal, p.HouseholdID, "", p.Username); err != nil {
 		return err
 	}
-	if err := a.handleTransactionRefundsOnReversal(tx, r, p, id, deleting); err != nil {
-		return err
-	}
-	var entryID string
-	var instrument *string
-	if err := tx.QueryRowContext(r.Context(),
-		`SELECT entry_id,credit_instrument_id FROM transactions WHERE id=? AND household_id=?`, id, p.HouseholdID).
-		Scan(&entryID, &instrument); err != nil {
-		return errors.New("流水不存在")
-	}
-	orig, err := loadEntry(tx, r, entryID)
+	result, err := tx.ExecContext(ctx,
+		`UPDATE transactions SET status='reversed' WHERE id=? AND household_id=? AND status='posted'`,
+		row.ID, p.HouseholdID)
 	if err != nil {
 		return err
 	}
-	date, action := a.businessDate(), "reverse_transaction"
-	if deleting {
-		date, action = orig.OccurredOn, "delete_transaction"
-	}
-	rev, err := orig.Reverse(revID, date)
-	if err != nil {
+	if affected, err := result.RowsAffected(); err != nil {
 		return err
+	} else if affected != 1 {
+		return errors.New("该流水已冲正，不能重复操作")
 	}
-	if err := db.SaveEntry(r.Context(), tx, rev, p.HouseholdID, "", p.Username); err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE journal_entries SET status='reversed' WHERE id=? AND household_id=?`,
+		row.EntryID, p.HouseholdID); err != nil {
 		return err
-	}
-	var statementID string
-	isCredit := false
-	for _, line := range orig.Lines {
-		if instrument != nil && line.Account == ledger.CreditSubject(*instrument) {
-			isCredit = true
-			break
-		}
-	}
-	if isCredit {
-		var amount int64
-		if err := tx.QueryRowContext(r.Context(), `
-				SELECT s.id,i.amount_minor FROM credit_statement_items i
-				JOIN credit_statements s ON s.id=i.statement_id
-				WHERE i.source_type='transaction' AND i.source_id=? AND s.household_id=?`,
-			id, p.HouseholdID).Scan(&statementID, &amount); err != nil {
-			return errors.New("原信用账单不可用")
-		}
-		result, err := tx.ExecContext(r.Context(), `
-				UPDATE credit_statements SET system_due_minor=system_due_minor-?
-				WHERE id=? AND household_id=? AND paid_minor=0 AND system_due_minor>=?
-				AND NOT EXISTS (SELECT 1 FROM credit_statement_items i
-					WHERE i.statement_id=? AND i.source_type='installment_conversion'
-					AND NOT EXISTS (SELECT 1 FROM credit_statement_items rev
-						WHERE rev.statement_id=i.statement_id AND rev.source_id=i.source_id
-						AND rev.source_type='installment_conversion_reversal'))`,
-			amount, statementID, p.HouseholdID, amount, statementID)
-		if err != nil {
-			return err
-		}
-		if n, err := result.RowsAffected(); err != nil || n != 1 {
-			return errors.New("账单已有还款、转分期或调整，请先核对账单")
-		}
-		if _, err := tx.ExecContext(r.Context(), `
-				INSERT INTO credit_statement_items(statement_id,source_type,source_id,amount_minor,occurred_on)
-				VALUES(?,'reversal',?,?,?)`, statementID, revID, -amount, rev.OccurredOn); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(r.Context(),
-		`UPDATE journal_entries SET status='reversed' WHERE id=? AND household_id=?`, entryID, p.HouseholdID); err != nil {
-		return err
-	}
-	if isCredit {
-		if err := a.rebalanceStatementProvision(tx, r, p, statementID); err != nil {
-			return err
-		}
-		if err := a.refreshPendingStatementAmount(r.Context(), tx, p.HouseholdID, statementID); err != nil {
-			return err
-		}
-	}
-	return audit(r.Context(), tx, p, action, "transaction", id, revID)
-}
-
-// The caller holds the original transaction lock, which also serializes refund creation.
-func (a *API) handleTransactionRefundsOnReversal(tx *sql.Tx, r *http.Request, p Principal, id string, deleting bool) error {
-	type linkedRefund struct {
-		id, entryID, destination, destinationID string
-		amount                                  int64
-	}
-	query := `SELECT r.id,r.entry_id,r.destination_type,r.destination_id,r.amount_minor ` + refundJournalJoin +
-		` WHERE r.household_id=? AND r.transaction_id=? AND e.status='posted' ORDER BY r.destination_id,r.id`
-	if a.DB.IsMySQL() {
-		query += " FOR UPDATE"
-	}
-	rows, err := tx.QueryContext(r.Context(), query, p.HouseholdID, id)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var refunds []linkedRefund
-	for rows.Next() {
-		if !deleting {
-			return errors.New("已关联退款的流水不能直接修改")
-		}
-		var refund linkedRefund
-		if err := rows.Scan(&refund.id, &refund.entryID, &refund.destination, &refund.destinationID, &refund.amount); err != nil {
-			return err
-		}
-		refunds = append(refunds, refund)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, refund := range refunds {
-		reversalID, err := a.reverseRefundEntry(r, tx, p, refund.id, refund.entryID, refund.destination, refund.destinationID, refund.amount)
-		if err != nil {
-			return err
-		}
-		if err := audit(r.Context(), tx, p, "delete_transaction_refund", "refund", refund.id, reversalID); err != nil {
-			return err
-		}
 	}
 	return nil
 }
 
-func (a *API) handleCreateRefund(w http.ResponseWriter, r *http.Request) {
+// --- PATCH /transactions/{id} (correction) ----------------------------------
+
+func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	var in struct {
-		TransactionID   string  `json:"transaction_id"`
-		SplitLineNo     int     `json:"split_line_no"`
-		AmountMinor     int64   `json:"amount_minor"`
-		RefundOn        string  `json:"refund_on"`
-		DestinationType string  `json:"destination_type"`
-		DestinationID   string  `json:"destination_id"`
-		Note            *string `json:"note"`
+		Type        *string `json:"type"`
+		AmountMinor *int64  `json:"amount_minor"`
+		OccurredOn  *string `json:"occurred_on"`
+		CategoryID  *string `json:"category_id"`
+		AccountID   *string `json:"account_id"`
+		ToAccountID *string `json:"to_account_id"`
+		MemberID    *string `json:"member_id"`
+		Note        *string `json:"note"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
-	amount := money.Minor(in.AmountMinor)
-	if !validDate(in.RefundOn) || in.DestinationType != "cash" && in.DestinationType != "credit" {
-		writeErr(w, 400, "invalid_request", "日期或退款去向不正确")
-		return
-	}
-	refundID, entryID := newID("ref"), newID("je")
+	oldID := r.PathValue("id")
+	newIDValue, newEntryID := newID("tx"), newID("je")
+	var response map[string]any
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
-		var original int64
-		var txType, txStatus string
-		query := `SELECT amount_minor,type,status FROM transactions WHERE id=? AND household_id=?`
-		if a.DB.IsMySQL() {
-			query += " FOR UPDATE"
-		}
-		if err := tx.QueryRowContext(r.Context(), query,
-			in.TransactionID, p.HouseholdID).Scan(&original, &txType, &txStatus); err != nil {
-			return errors.New("原交易不存在")
-		}
-		if txType != "expense" || txStatus == "reversed" {
-			return errors.New("只有已入账支出可以退款")
-		}
-		var splitID int64
-		var categoryID string
-		var splitAmount int64
-		if in.SplitLineNo > 0 {
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT id,category_id,amount_minor FROM transaction_splits WHERE transaction_id=? AND line_no=?`,
-				in.TransactionID, in.SplitLineNo).Scan(&splitID, &categoryID, &splitAmount); err != nil {
-				return errors.New("拆分行不存在")
-			}
-		} else {
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT id,category_id,amount_minor FROM transaction_splits WHERE transaction_id=? ORDER BY line_no LIMIT 1`,
-				in.TransactionID).Scan(&splitID, &categoryID, &splitAmount); err != nil {
-				return errors.New("原交易没有分类行")
-			}
-		}
-		var already int64
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT COALESCE(SUM(r.amount_minor),0) `+refundJournalJoin+`
-			 WHERE r.split_id=? AND r.household_id=? AND e.status='posted'`, splitID, p.HouseholdID).Scan(&already); err != nil {
-			return err
-		}
-		if _, err := ledger.ValidateRefund(money.Minor(splitAmount), money.Minor(already), amount); err != nil {
-			return fmt.Errorf("退款金额不合法: %w", err)
-		}
-		var entry *ledger.Entry
-		var err error
-		c := ledger.Context{EntryID: entryID, BizID: refundID, OccurredOn: in.RefundOn}
-		if in.DestinationType == "cash" {
-			if _, err = a.validateAccount(tx, r, p.HouseholdID, in.DestinationID); err != nil {
-				return errors.New("退款到账账户不存在")
-			}
-			entry, err = ledger.RefundToCash(c, in.DestinationID, categoryID, amount)
-		} else {
-			var n int
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT COUNT(*) FROM credit_instruments WHERE id=? AND household_id=? AND status='active'`,
-				in.DestinationID, p.HouseholdID).Scan(&n); err != nil || n == 0 {
-				return errors.New("退款信用工具不存在")
-			}
-			entry, err = ledger.RefundToCredit(c, in.DestinationID, categoryID, amount)
-		}
+		row, err := a.loadTransactionRow(r.Context(), tx, p.HouseholdID, oldID, true)
 		if err != nil {
 			return err
 		}
-		if err := db.SaveEntry(r.Context(), tx, entry, p.HouseholdID, idempotencyKey(r), p.Username); err != nil {
+		if row.Status != "posted" {
+			return errTransactionNotPosted
+		}
+		if in.Type != nil && *in.Type != row.Type {
+			return errors.New("更正不支持修改流水类型，请冲正后重新记账")
+		}
+		values := transactionValues{
+			Type:       row.Type,
+			Amount:     money.Minor(row.AmountMinor),
+			OccurredOn: row.OccurredOn,
+			CategoryID: nullPtr(row.CategoryID),
+			AccountID:  nullPtr(row.AccountID),
+			MemberID:   nullPtr(row.MemberID),
+			Note:       nullPtr(row.Note),
+		}
+		if row.ToAccountID.Valid {
+			to := row.ToAccountID.String
+			values.ToAccountID = &to
+		}
+		if in.AmountMinor != nil {
+			values.Amount = money.Minor(*in.AmountMinor)
+		}
+		if in.OccurredOn != nil {
+			values.OccurredOn = *in.OccurredOn
+		}
+		if in.CategoryID != nil {
+			values.CategoryID = trimPtr(in.CategoryID)
+		}
+		if in.AccountID != nil {
+			values.AccountID = trimPtr(in.AccountID)
+		}
+		if in.ToAccountID != nil {
+			values.ToAccountID = trimPtr(in.ToAccountID)
+		}
+		if in.MemberID != nil {
+			values.MemberID = trimPtr(in.MemberID)
+		}
+		if in.Note != nil {
+			values.Note = in.Note
+		}
+		if err := money.MustPositive(values.Amount); err != nil || !validDate(values.OccurredOn) {
+			return errors.New("金额必须为正整数分，日期须为 YYYY-MM-DD")
+		}
+		if row.Type == "transfer" {
+			values.CategoryID = nil
+		}
+		if err := a.validateMemberInput(r, tx, p.HouseholdID, values.MemberID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO refunds(id,household_id,transaction_id,split_id,category_id,amount_minor,refund_on,
-			  destination_type,destination_id,note,entry_id,idempotency_key)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			refundID, p.HouseholdID, in.TransactionID, splitID, categoryID, int64(amount), in.RefundOn,
-			in.DestinationType, in.DestinationID, in.Note, entryID, nullableKey(idempotencyKey(r))); err != nil {
+		// Build the replacement entry BEFORE touching the original: an invalid
+		// correction must leave the posted flow untouched.
+		replacement, err := a.buildTransactionEntry(r.Context(), tx, p.HouseholdID, values, newIDValue, newEntryID)
+		if err != nil {
 			return err
 		}
-		if in.DestinationType == "credit" {
-			if err := a.assignStatement(r, tx, p, in.DestinationID, "refund", refundID, -int64(amount), in.RefundOn); err != nil {
-				return err
-			}
+		reversalID := newID("je")
+		if err := a.reversePosted(r.Context(), tx, p, row, reversalID); err != nil {
+			return err
 		}
-		return audit(r.Context(), tx, p, "create_refund", "refund", refundID, in.TransactionID)
+		if err := db.SaveEntry(r.Context(), tx, replacement, p.HouseholdID, "", p.Username); err != nil {
+			return err
+		}
+		if err := insertTransactionRow(r.Context(), tx, p.HouseholdID, values, newIDValue, newEntryID, "", p.Username); err != nil {
+			return err
+		}
+		if err := audit(r.Context(), tx, p, "reverse_transaction", "transaction", oldID, reversalID); err != nil {
+			return err
+		}
+		if err := audit(r.Context(), tx, p, "correct_transaction", "transaction", newIDValue, oldID); err != nil {
+			return err
+		}
+		response = map[string]any{"id": newIDValue, "replaces": oldID, "entry_id": newEntryID, "status": "posted"}
+		return nil
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, 404, "not_found", "流水不存在")
+		return
+	}
+	if errors.Is(err, errTransactionNotPosted) {
+		writeErr(w, 409, "conflict", "该流水已冲正，不能修改")
+		return
+	}
 	if err != nil {
 		writeErr(w, 400, "invalid_request", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": refundID, "entry_id": entryID})
+	writeJSON(w, 200, response)
 }
 
-func (a *API) handleListRefunds(w http.ResponseWriter, r *http.Request) {
+func nullPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	return &v.String
+}
+
+// --- DELETE /transactions/{id} (reversal only) ------------------------------
+
+func (a *API) handleDeleteTransaction(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	id := r.PathValue("id")
-	var total int64
-	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT amount_minor FROM transactions WHERE id=? AND household_id=?`, id, p.HouseholdID).Scan(&total)
-	if err != nil {
-		writeErr(w, 404, "not_found", "原交易不存在")
+	var response map[string]any
+	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+		row, err := a.loadTransactionRow(r.Context(), tx, p.HouseholdID, id, true)
+		if err != nil {
+			return err
+		}
+		if row.Status != "posted" {
+			return errTransactionNotPosted
+		}
+		if err := a.reversePosted(r.Context(), tx, p, row, newID("je")); err != nil {
+			return err
+		}
+		if err := audit(r.Context(), tx, p, "delete_transaction", "transaction", id, ""); err != nil {
+			return err
+		}
+		response = map[string]any{"id": id, "status": "reversed"}
+		return nil
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, 404, "not_found", "流水不存在")
 		return
 	}
-	refunded, err := refundTotalForTransaction(r.Context(), a.DB, p.HouseholdID, id)
+	if errors.Is(err, errTransactionNotPosted) {
+		writeErr(w, 409, "conflict", "该流水已冲正，不能重复删除")
+		return
+	}
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{
-		"transaction_id": id, "original_minor": total,
-		"refunded_minor": refunded, "net_expense_minor": total - refunded,
-		"remaining_refundable_minor": total - refunded,
-	})
+	writeJSON(w, 200, response)
 }
+
+var errTransactionNotPosted = errors.New("只有未冲正的流水可以修改或删除")

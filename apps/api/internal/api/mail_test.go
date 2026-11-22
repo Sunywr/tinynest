@@ -230,12 +230,14 @@ func TestMailRegistrationCannotSkipProof(t *testing.T) {
 		t.Fatal("unverified registration accepted")
 	}
 }
-func TestMailAnnouncementsIsolationPreferenceAndQueue(t *testing.T) {
+func TestMailAnnouncementPreferenceCancelsQueuedMail(t *testing.T) {
 	ts, c, d := newTestServer(t)
 	defer ts.Close()
 	defer d.Close()
 	a := c.mailAPI
-	id := c.mustOK("GET", "/api/v1/auth/me", nil)["user_id"].(string)
+	me := c.mustOK("GET", "/api/v1/auth/me", nil)
+	id := me["user_id"].(string)
+	household := me["household_id"].(string)
 	proof := c.fixtureProof(id, "admin@example.com", "bind")
 	c.mustOK("POST", "/api/v1/auth/me/mail/confirm", map[string]any{"email": "admin@example.com", "current_password": "correct-horse-battery", "proof": proof})
 	cfg := defaultMailConfig()
@@ -245,18 +247,11 @@ func TestMailAnnouncementsIsolationPreferenceAndQueue(t *testing.T) {
 	if _, e := d.Exec(`INSERT INTO mail_configuration(id,version,config_json,password_cipher,updated_at) VALUES(1,1,?,?,?)`, string(raw), secret, a.nowUTC()); e != nil {
 		t.Fatal(e)
 	}
-	foreign := bootstrapHousehold(t, &remEnv{database: d}, "mail-isolation")
-	outsider := foreign.client(t, ts.URL)
-	// A second household has no matching verified recipient, despite the first one's identity.
-	r := outsider.call("POST", "/api/v1/household/mail/announcements", map[string]any{"title": "Hi", "body": "Message", "preview": true}, nil)
-	if r.Status != 200 || number(r.Body["recipient_count"]) != 0 {
-		t.Fatalf("cross-household recipient leak: %v", r)
+	// An announcement queued for a user who has opted out must be cancelled, not sent.
+	if e := a.enqueueMail(context.Background(), d, household, id, "admin@example.com", "announcement",
+		"Hi", "Message", a.now().UTC().Add(time.Hour).Format(time.RFC3339)); e != nil {
+		t.Fatal(e)
 	}
-	preview := c.mustOK("POST", "/api/v1/household/mail/announcements", map[string]any{"title": "Hi", "body": "Message", "preview": true})
-	if number(preview["recipient_count"]) != 1 {
-		t.Fatal("verified recipient missing")
-	}
-	c.mustOK("POST", "/api/v1/household/mail/announcements", map[string]any{"title": "Hi", "body": "Message", "expected_count": 1})
 	c.mustOK("POST", "/api/v1/auth/me/mail/preferences", map[string]bool{"announcements": false})
 	sends := 0
 	a.opts.MailSender = func(context.Context, MailConfig, string, string, string, string) error { sends++; return nil }

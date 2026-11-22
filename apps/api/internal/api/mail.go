@@ -88,23 +88,25 @@ func (a *API) siteAdmin(r *http.Request) bool {
 	return a.DB.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM site_administrators WHERE user_id=?`, p.UserID).Scan(&n) == nil && n == 1
 }
 func (a *API) registerMail(m *http.ServeMux) {
-	for _, method := range []string{"GET", "POST"} {
-		m.HandleFunc(method+" /api/v1/site/mail", a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	// Site SMTP configuration: one handler serves both GET (read) and POST (test
+	// + save), exactly as before, but registered as two explicit routes.
+	siteAdminOnly := func(next http.HandlerFunc) http.HandlerFunc {
+		return a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 			if !a.siteAdmin(r) {
 				writeErr(w, 403, "forbidden", "仅站点管理员可配置系统邮件")
 				return
 			}
-			a.handleMailConfig(w, r)
-		}))
+			next(w, r)
+		})
 	}
-	m.HandleFunc("GET /api/v1/auth/me/mail", a.requireAuth(a.handleMailIdentity))
-	m.HandleFunc("POST /api/v1/auth/me/mail/preferences", a.requireAuth(a.handleMailPreferences))
-	m.HandleFunc("POST /api/v1/auth/me/mail/challenge", a.requireAuth(a.handlePrivateChallenge))
-	m.HandleFunc("POST /api/v1/auth/me/mail/confirm", a.requireAuth(a.handleBindEmail))
-	m.HandleFunc("POST /api/v1/auth/mail/challenge", a.handlePublicChallenge)
-	m.HandleFunc("POST /api/v1/auth/mail/reset", a.handleEmailReset)
-	a.adminRoute(m, "GET /api/v1/household/mail/announcements", a.handleAnnouncements)
-	a.adminRoute(m, "POST /api/v1/household/mail/announcements", a.handleAnnouncements)
+	a.register(m, "GET /api/v1/site/mail", siteAdminOnly(a.handleMailConfig))
+	a.register(m, "POST /api/v1/site/mail", siteAdminOnly(a.handleMailConfig))
+	a.register(m, "GET /api/v1/auth/me/mail", a.requireAuth(a.handleMailIdentity))
+	a.register(m, "POST /api/v1/auth/me/mail/preferences", a.requireAuth(a.handleMailPreferences))
+	a.register(m, "POST /api/v1/auth/me/mail/challenge", a.requireAuth(a.handlePrivateChallenge))
+	a.register(m, "POST /api/v1/auth/me/mail/confirm", a.requireAuth(a.handleBindEmail))
+	a.register(m, "POST /api/v1/auth/mail/challenge", a.handlePublicChallenge)
+	a.register(m, "POST /api/v1/auth/mail/reset", a.handleEmailReset)
 }
 func (a *API) handleMailConfig(w http.ResponseWriter, r *http.Request) {
 	c, stored, version, e := a.mailConfig(r.Context())

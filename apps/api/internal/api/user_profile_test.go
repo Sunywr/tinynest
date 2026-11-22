@@ -175,13 +175,13 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 	}
 
 	// The managed member books a transaction before deletion; history must survive.
-	m2.mustOK("POST", "/api/v1/accounts", map[string]any{"name": "成员账户", "kind": "cash", "opening_balance_minor": 5000})
+	m2.mustOK("POST", "/api/v1/accounts", map[string]any{"name": "成员账户", "kind": "cash", "opening_minor": 5000})
 	accounts := v012Rows(t, m2.mustOK("GET", "/api/v1/accounts", nil))
 	m2.mustOK("POST", "/api/v1/transactions", map[string]any{
 		"type": "expense", "amount_minor": 1200, "occurred_on": "2026-11-10",
-		"payment_kind": "cash", "account_id": accounts[0]["id"],
-		"splits": []any{map[string]any{"category_id": m2.firstCategory("expense"), "amount_minor": 1200}},
-		"note":   "删除前记录",
+		"account_id": accounts[0]["id"],
+		"category_id": m2.firstCategory("expense"),
+		"note":        "删除前记录",
 	})
 
 	admin.mustOK("PATCH", "/api/v1/admin/users/"+m2id+"/profile", map[string]any{

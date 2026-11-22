@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId } from 'vue'
-import { today } from '../services/api'
+import { today } from '../services/format'
 
 const model = defineModel<string>({ required: true })
 const props = defineProps<{ required?: boolean; min?: string; max?: string; openOnClick?: boolean }>()

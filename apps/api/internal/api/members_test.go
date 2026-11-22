@@ -70,8 +70,8 @@ func TestDeleteUnusedHouseholdMember(t *testing.T) {
 	}
 	c.mustOK("POST", "/api/v1/transactions", map[string]any{
 		"type": "expense", "amount_minor": 100, "occurred_on": "2026-11-14",
-		"payment_kind": "cash", "account_id": account, "member_id": owner,
-		"splits": []map[string]any{{"category_id": c.firstCategory("expense"), "amount_minor": 100}},
+		"account_id": account, "member_id": owner,
+		"category_id": c.firstCategory("expense"),
 	})
 	c.mustOK("PATCH", "/api/v1/accounts/"+account, map[string]string{"owner_member_id": ""})
 	if status, _ := c.do("DELETE", base+"/"+owner, nil); status != 409 {

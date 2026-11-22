@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Run only against a disposable MySQL container with synthetic ledger data.
+# Production-dialect drill for the V2 bookkeeping baseline.
+#
+# Runs only against a disposable MySQL container with synthetic data. It covers
+# four things a local SQLite run cannot prove:
+#   1. the V2 baseline and the generic migrator apply on MySQL 8;
+#   2. the bookkeeping API behaves identically on the production dialect;
+#   3. the destructive purge keeps identity rows and empties every business table
+#      (the exact rehearsal for the production runbook);
+#   4. identity export/import into a freshly created V2 schema (the cutover).
+#
+# No real credentials, database files or backups ever leave the runner.
 set -euo pipefail
 
 work=$(mktemp -d)
@@ -18,9 +28,8 @@ cleanup() {
   rm -rf -- "$work"
 }
 trap cleanup EXIT
-# The image can chown the bind mount to its mysql user. Keep it writable
-# for runner cleanup even after a forced stop leaves socket files behind.
-# mktemp's private parent still limits host access to the runner.
+# The image can chown the bind mount to its mysql user. Keep it writable for
+# runner cleanup even after a forced stop leaves socket files behind.
 mkdir -m 0777 "$work/socket"
 printf '%s' 'tinynest-ci-fixture-password' > "$work/password"
 
@@ -49,114 +58,87 @@ if [[ "$ready" != true ]]; then
   exit 1
 fi
 
-stage='provision test databases'
-mysql_root mysql --protocol=socket --user=root <<'SQL'
-CREATE DATABASE tinynest_drill;
-CREATE DATABASE tinynest_credit;
-CREATE DATABASE tinynest_concurrency;
-CREATE DATABASE tinynest_mixed_load;
-CREATE DATABASE tinynest_current_member;
-CREATE DATABASE tinynest_delete_account;
-CREATE DATABASE tinynest_delete_classification;
-CREATE DATABASE tinynest_delete_member;
-CREATE DATABASE tinynest_delete_valuation;
-CREATE DATABASE tinynest_delete_debt;
-CREATE DATABASE tinynest_reverse_dividend;
-CREATE DATABASE tinynest_reverse_installment;
-CREATE DATABASE tinynest_reverse_debt;
-CREATE DATABASE tinynest_reverse_conversion;
-CREATE DATABASE tinynest_reverse_credit_payment;
-CREATE DATABASE tinynest_reverse_trade;
-CREATE DATABASE tinynest_archive_statement;
-CREATE DATABASE tinynest_reverse_installment_payment;
-CREATE DATABASE tinynest_reverse_installment_refund;
-CREATE DATABASE tinynest_user_profile;
-CREATE DATABASE tinynest_viewer_profile;
-CREATE DATABASE tinynest_admin_user_profile;
-CREATE DATABASE tinynest_restore_transactions;
-CREATE DATABASE tinynest_restore;
-CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';
-GRANT ALL ON tinynest_drill.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_credit.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_concurrency.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_mixed_load.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_current_member.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_delete_account.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_delete_classification.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_delete_member.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_delete_valuation.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_delete_debt.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_dividend.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_installment.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_debt.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_conversion.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_credit_payment.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_trade.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_archive_statement.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_installment_payment.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_reverse_installment_refund.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_user_profile.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_viewer_profile.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_admin_user_profile.* TO 'tinynest_drill'@'localhost';
-GRANT ALL ON tinynest_restore_transactions.* TO 'tinynest_drill'@'localhost';
-SQL
+# One fresh schema per test: every API test initializes its own household and
+# POST /api/v1/setup is single-use by design.
+databases=(
+  lifecycle correction reversal idempotency isolation stats budget
+  setup members accounts account_delete category_delete categories household
+  profile mailquota smtp migrations purge cutover cutover_alt restore
+)
 
-stage='provision recipient quota fixtures'
-for suffix in shared concurrent challenge delivery generic; do
-  mysql_root mysql --protocol=socket --user=root -e "CREATE DATABASE tinynest_recipient_${suffix}; GRANT ALL ON tinynest_recipient_${suffix}.* TO 'tinynest_drill'@'localhost';"
+stage='provision test databases'
+mysql_root mysql --protocol=socket --user=root \
+  -e "CREATE USER 'tinynest_drill'@'localhost' IDENTIFIED BY 'tinynest-ci-fixture-password';"
+for name in "${databases[@]}"; do
+  mysql_root mysql --protocol=socket --user=root \
+    -e "CREATE DATABASE tinynest_${name}; GRANT ALL ON tinynest_${name}.* TO 'tinynest_drill'@'localhost';"
 done
 
 stage='check the host socket'
 test -S "$work/socket/mysqld.sock"
-run_ledger_test() {
-  local database=$1 test_name=$2
-  shift 2
-  stage="run $test_name over the host socket"
+
+mysql_env() {
+  local database=$1
+  shift
   TINYNEST_TEST_MYSQL_SOCKET="$work/socket/mysqld.sock" \
   TINYNEST_TEST_MYSQL_DATABASE="$database" \
   TINYNEST_TEST_MYSQL_USER=tinynest_drill \
   TINYNEST_TEST_MYSQL_PASSWORD_FILE="$work/password" \
-  go test ./internal/api -run "^$test_name$" -count=1 -parallel=16 "$@"
+  "$@"
 }
 
-# Each test owns a fresh schema and initializes its own household.
-run_ledger_test tinynest_drill TestV01EndToEnd
-run_ledger_test tinynest_credit TestV011_T1_CreditStatementLifecycle
-run_ledger_test tinynest_concurrency TestConcurrentTransactionReplays
-run_ledger_test tinynest_mixed_load TestMixedLedgerLoad -v
-run_ledger_test tinynest_current_member TestCurrentHouseholdMember
-run_ledger_test tinynest_delete_account TestDeleteAccountRetainsLedger
-run_ledger_test tinynest_delete_classification TestDeleteProjectAndCategoryRetainsHistory
-run_ledger_test tinynest_delete_member TestDeleteUnusedHouseholdMember
-run_ledger_test tinynest_delete_valuation TestDeleteInvestmentValuation
-run_ledger_test tinynest_delete_debt TestDeleteUnusedDebt
-run_ledger_test tinynest_reverse_dividend TestReverseInvestmentDividend
-run_ledger_test tinynest_reverse_installment TestReverseUnpaidInstallment
-run_ledger_test tinynest_reverse_debt TestReverseUnpaidDebtOpening
-run_ledger_test tinynest_reverse_conversion TestV011_InstallmentConvertFromCreditKeepsSinglePrincipal
-run_ledger_test tinynest_reverse_credit_payment TestReverseCreditStatementPayment
-run_ledger_test tinynest_reverse_trade TestReverseLatestInvestmentTrade
-run_ledger_test tinynest_archive_statement TestArchiveSettledCreditStatement
-run_ledger_test tinynest_reverse_installment_payment TestReverseInstallmentPayment
-run_ledger_test tinynest_reverse_installment_refund TestReverseInstallmentRefund
-run_ledger_test tinynest_user_profile TestUserSelfServiceProfileAndPassword
-run_ledger_test tinynest_viewer_profile TestViewerSelfServiceAllowed
-run_ledger_test tinynest_admin_user_profile TestAdminManagesUserProfilesAndDeletion
-run_ledger_test tinynest_restore_transactions TestRestoreStandaloneTransactionReversals
-run_ledger_test tinynest_recipient_shared TestRecipientDailyLimitSharedAndReset
-run_ledger_test tinynest_recipient_concurrent TestRecipientDailyLimitConcurrentAndRollback
-run_ledger_test tinynest_recipient_challenge TestRecipientLimitRejectsChallengeBeforeQueue
-run_ledger_test tinynest_recipient_delivery TestRecipientLimitStopsQueuedDelivery
-run_ledger_test tinynest_recipient_generic TestGenericSMTPProviderConfiguration
+run_api_test() {
+  local database=$1 test_name=$2
+  shift 2
+  stage="run $test_name over the host socket"
+  mysql_env "$database" go test ./internal/api -run "^$test_name$" -count=1 -parallel=16 "$@"
+}
 
+run_dbadmin_test() {
+  local database=$1 test_name=$2
+  shift 2
+  stage="run $test_name over the host socket"
+  mysql_env "$database" go test ./internal/dbadmin -run "^$test_name$" -count=1 -parallel=4 "$@"
+}
+
+# --- bookkeeping behaviour on the production dialect -------------------------
+run_api_test tinynest_lifecycle      TestBookkeepingLifecycle
+run_api_test tinynest_correction     TestTransactionCorrectionIsReversalPlusReplacement
+run_api_test tinynest_reversal       TestTransactionDeleteIsReversalOnly
+run_api_test tinynest_idempotency    TestIdempotentTransactionReplay
+run_api_test tinynest_isolation      TestHouseholdIsolationTransactionsAndStats
+run_api_test tinynest_stats          TestStatsConsistency
+run_api_test tinynest_budget         TestBudgetUpsertAndSpent
+run_api_test tinynest_setup          TestSetupIsSingleUseAndSessionAuthEnforced
+run_api_test tinynest_members        TestCurrentHouseholdMember
+run_api_test tinynest_accounts       TestAccountMaintenance
+run_api_test tinynest_account_delete TestDeleteAccountRetainsLedger
+run_api_test tinynest_category_delete TestDeleteCategoryRetainsHistory
+run_api_test tinynest_categories     TestCategoriesAreSingleLevel
+run_api_test tinynest_household      TestHouseholdIsolation
+run_api_test tinynest_profile        TestUserSelfServiceProfileAndPassword
+run_api_test tinynest_mailquota      TestRecipientDailyLimitSharedAndReset
+run_api_test tinynest_smtp           TestGenericSMTPProviderConfiguration
+run_api_test tinynest_migrations     TestMigrationsAreIdempotent
+
+# --- destructive purge rehearsal --------------------------------------------
+run_dbadmin_test tinynest_purge TestMySQLPurgeDrill
+
+# --- identity cutover rehearsal into a fresh V2 baseline --------------------
+stage='run the identity cutover rehearsal'
+mysql_env tinynest_cutover env \
+  TINYNEST_TEST_MYSQL_DATABASE_ALT=tinynest_cutover_alt \
+  go test ./internal/dbadmin -run '^TestMySQLIdentityCutoverDrill$' -count=1
+
+# --- backup / restore / journal reconciliation -------------------------------
 dump=(mysqldump --protocol=socket --user=root --single-transaction --no-tablespaces
       --set-gtid-purged=OFF --skip-comments --order-by-primary)
 stage='dump source database'
-mysql_root "${dump[@]}" tinynest_drill > "$work/backup.sql"
+mysql_root "${dump[@]}" tinynest_lifecycle > "$work/backup.sql"
 stage='restore into empty database'
 mysql_root mysql --protocol=socket --user=root tinynest_restore < "$work/backup.sql"
 stage='compare source and restored records'
-mysql_root "${dump[@]}" --no-create-info tinynest_drill > "$work/source-data.sql"
+mysql_root "${dump[@]}" --no-create-info tinynest_lifecycle > "$work/source-data.sql"
 mysql_root "${dump[@]}" --no-create-info tinynest_restore > "$work/restored-data.sql"
 cmp "$work/source-data.sql" "$work/restored-data.sql"
 
@@ -164,4 +146,10 @@ stage='reconcile restored journal'
 balanced=$(mysql_root mysql --protocol=socket --user=root --batch --skip-column-names \
   tinynest_restore -e 'SELECT COUNT(*) > 0 AND SUM(debit_minor) = SUM(credit_minor) FROM journal_lines')
 test "$balanced" = 1
-printf '%s\n' 'MySQL Unix socket, ledger, credit, concurrent idempotency, restore and journal reconciliation passed.'
+
+stage='reconcile baseline metadata'
+baseline=$(mysql_root mysql --protocol=socket --user=root --batch --skip-column-names \
+  tinynest_restore -e "SELECT value FROM schema_meta WHERE meta_key='baseline'")
+test "$baseline" = v2
+
+printf '%s\n' 'MySQL V2 drill passed: migrations, bookkeeping API, purge, identity cutover and restore.'

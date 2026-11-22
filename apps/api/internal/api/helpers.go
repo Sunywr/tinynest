@@ -1,4 +1,5 @@
-// Package api exposes the V0.1 HTTP contract. All financial responses are no-store.
+// Package api exposes the V2 bookkeeping HTTP contract. All financial responses
+// are no-store; balances are rebuilt from journal lines, never stored.
 package api
 
 import (
@@ -24,6 +25,10 @@ import (
 type contextKey int
 
 const principalKey contextKey = 1
+
+// maxRoutes is the frozen route budget from the V2 module spec. The route-count
+// test asserts Register() never exceeds it.
+const maxRoutes = 55
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {
@@ -51,10 +56,7 @@ type Options struct {
 	SetupToken string
 	// SetupDisabled is an explicit operator switch for deployments that have
 	// already been initialized. When true, POST /api/v1/setup refuses EVERY
-	// request (even with a valid token) before touching the database. It is an
-	// additional protection, never a replacement for the single-household
-	// constraint or token verification. Defaults to false so a fresh offline
-	// deployment can still bootstrap through a controlled operator call.
+	// request (even with a valid token) before touching the database.
 	SetupDisabled bool
 	// CookieSecure forces the Secure attribute on tn_session.
 	CookieSecure bool
@@ -64,25 +66,20 @@ type Options struct {
 	Clock func() time.Time
 	// LoginLimiter configures the failed-login rate limiter.
 	LoginLimiter LoginLimiterConfig
-	// SchedulerInterval overrides the daily due-item cadence (test hook only).
-	// Zero uses the production daily Asia/Shanghai 00:07 boundary.
-	SchedulerInterval time.Duration
-	MailKey           []byte
-	CreditMailKey     []byte
-	CreditIMAPProbe   func(context.Context, string, string, string, string) error
-	MailSender        func(context.Context, MailConfig, string, string, string, string) error
+	// MailKey encrypts queued mail payloads and SMTP credentials (32 bytes).
+	MailKey []byte
+	// MailSender is a test/deployment hook; nil uses the real SMTP client.
+	MailSender func(context.Context, MailConfig, string, string, string, string) error
 }
 
 type API struct {
-	DB           *db.DB
-	opts         Options
-	trusted      []netip.Prefix
-	limiter      *loginLimiter
-	setupMu      sync.Mutex
-	schedMu      sync.Mutex
-	mailMu       sync.Mutex
-	creditJobsMu sync.Mutex
-	creditJobs   map[[2]string]creditImportJob
+	DB         *db.DB
+	opts       Options
+	trusted    []netip.Prefix
+	limiter    *loginLimiter
+	setupMu    sync.Mutex
+	mailMu     sync.Mutex
+	routeCount int
 }
 
 // New keeps the historical single-argument form working while allowing the
@@ -132,6 +129,12 @@ func (a *API) businessToday() time.Time { return a.now().UTC().Add(8 * time.Hour
 
 // businessDate returns the current Asia/Shanghai business day (YYYY-MM-DD).
 func (a *API) businessDate() string { return a.businessToday().Format("2006-01-02") }
+
+// validDate reports whether s is a real calendar date in YYYY-MM-DD form.
+func validDate(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
 
 // parseTrustedProxies accepts explicit IPs or CIDRs. Invalid entries are ignored
 // with a non-sensitive warning; an empty list means NO proxy header is trusted.
@@ -266,9 +269,16 @@ func (a *API) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// register wires one route and counts it, so the route budget can be asserted
+// by a test without parsing the mux.
+func (a *API) register(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	a.routeCount++
+	mux.HandleFunc(pattern, h)
+}
+
 // route registers an authenticated endpoint and injects the CSRF requirement for writes.
 func (a *API) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
-	mux.HandleFunc(pattern, a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+	a.register(mux, pattern, a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := principal(r)
 		if p.Role == "viewer" && r.Method != http.MethodGet && r.Method != http.MethodHead &&
 			pattern != "DELETE /api/v1/auth/session" &&
@@ -296,3 +306,11 @@ var errConflict = errors.New("conflict")
 
 // idempotencyKey extracts the optional Idempotency-Key request header.
 func idempotencyKey(r *http.Request) string { return r.Header.Get("Idempotency-Key") }
+
+// nullableKey stores an absent idempotency key as SQL NULL, never "".
+func nullableKey(k string) any {
+	if k == "" {
+		return nil
+	}
+	return k
+}

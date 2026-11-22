@@ -1,53 +1,105 @@
-# TinyNest V0.1 验收清单
+# TinyNest V2 验收清单
 
-> 本文件是**可执行清单**，不是「已通过」声明。Phase 0 时期的快速验收清单（虚构演示数据、无提交按钮、仅 `schema_migrations`）已随 V0.1 实现作废。逐项执行后据实打勾，未执行的一律保留 `- [ ]` 并标 `UNVERIFIED`。
-> 权威执行记录见 `docs/reviews/v0.1-release-gates.md` 与 `docs/reviews/v0.1-pr-remediation-report.md`。
+> 本文件是**可执行清单**，不是「已通过」声明。逐项执行后据实打勾；未执行项保留 `- [ ]` 并标 `UNVERIFIED`。
+> 权威证据：[V2 基线证据](reviews/v2-baseline.md)（含 P5 结果）、[当前进度](project-status.md)；
+> 生产清理与切换分别见 [生产清理手册](plans/v2-prod-purge-runbook.md) 与 [新库切换手册](plans/v2-cutover-runbook.md)。
 
 ## 1. 构建与静态检查
 
 - [ ] `cd apps/api && go build ./...`
-- [ ] `cd apps/api && go test ./... -count=1`（含 `remediation_test.go` 新增用例）
+- [ ] `cd apps/api && go test ./... -count=1`（100 个 Test 函数；无 MySQL 时 2 个 drill 会 skip）
 - [ ] `cd apps/api && go vet ./...`
 - [ ] `cd apps/api && go mod tidy -diff`（退出码必须为 0）
-- [ ] `cd apps/web && npm ci`
-- [ ] `cd apps/web && npm run typecheck`
-- [ ] `cd apps/web && npm run build`
+- [ ] `cd apps/api && go test -race ./... -count=1`（需 cgo/gcc；不具备时标 `UNVERIFIED`）
+- [ ] `cd apps/web && npm.cmd ci`（Windows 上 `npm` 被执行策略拦截时用 `npm.cmd`）
+- [ ] `cd apps/web && npm.cmd run typecheck`
+- [ ] `cd apps/web && npm.cmd run build`
+- [ ] `cd apps/web && npm.cmd run test:e2e`（72 条用例）
 - [ ] `git diff --check`（退出码必须为 0）
-- [ ] `python3 scripts/verify-brand.py`（原始图与 Web 副本 SHA-256 一致）
+- [ ] 全树无行尾空白：`git grep -nI -E '[[:blank:]]+$' -- '*.md' '*.go' '*.ts' '*.vue' '*.css' '*.py' '*.sql' '*.yml' '*.yaml' '*.json' '*.html' '*.js'`
+- [ ] `python3 scripts/verify-brand.py`（原始团子图与 Web 副本 SHA-256 一致）
 - [ ] `python3 -m json.tool apps/web/public/manifest.webmanifest`
 
-## 2. 账务与安全回归（本轮 PR 阻断修复）
+## 2. 迁移与基线
 
-- [ ] `TestSetupRequiresBootstrapToken` / `TestSetupDisabledWithoutConfiguredToken` / `TestSetupConcurrentBootstrapOnlyOneSucceeds`
-- [ ] `TestHouseholdIsolation` / `TestHouseholdIsolationOnDetailEndpoints`：两家庭收入、支出、现金流、净资产、到期事项互不串账
-- [ ] `TestBusinessDateOpeningBalanceBoundaries` / `TestBusinessDateReversalUsesShanghaiDay` / `TestBusinessDateDueItemsAndDefaultPeriod`：UTC+8 边界（00:01 / 16:00 / 23:59 / 月末 / 闰年 / 跨年）
-- [ ] `TestSessionCookieSecureInProductionProxy` / `...CanBeDisabledForLocalDev` / `...HonorsTrustedProxyForwardedProto` / `...IgnoresUntrustedForwardedProto`
-- [ ] `TestLoginFailureRateLimit` / `TestLoginRateLimitScopeIsolation` / `TestLoginRateLimitConcurrentAndAuditSafe`（429 + `Retry-After`，审计不含口令/token）
-- [ ] 复式记账内核既有业务核心用例 1–29
-- [ ] `go test -race ./...`：本机缺 `gcc`/cgo，标记 `UNVERIFIED`，不得伪造通过
+- [ ] 空库全量迁移：`TestMigrateFromZeroAppliesBothVersions` 通过，`schema_migrations` 版本为 1、2
+- [ ] 重复执行 `Migrate()` 为 no-op：`TestMigrationsAreIdempotent`
+- [ ] V1 形态的迁移账本（无 `checksum` 列）被拒绝：`TestV1ShapedLedgerIsRefusedUntouched`
+- [ ] `schema_meta.baseline` 缺失或不是 `v2` 时拒绝启动：`TestBaselineGuardRejectsV1Database`、`TestBaselineGuardRequiresV2Marker`
+- [ ] 迁移文件校验和被篡改时拒绝启动：`TestChecksumTamperIsDetected`
+- [ ] 出现二进制不认识的版本时拒绝启动：`TestUnknownAppliedVersionIsRefused`
+- [ ] 空的历史迁移账本可安全重建：`TestEmptyLegacyLedgerIsRebuilt`
+- [ ] 默认分类幂等：`TestSeedForHouseholdIsIdempotent`
+- [ ] `PRAGMA quick_check` 返回 `ok`、`PRAGMA foreign_key_check` 返回空（隔离临时库）
+- [ ] 未触碰任何生产数据库或真实账本
 
-## 3. 数据库（只在隔离临时库执行）
+## 3. 账务与安全回归
 
-- [ ] 空库全量应用 7 个迁移，`schema_migrations` 版本为 1–7
-- [ ] 已有库重复执行 `Migrate()` 为 no-op，无数据变化
-- [ ] `scripts/backup-sqlite.py` 备份 → 恢复到**隔离库** → 数据一致
-- [ ] `PRAGMA quick_check` 返回 `ok`
-- [ ] `PRAGMA foreign_key_check` 返回空
-- [ ] 确认未触碰任何生产 / 真实 SQLite 文件
+- [ ] 路由预算：`TestRouteBudget`（`Register` ≤55）
+- [ ] 端到端账务闭环：`TestBookkeepingLifecycle`
+- [ ] 更正 = 冲正 + 替换：`TestTransactionCorrectionIsReversalPlusReplacement`
+- [ ] 删除 = 只写冲正：`TestTransactionDeleteIsReversalOnly`
+- [ ] 已冲正不计入统计：`TestReversedTransactionExcludedFromStats`
+- [ ] 幂等重放：`TestIdempotentTransactionReplay`
+- [ ] 统计与分录一致：`TestStatsConsistency`
+- [ ] 预算写入与已用金额：`TestBudgetUpsertAndSpent`
+- [ ] 业务日期边界：`TestBusinessDateBoundary`、`TestBusinessDateOpeningBalanceBoundaries`、`TestBusinessDateDefaultStatsPeriod`
+- [ ] 家庭隔离：`TestHouseholdIsolation`、`TestHouseholdIsolationOnDetailEndpoints`、`TestHouseholdIsolationTransactionsAndStats`
+- [ ] 单层分类与软删除：`TestCategoriesAreSingleLevel`、`TestDeleteCategoryRetainsHistory`、`TestCategoryMaintenance`
+- [ ] 账户维护、停用/删除保留余额与分录、信用卡期初为负债：`TestAccountMaintenance`、`TestDisabledAccountRetainsBalance`、`TestDeleteAccountRetainsLedger`、`TestCreditAccountOpeningIsLiability`
+- [ ] 无拆分行/退款路由回归：确认 55 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/credit-*`、`/installments`、`/investments`、`/dashboard`、`/schedule`
+- [ ] 初始化安全：`TestSetupRequiresBootstrapToken`、`TestSetupDisabledWithoutConfiguredToken`、`TestSetupDisabledFlagRefusesBootstrapEvenWithValidToken`、`TestSetupConcurrentBootstrapOnlyOneSucceeds`
+- [ ] Cookie `Secure` 与可信反代：`TestSessionCookieSecureInProductionProxy`、`TestSessionCookieSecureCanBeDisabledForLocalDev`、`TestSessionCookieHonorsTrustedProxyForwardedProto`、`TestSessionCookieIgnoresUntrustedForwardedProto`
+- [ ] 登录失败限流：`TestLoginFailureRateLimit`、`TestLoginRateLimitScopeIsolation`、`TestLoginRateLimitConcurrentAndAuditSafe`
+- [ ] 只读角色：`TestViewerSelfServiceAllowed` 与前端 H01
+- [ ] 邮件：站点管理员权限、验证码、每日 3 封、队列与密钥（`mail_*_test.go` 全组）
+- [ ] `go test -race ./...` 若本机无 cgo/gcc，标 `UNVERIFIED`，不得伪造通过
 
-## 4. 部署与运行配置
+## 4. 前端与三端
 
-- [ ] 显式设置 `TINYNEST_SETUP_TOKEN`（强随机、只存后端主机，不写仓库/日志/前端）
-- [ ] 显式设置 `TINYNEST_COOKIE_SECURE=true`（缺失或非法时服务应拒绝启动）
-- [ ] 生产反代来源加入 `TINYNEST_TRUSTED_PROXIES`，确认伪造 `X-Forwarded-Proto` 不被采信
-- [ ] 首次初始化仅执行一次，之后 `/api/v1/setup` 返回 `409 conflict`
-- [ ] `/readyz` 的 `check=sqlite_quick_check_and_migrations`
-- [ ] systemd / Nginx 模板与实际环境变量一致，A/B 分机私网与防火墙约束明确
-- [ ] `UNVERIFIED`：真实 HTTPS 双服务器联调、iPhone Safari 主屏 PWA 实机安装、前端 E2E
+- [ ] 应用壳 `App.vue` 为薄壳（98 行，非空 88），没有把视图/状态堆回单文件
+- [ ] 唯一主题 A · 奶油团子，无第二主题与风格切换入口
+- [ ] 底部 5 槽导航 + 中间凸起记账键在 <1024px 一致；≥1024px 使用左侧 226px 轨道导航
+- [ ] 记账面板：支出/收入/转账、4 列分类网格、数字键盘、备注/日期/账户/成员、保存中禁用、失败重试、离线不伪造成功
+- [ ] 主流程「打开记账 → 选分类 → 输入金额 → 保存」≤3 次显式点击（人工点按记录）
+- [ ] 账单：按天分组与小计、搜索、日历、点行更正、长按/菜单删除（冲正）
+- [ ] 图表：环形图 + 分类排行、支出/收入与月/年切换
+- [ ] 资产：现金/信用卡分组、净资产、行内转账、信用卡「仅记录欠款，不含账单与分期」如实标注
+- [ ] 我的：成员、分类管理、预算、导出 xlsx、邮箱与密码、管理员区（邀请/用户/审计）
+- [ ] 390×844 与 1440×900 双视口 E2E 全绿（H02/H03）
+- [ ] 可点击元素热区 ≥44×44（H04）；`prefers-reduced-motion` 下无非必要动效
+- [ ] PWA：Service Worker 不缓存 `/api/`；离线页无初始化入口；iPhone 实机安装标 `UNVERIFIED`
 
-## 5. 上线门禁（未通过前不得录真实数据）
+## 5. 运维 CLI 与生产执行（用户执行，当前 UNVERIFIED）
 
-- [ ] `docs/accounting-rules-v0.1.md` 第 8 节 10 项口径全部经用户确认（`PENDING_USER_CONFIRMATION` → 已确认）
-- [ ] S3 账单自动状态/额度、S4 房贷/保险 HTTP API、S5 费率规则写入 API、S7 定时任务/审计覆盖补齐
-- [ ] 生产 HTTPS / 可信反代配置、iPhone 实机、端到端测试、备份恢复与安全回归全部通过
-- [ ] GitHub Actions CI 有真实绿灯（未跑过时标 `CI_UNVERIFIED`）
+- [ ] `tinynest-admin` 与 API 共用环境变量，能连到目标库；二进制不出现在任何 HTTP 暴露路径
+- [ ] `identity-export` / `identity-import` 往返：`TestIdentityExportImportRoundTrip`
+- [ ] 清理表集合一致：`TestPurgeTableListsAreConsistent`；45 张清理表、11 张身份表
+- [ ] `purge --dry-run` 只读：`TestPurgeDryRunChangesNothing`
+- [ ] 清理后业务表全空、身份不变：`TestPurgeEmptiesBusinessDataAndKeepsIdentity`
+- [ ] 多家庭拒绝：`TestPurgeRefusesMultipleHouseholds`；借贷不平衡拒绝：`TestPurgeRefusesUnbalancedJournal`
+- [ ] 可选保留审计：`TestPurgeKeepAuditPreservesHistory`；重播默认分类：`TestPurgeReseedCategoriesLeavesOnlySystemDefaults`
+- [ ] `verify` 能捕获清理后新增业务行：`TestVerifyDetectsNewBusinessRow`
+- [ ] MySQL 实库演练：`TestMySQLPurgeDrill`、`TestMySQLIdentityCutoverDrill`（需 `TINYNEST_TEST_MYSQL_*` 环境）
+- [ ] 生产备份 + SHA-256 校验 + 隔离恢复比对完成（`UNVERIFIED`）
+- [ ] `baseline-capture` → `purge --dry-run` 人工核对 → 停服 → `purge --execute --confirm=<DBNAME> --yes-service-stopped` → `verify` → 冒烟（`UNVERIFIED`）
+- [ ] 新库建基线 → 身份导出/导入 → 计数与 `users` 摘要一致 → 切换数据库配置 → `readyz` 200（`UNVERIFIED`）
+- [ ] 旧库与备份保留 ≥30 天，证据写入 `docs/reviews/v2-purge-evidence.md`（`UNVERIFIED`）
+- [ ] 冒烟产生的测试流水已用 `DELETE /api/v1/transactions/{id}` 冲正（`UNVERIFIED`）
+
+## 6. 部署与环境（UNVERIFIED）
+
+- [ ] 生产显式设置 `TINYNEST_COOKIE_SECURE=true`、初始化令牌、`TINYNEST_SETUP_DISABLED=true`、可信反代
+- [ ] 首次初始化仅执行一次，之后 `/api/v1/setup` 返回 409 / 403
+- [ ] B 机 loopback `/api/v1/healthz` 200，A 机 HTTPS `/api/v1/readyz` 200 且 `check` 与实际驱动一致
+- [ ] A/B 双机私网 TLS、防火墙白名单、证书链实机核验
+- [ ] iPhone 实机主屏 PWA、安全区、返回手势、会话过期行为
+- [ ] 生产性能样本（LCP/CLS、流水分页）记录，不冒充验收通过
+
+## 7. 发布门禁
+
+- [ ] §1–§4 全部本地可执行项通过（无 `UNVERIFIED` 的成功声明）
+- [ ] §5 生产清理与切换由用户执行并留存证据；未执行前不得宣称「已完成 V2 上线」
+- [ ] §6 的实机与网络验证补齐；未补齐项保持 `UNVERIFIED`
+- [ ] 文档与实际路由/表/命令一致：`docs/api-v2.md`、`docs/er-v2.md`、`docs/accounting-rules-v2.md`、`docs/DEVELOPMENT.md`
+- [ ] CI 有真实绿灯（Go、Web、E2E、hygiene 四项）；未在 GitHub Actions 跑过时标 `CI_UNVERIFIED`

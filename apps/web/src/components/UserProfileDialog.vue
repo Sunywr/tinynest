@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { api, today, type UserProfile } from '../services/api'
+import { api, type UserProfile } from '../services/api'
+import { today } from '../services/format'
 import DatePicker from './DatePicker.vue'
 
 const props = defineProps<{ profile: UserProfile; userId?: string }>()
