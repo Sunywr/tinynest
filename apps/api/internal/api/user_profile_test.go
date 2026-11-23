@@ -161,6 +161,7 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 		body         any
 	}{
 		{"PATCH", "/profile", map[string]any{"name": "其他家庭"}},
+		{"PATCH", "/role", map[string]any{"role": "admin"}},
 		{"POST", "/password", map[string]any{"new_password": "foreign-pass-0000"}},
 		{"DELETE", "", nil},
 	} {

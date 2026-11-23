@@ -88,7 +88,7 @@
 | POST | `/household/invitations` | 会话（`viewer` 写请求 403；`bind_existing` 需 admin） | 普通邀请：`member_id` 与 `member_name` 二选一、`username` 可空（指定登录名）；已有账号绑定：`bind_existing:true` + `member_id` + `username` | 201 `{code}`（明文邀请码只返回一次，落库保存哈希）；绑定成功 200 `{status:"bound",member_id,username}` | 400、403、404 档案已绑定/不可用、409 已有账号或成员已绑定 |
 | GET | `/household/current` | 会话 | 无 | 200 `{id,name,currency,timezone}` | 401、403、404 |
 | POST | `/household/current` | 会话与 CSRF（已验证邮箱且未加入家庭） | `name`（最多 100 字） | 201 `{household_id}`，创建者为家庭管理员 | 400、401、403、409 |
-| GET | `/household/members` | 会话 | 无 | 200 `{items:[{id,name,status,bound,user_id?,username?,role?}],total}`（排除已删除；`bound` 表示已绑定登录账号） | 401 |
+| GET | `/household/members` | 会话 | 无 | 200 `{items:[{id,name,status,bound,user_id?,username?,role?,user_status?}],total}`（排除已删除；`bound` 表示已绑定登录账号，`user_status` 为绑定账号状态） | 401 |
 | POST | `/household/members` | 会话 | `name`（1–100 字） | 201 `{id,name,status:"active"}` | 400 |
 | DELETE | `/household/members/{id}` | 会话 | 无 | 200 `{id,status:"deleted"}`（软删除） | 404、409 `member_in_use`（已绑定登录、被邀请或被账务引用） |
 | POST | `/household/members/current` | 会话 | 空对象 `{}` 即可 | 200 `{id,name,status}`；缺失时自动创建并绑定当前用户 | 401 |
@@ -104,7 +104,7 @@
 | GET | `/admin/join-applications` | 无 | 200 `{items:[{id,username,member_name}]}` | 403 |
 | POST | `/admin/join-applications/{id}` | `approve`（布尔，必填） | 200 `{status:"decided"}`；同意时创建账号并绑定成员 | 400、403、409 已处理/过期/已绑定 |
 | GET | `/admin/users` | 无 | 200 `{items:[{id,username,role,status,member_name?,email?,avatar?,birthday?,payday?}]}` | 403 |
-| PATCH | `/admin/users/{id}/role` | `role`（`member` / `viewer`） | 200 `{id,role}` | 400、403、404 |
+| PATCH | `/admin/users/{id}/role` | `role`（`admin` / `member` / `viewer`） | 200 `{id,role}`；可修改本家庭其他启用账号的角色，角色对已有会话立即生效 | 400、403（不能修改自己的角色）、404、409 `last_admin`（并发降级时保底，不能没有管理员） |
 | POST | `/admin/users/{id}/disable` | 无 | 200 `{id,status:"disabled"}`；撤销该用户全部会话 | 403、404 |
 | PATCH | `/admin/users/{id}/profile` | 同 §2 资料字段（目标仅限本家庭 `member` / `viewer`） | 200 `{status:"ok",updated:[...]}` | 400、403、404 |
 | POST | `/admin/users/{id}/password` | 无（不读取请求体） | **固定 403** `{code:"verification_required"}`：管理员不能重置密码，成员须走邮箱找回 | 403 |

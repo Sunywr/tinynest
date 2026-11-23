@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { Check, Copy, Link2, UserRound, X } from 'lucide-vue-next'
-import { api, type Invitation, type JoinApplication, type ManagedUser, type Member } from '../services/api'
+import { api, type Invitation, type JoinApplication, type ManagedUser, type Member, type Role } from '../services/api'
 import { useSession } from '../composables/useSession'
 import { useToast } from '../composables/useToast'
 
@@ -162,6 +162,40 @@ async function removeMember(member: Member) {
   }
 }
 
+/** Admins manage other members' roles; a member's own role is not editable here. */
+function canManageRole(member: Member): boolean {
+  return isAdmin.value && member.bound === true && member.status === 'active' &&
+    member.id !== session.me.value?.member_id &&
+    (member.user_status ?? 'active') === 'active' && Boolean(member.user_id)
+}
+
+async function changeRole(member: Member, event: Event) {
+  const select = event.target as HTMLSelectElement
+  const next = select.value as Role
+  const previous = (member.role as Role) || 'member'
+  if (next === previous) return
+  if (busy.value || !member.user_id) {
+    select.value = previous
+    return
+  }
+  busy.value = true
+  error.value = ''
+  const self = member.id === session.me.value?.member_id
+  try {
+    await api.updateUserRole(member.user_id, next)
+    await session.refreshMe()
+    await load()
+    await session.refreshHousehold()
+    emit('saved')
+    toast(self && next !== 'admin' ? '已更新自己的角色，管理入口已收起' : '角色已更新')
+  } catch (e) {
+    select.value = previous
+    error.value = e instanceof Error ? e.message : '角色更新失败'
+  } finally {
+    busy.value = false
+  }
+}
+
 function inviteLink(code: string): string {
   return `${window.location.origin}/login?invite=${encodeURIComponent(code)}`
 }
@@ -212,6 +246,7 @@ onMounted(load)
         <template v-else>
           <section aria-label="成员列表">
             <h3 class="inline-form-title">成员</h3>
+            <p v-if="isAdmin" class="form-hint">可调整其他已加入成员的角色；管理员不能修改自己的角色。</p>
             <ul class="editor-list">
               <li v-for="member in members" :key="member.id" class="editor-row member-row">
                 <span class="editor-emoji" aria-hidden="true"><UserRound :size="16" /></span>
@@ -223,11 +258,19 @@ onMounted(load)
                     <span v-else class="editor-tag muted">待邀请</span>
                   </span>
                   <span class="member-meta">
-                    <template v-if="member.bound">登录账号 {{ member.username }} · {{ roleLabel(member.role) }}</template>
+                    <template v-if="member.bound">
+                      登录账号 {{ member.username }}<template v-if="!canManageRole(member)"> · {{ roleLabel(member.role) }}</template>
+                    </template>
                     <template v-else>尚未绑定登录账号；生成邀请码后由对方注册或加入。</template>
                   </span>
                 </span>
                 <span class="editor-actions">
+                  <select v-if="canManageRole(member)" class="member-role" :value="member.role || 'member'"
+                    :disabled="busy" :aria-label="`${member.name} 的角色`" @change="changeRole(member, $event)">
+                    <option value="admin">管理员</option>
+                    <option value="member">成员</option>
+                    <option value="viewer">只读</option>
+                  </select>
                   <button v-if="isAdmin && !member.bound && member.status === 'active'" type="button" class="mini-btn"
                     :disabled="busy" @click="issueForMember(member)">邀请加入</button>
                   <button v-if="isAdmin && !member.bound && member.id !== session.me.value?.member_id" type="button"
@@ -332,6 +375,21 @@ onMounted(load)
 .member-body { flex: 1; min-width: 0; display: grid; gap: 3px; }
 .member-name-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .member-meta { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.member-role {
+  flex: none;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--primary-deep);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.member-role:disabled { opacity: .5; cursor: not-allowed; }
 .invite-output { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--soft); }
 .invite-output-head { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--primary-deep); font-size: 13px; font-weight: 700; }
 .invite-link { margin: 0; display: flex; align-items: flex-start; gap: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }

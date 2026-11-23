@@ -14,9 +14,11 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 | 信用卡还款计划生产发布（2026-11-22） | **已完成**：后端/前端 `v2-9fc30b1` 上线；生产迁移 1–4；`healthz`/`readyz` 200；静态资源哈希与前后端 release 核对通过；登录后真实账本冒烟待用户验证。见 [发布证据](reviews/v2-credit-plan-deployment-evidence.md) |
 | 证券/理财估值快照（2026-11-22 增补） | **已完成并发布**：2 张只读表、`GET /accounts?include=investments`、资产页投资面板与图表投资视图；生产迁移 1–5，导入 pfm 4 账户/30 持仓（总市值 ¥535,406.71），生产 API 与 390×844 真实页面验证通过。见 [发布证据](reviews/v2-investment-snapshot-deployment-evidence.md) |
 | 家庭成员邀请重做（2026-11-22） | **已完成并发布**：家庭成员面板统一邀请新成员、绑定本家庭已有账号、审批加入；登录页支持邀请链接与已有账号加入；后端增加绑定已有账号能力（不新增路由）。生产 `v2-c1f3d5e`；`sunywr` 已绑定爸爸，妈妈仍待邀请。见 [发布证据](reviews/v2-family-invite-deployment-evidence.md) |
+| 家庭成员角色管理（2026-11-23） | **已完成（未部署）**：管理员可在家庭成员面板把其他已加入账号设为管理员/成员/只读；不能修改自己的角色（403）；复用 `PATCH /admin/users/{id}/role`，不新增路由；角色变更对已有会话立即生效 |
+| 邮箱与安全卡片留白（2026-11-23） | **已完成（未部署）**：`MailSettings` 外层卡片增加内边距，桌面与 390px 窄屏标题和表单都不再贴边；E2E G08 断言通过 |
 | 工资导入与 sunywr 绑定（2026-11-22） | **已完成**：从 pfm 导入 140 条工资收入（¥1,851,169.91，仅收入、排除预支/纯奖金），工资账户导入后停用，资产页净资产不变；`sunywr` 已绑定 **爸爸**。见 [导入证据](reviews/v2-salary-import-evidence.md) |
 | V2 文档（AGENTS / README / 开发 / 架构 / 安全 / 部署 / API / ER / 账务 / 验收） | 已完成（含还款计划与投资估值快照口径） |
-| V2 测试代码 | 已就位：Go 118 个 Test 函数、Playwright 82 条用例 |
+| V2 测试代码 | 已就位：Go 126 个 Test 函数、Playwright 85 条用例 |
 | 生产清理（P5） | **已执行**：删除 3,975 行业务数据、身份 29 行保留，见 [清理证据](reviews/v2-purge-evidence.md) |
 | 生产新库切换与身份导入（P5） | **已执行**：`tinynest_v2` + 身份导入（users 摘要一致），见 [切换证据](reviews/v2-cutover-evidence.md) |
 | iPhone 实机、A↔B 私网 TLS、生产性能 | `UNVERIFIED`（公网 HTTP 冒烟与发布健康检查已通过） |

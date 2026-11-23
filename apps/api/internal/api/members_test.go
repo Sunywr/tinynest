@@ -23,7 +23,8 @@ func TestCurrentHouseholdMember(t *testing.T) {
 		t.Fatalf("expected one member profile, got %d", len(items))
 	}
 	row := items[0].(map[string]any)
-	if row["bound"] != true || row["username"] != "admin" || row["user_id"] == "" || row["role"] != "admin" {
+	if row["bound"] != true || row["username"] != "admin" || row["user_id"] == "" || row["role"] != "admin" ||
+		row["user_status"] != "active" {
 		t.Fatalf("bound member directory fields are incomplete: %v", row)
 	}
 }

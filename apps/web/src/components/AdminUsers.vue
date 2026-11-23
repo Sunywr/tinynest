@@ -23,6 +23,13 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
+    // The role can change in another session; never trust a stale menu entry.
+    await session.refreshMe()
+    if (!session.isAdmin.value) {
+      users.value = []
+      error.value = '仅家庭管理员可以访问用户管理'
+      return
+    }
     users.value = (await api.users()).items
   } catch (e) {
     error.value = e instanceof Error ? e.message : '用户列表加载失败'

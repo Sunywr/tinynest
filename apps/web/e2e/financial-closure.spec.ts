@@ -1001,6 +1001,53 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(row).toContainText('已加入')
     await expect(row).toContainText(`登录账号 ${ADMIN}`)
   })
+
+  test('G07 管理员不能修改自己的角色，也不能在成员面板调整自己', async ({ page }) => {
+    const csrf = await signIn(page)
+    const headers = { 'X-CSRF-Token': csrf }
+    const me = await (await page.request.get('/api/v1/auth/me')).json()
+    if (!me.member_id) {
+      // A bootstrap-created admin has no member profile yet; bind it so the
+      // "当前" row exists.
+      const created = await page.request.post('/api/v1/household/members', { data: { name: ADMIN }, headers })
+      expect(created.ok()).toBeTruthy()
+      const member = await created.json()
+      const bound = await page.request.post('/api/v1/household/invitations', {
+        data: { member_id: member.id, username: ADMIN, bind_existing: true }, headers,
+      })
+      expect(bound.ok()).toBeTruthy()
+    }
+    await page.goto('/me')
+    await page.getByRole('button', { name: /家庭成员/ }).click()
+    const dialog = page.getByRole('dialog', { name: '家庭成员' })
+    const ownRow = dialog.locator('.member-row').filter({ hasText: '当前' })
+    await expect(ownRow.locator('.member-meta')).toContainText('管理员')
+    await expect(ownRow.getByRole('combobox')).toHaveCount(0)
+
+    const self = await (await page.request.get('/api/v1/auth/me')).json()
+    const res = await page.request.patch(`/api/v1/admin/users/${self.user_id}/role`, {
+      data: { role: 'viewer' }, headers,
+    })
+    expect(res.status()).toBe(403)
+    expect((await (await page.request.get('/api/v1/auth/me')).json()).role).toBe('admin')
+  })
+
+  test('G08 「邮箱与安全」卡片标题与表单不贴边', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/me/settings')
+    const card = page.locator('.mail-settings')
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
+      await page.reload()
+      await expect(card).toBeVisible()
+      const cardBox = await card.boundingBox()
+      const headingBox = await card.locator('.mail-heading').boundingBox()
+      expect(headingBox!.x - cardBox!.x, `heading left inset @ ${width}px`).toBeGreaterThanOrEqual(12)
+      expect(headingBox!.y - cardBox!.y, `heading top inset @ ${width}px`).toBeGreaterThanOrEqual(10)
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+      expect(overflow, `settings overflow @ ${width}px`).toBeLessThanOrEqual(1)
+    }
+  })
 })
 
 // ------------------------------------------------------------ H 角色与视口
@@ -1085,6 +1132,27 @@ test.describe('H 角色与视口', () => {
       return { width: rect.width, height: rect.height }
     }))
     for (const box of keyBoxes) expect(box.height).toBeGreaterThanOrEqual(44)
+  })
+
+  test('H05 普通成员看不到用户管理、审计与角色调整入口', async ({ page }) => {
+    await signIn(page)
+    await page.route('**/api/v1/auth/me', async route => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      const response = await route.fetch()
+      const me = await response.json()
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...me, role: 'member' }),
+      })
+    })
+    await page.goto('/me')
+    await expect(page.getByRole('button', { name: /用户管理/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /审计日志/ })).toHaveCount(0)
+    await page.getByRole('button', { name: /家庭成员/ }).click()
+    const dialog = page.getByRole('dialog', { name: '家庭成员' })
+    await expect(dialog.getByRole('combobox')).toHaveCount(0)
+    await expect(dialog.getByText('只有家庭管理员可以生成邀请码或审批加入申请。')).toBeVisible()
   })
 })
 // ------------------------------------------------------------ I 新增能力

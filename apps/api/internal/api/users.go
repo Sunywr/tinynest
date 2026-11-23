@@ -2,8 +2,14 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"net/http"
 )
+
+// errLastAdmin blocks demoting the only active admin: without one, nobody could
+// invite members, approve joins or manage accounts any more.
+var errLastAdmin = errors.New("last_admin")
 
 func (a *API) adminRoute(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
 	a.route(mux, pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -102,31 +108,61 @@ func (a *API) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`
 	}
-	if err := decode(r, &in); err != nil || (in.Role != "member" && in.Role != "viewer") {
-		writeErr(w, 400, "invalid_request", "角色须为成员或只读")
+	if err := decode(r, &in); err != nil || (in.Role != "admin" && in.Role != "member" && in.Role != "viewer") {
+		writeErr(w, 400, "invalid_request", "角色须为管理员、成员或只读")
 		return
 	}
 	id := r.PathValue("id")
-	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
+	// Admins manage other accounts only; self-demotion is refused so an admin
+	// can never lock themselves out of household management.
+	if id == p.UserID {
+		writeErr(w, 403, "forbidden", "不能修改自己的角色")
+		return
+	}
+	ctx := r.Context()
+	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		var role string
-		err := tx.QueryRowContext(r.Context(), `SELECT role FROM users
-			WHERE id=? AND household_id=? AND role IN ('member','viewer') AND status='active'`, id, p.HouseholdID).Scan(&role)
+		err := tx.QueryRowContext(ctx, `SELECT role FROM users
+			WHERE id=? AND household_id=? AND status='active'`, id, p.HouseholdID).Scan(&role)
 		if err != nil || role == in.Role {
 			return err
 		}
-		if _, err := tx.ExecContext(r.Context(), `UPDATE users SET role=?
-			WHERE id=? AND household_id=? AND role IN ('member','viewer') AND status='active'`, in.Role, id, p.HouseholdID); err != nil {
+		if role == "admin" {
+			// Serialize admin demotions per household so two admins cannot step
+			// down concurrently and leave the household without one. The row lock
+			// is taken before the count on MySQL; SQLite already has one writer.
+			lock := `SELECT id FROM households WHERE id=?`
+			if a.DB.IsMySQL() {
+				lock += " FOR UPDATE"
+			}
+			var householdID string
+			if err := tx.QueryRowContext(ctx, lock, p.HouseholdID).Scan(&householdID); err != nil {
+				return err
+			}
+			var admins int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users
+				WHERE household_id=? AND role='admin' AND status='active'`, p.HouseholdID).Scan(&admins); err != nil {
+				return err
+			}
+			if admins <= 1 {
+				return errLastAdmin
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET role=?
+			WHERE id=? AND household_id=? AND status='active'`, in.Role, id, p.HouseholdID); err != nil {
 			return err
 		}
-		return audit(r.Context(), tx, p, "update_user_role", "user", id, "{}")
+		payload, _ := json.Marshal(map[string]string{"role": in.Role})
+		return audit(ctx, tx, p, "update_user_role", "user", id, string(payload))
 	})
-	if err == sql.ErrNoRows {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		writeErr(w, 404, "not_found", "成员账号不存在或已停用")
-		return
-	}
-	if err != nil {
+	case errors.Is(err, errLastAdmin):
+		writeErr(w, 409, "last_admin", "家庭至少需要一位管理员；请先将另一位成员设为管理员")
+	case err != nil:
 		internalErr(w, err)
-		return
+	default:
+		writeJSON(w, 200, map[string]string{"id": id, "role": in.Role})
 	}
-	writeJSON(w, 200, map[string]string{"id": id, "role": in.Role})
 }

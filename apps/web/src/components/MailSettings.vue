@@ -59,11 +59,11 @@ async function saveConfig(){await run(async()=>{try{if(!config.value.config.from
 </section>
 </template>
 <style scoped>
-.mail-settings{margin:24px 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start;color:var(--text)}
+.mail-settings{margin:24px 0;padding:20px 22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start;color:var(--text)}
 .mail-heading{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:2px}
 .mail-heading h2{font-size:20px;line-height:1.4;margin:4px 0 0}.mail-eyebrow{color:var(--muted);font-size:10px;letter-spacing:.14em;font-weight:700}
 .mail-settings>p,.mail-settings>.mail-toggle{grid-column:1/-1;margin:0;line-height:1.7;font-size:13px}
-.mail-settings form{display:grid;gap:14px;min-width:0;margin:0;padding:24px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.mail-settings form{display:grid;gap:14px;min-width:0;margin:0;padding:20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 .mail-settings form h2,.mail-settings form h3{margin:0 0 2px;font-size:16px;line-height:1.5;letter-spacing:.01em}
 .mail-settings form p{margin:0;color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
 .mail-settings label{display:grid;gap:7px;font-size:13px;font-weight:600;line-height:1.5;min-width:0}
@@ -81,6 +81,6 @@ async function saveConfig(){await run(async()=>{try{if(!config.value.config.from
 .mail-settings .err,.mail-settings .mail-notice{padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:var(--soft);overflow-wrap:anywhere}
 .mail-settings .err{color:#a04e43}.mail-settings .mail-notice{color:#567661}
 .mail-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:14px;background:var(--soft);border-radius:12px;margin:10px 0!important}
-@media(max-width:760px){.mail-settings{grid-template-columns:minmax(0,1fr);gap:14px;margin:18px 0}.mail-settings form{padding:18px}.mail-heading{align-items:flex-start;flex-wrap:wrap}.mail-heading h2{font-size:18px}.mail-settings button{width:100%;justify-self:stretch}.mail-heading button{width:auto;min-height:40px;padding:8px 12px;font-size:12px}}
+@media(max-width:760px){.mail-settings{grid-template-columns:minmax(0,1fr);gap:14px;margin:18px 0;padding:14px}.mail-settings form{padding:16px}.mail-heading{align-items:flex-start;flex-wrap:wrap}.mail-heading h2{font-size:18px}.mail-settings button{width:100%;justify-self:stretch}.mail-heading button{width:auto;min-height:40px;padding:8px 12px;font-size:12px}}
 @media(prefers-reduced-motion:reduce){.mail-settings button,.mail-settings input,.mail-settings select,.mail-settings textarea{transition:none}}
 </style>

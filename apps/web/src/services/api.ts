@@ -105,7 +105,7 @@ export type ProfileUpdate = {
 export type ManagedUser = UserProfile & { id: string; role: string; status: string }
 
 export type Household = { name: string; currency: string; timezone: string }
-export type Member = { id: string; name: string; status: string; bound?: boolean; user_id?: string; username?: string; role?: string }
+export type Member = { id: string; name: string; status: string; bound?: boolean; user_id?: string; username?: string; role?: string; user_status?: string }
 export type Category = { id: string; kind: 'expense' | 'income'; name: string; emoji: string; color?: string; sort: number; active: number | boolean }
 export type Account = {
   id: string
@@ -364,7 +364,7 @@ export const api = {
   updateUserProfile: (id: string, body: ProfileUpdate) => patch(`/admin/users/${encodeURIComponent(id)}/profile`, body),
   resetUserPassword: (id: string, new_password: string) => post(`/admin/users/${encodeURIComponent(id)}/password`, { new_password }),
   deleteUser: (id: string) => del(`/admin/users/${encodeURIComponent(id)}`),
-  updateUserRole: (id: string, role: 'member' | 'viewer') => patch(`/admin/users/${encodeURIComponent(id)}/role`, { role }),
+  updateUserRole: (id: string, role: Role) => patch(`/admin/users/${encodeURIComponent(id)}/role`, { role }),
   disableUser: (id: string) => post(`/admin/users/${encodeURIComponent(id)}/disable`),
   auditLogs: (limit = 50) => get<{ items: AuditLog[] }>(`/admin/audit-logs${query({ limit })}`),
 
