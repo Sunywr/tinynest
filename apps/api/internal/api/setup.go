@@ -15,9 +15,9 @@ import (
 
 // Register wires every V2 endpoint onto the HTTP mux.
 //
-// The route budget is frozen at 55 (method + path). The list below is grouped
+// The route budget is frozen at 56 (method + path). The list below is grouped
 // by module so a reviewer can compare it with docs/plans/v2-bookkeeping-module-spec.md §5:
-//   - identity, household, admin, mail: 33 routes (unchanged V1 behaviour)
+//   - identity, household, admin, mail: 34 routes
 //   - bookkeeping: 22 routes (4 categories, 7 accounts, 5 transactions, 4 stats, 2 budgets)
 func (a *API) Register(mux *http.ServeMux) {
 	a.routeCount = 0
@@ -37,6 +37,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.adminRoute(mux, "GET /api/v1/admin/join-applications", a.handleListApplications)
 	a.adminRoute(mux, "POST /api/v1/admin/join-applications/{id}", a.handleDecideApplication)
 	a.route(mux, "GET /api/v1/household/current", a.handleCurrentHousehold)
+	a.register(mux, "POST /api/v1/household/current", a.requireAuth(a.handleCreateHousehold))
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
 	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)
 	a.route(mux, "DELETE /api/v1/household/members/{id}", a.handleDeleteMember)
@@ -154,17 +155,16 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	hhID, userID := newID("hh"), newID("usr")
 	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var count int
-		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM households`).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM households WHERE id<>?`, onboardingHousehold).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
 			return errConflict
 		}
-		// Conditional insert keeps the "only ever one household" invariant inside
-		// the database transaction, not in an application-level pre-check alone.
+		// Bootstrap applies only before any real household exists.
 		result, err := tx.ExecContext(r.Context(),
-			`INSERT INTO households(id,name) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM households)`,
-			hhID, in.HouseholdName)
+			`INSERT INTO households(id,name) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM households WHERE id<>?)`,
+			hhID, in.HouseholdName, onboardingHousehold)
 		if err != nil {
 			return err
 		}
@@ -282,9 +282,13 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
+	householdID := p.HouseholdID
+	if householdID == onboardingHousehold {
+		householdID = ""
+	}
 	out := map[string]any{
 		"member_id": memberID, "member_name": memberName,
-		"user_id": p.UserID, "household_id": p.HouseholdID,
+		"user_id": p.UserID, "household_id": householdID,
 		"username": p.Username, "csrf_token": p.CSRFToken, "role": p.Role,
 	}
 	var verified int
@@ -293,6 +297,15 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["email_verified"] = verified == 1
+	if householdID == "" && verified == 1 {
+		var pending bool
+		if err := a.DB.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM household_invites
+			WHERE applicant=? AND decided_at IS NULL AND expires_at>?)`, p.Username, a.nowUTC()).Scan(&pending); err != nil {
+			internalErr(w, err)
+			return
+		}
+		out["join_pending"] = pending
+	}
 	if email.Valid {
 		out["email"] = email.String
 	}

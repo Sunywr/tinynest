@@ -962,15 +962,22 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(page.getByRole('dialog', { name: '审计日志' })).toBeVisible()
   })
 
-  test('G05 邀请链接会带入邀请码并支持已有账号加入', async ({ page }) => {
+  test('G05 邀请链接允许先注册登录，验证前保留邀请码并拦截家庭页面', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
     const code = `invite-${uid('code')}`
     await page.goto(`/login?invite=${encodeURIComponent(code)}`)
     const dialog = page.getByRole('dialog', { name: '欢迎回家' })
-    await expect(dialog).toBeVisible()
-    await expect(dialog.getByLabel('邀请码（加入家庭时填写）')).toHaveValue(code)
-    await dialog.getByRole('button', { name: '已有账号？用邀请码加入' }).click()
-    await expect(page.getByRole('dialog', { name: '加入家庭' })).toBeVisible()
-    await expect(page.getByLabel('邀请码', { exact: true })).toHaveValue(code)
+    await expect(dialog.getByLabel('邮箱验证码')).toHaveCount(0)
+    await dialog.getByLabel('用户名').fill(uid('invitee').toLowerCase())
+    await dialog.getByLabel('密码').fill('invitee-test-password')
+    await dialog.getByRole('button', { name: '注册并登录' }).click()
+    await expect(page.getByRole('heading', { name: '验证邮箱' })).toBeVisible()
+    expect(new URL(page.url()).searchParams.get('invite')).toBe(code)
+    await page.reload()
+    await expect(page.getByRole('heading', { name: '验证邮箱' })).toBeVisible()
+    await page.goto('/bills')
+    await expect(page).toHaveURL(/\/onboarding$/)
+    await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCount(0)
   })
 
   test('G06 管理员可把已有账号绑定到未绑定成员', async ({ page }) => {
@@ -999,11 +1006,13 @@ test.describe('H 角色与视口', () => {
     await signIn(page)
     await page.route('**/api/v1/auth/me', async route => {
       if (route.request().method() !== 'GET') return route.fallback()
+      const response = await route.fetch()
+      const me = await response.json()
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          username: ADMIN,
+          ...me,
           member_id: 'member-viewer',
           member_name: '只读成员',
           role: 'viewer',

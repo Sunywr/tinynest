@@ -26,9 +26,9 @@ type contextKey int
 
 const principalKey contextKey = 1
 
-// maxRoutes is the frozen route budget from the V2 module spec. The route-count
+// maxRoutes is the frozen route budget including authenticated household creation. The route-count
 // test asserts Register() never exceeds it.
-const maxRoutes = 55
+const maxRoutes = 56
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {
@@ -73,13 +73,14 @@ type Options struct {
 }
 
 type API struct {
-	DB         *db.DB
-	opts       Options
-	trusted    []netip.Prefix
-	limiter    *loginLimiter
-	setupMu    sync.Mutex
-	mailMu     sync.Mutex
-	routeCount int
+	DB                   *db.DB
+	opts                 Options
+	trusted              []netip.Prefix
+	limiter              *loginLimiter
+	registrationAttempts *loginLimiter
+	setupMu              sync.Mutex
+	mailMu               sync.Mutex
+	routeCount           int
 }
 
 // New keeps the historical single-argument form working while allowing the
@@ -90,10 +91,11 @@ func New(database *db.DB, opts ...Options) *API {
 		o = opts[0]
 	}
 	return &API{
-		DB:      database,
-		opts:    o,
-		trusted: parseTrustedProxies(o.TrustedProxies),
-		limiter: newLoginLimiter(o.LoginLimiter, o.Clock),
+		DB:                   database,
+		opts:                 o,
+		trusted:              parseTrustedProxies(o.TrustedProxies),
+		limiter:              newLoginLimiter(o.LoginLimiter, o.Clock),
+		registrationAttempts: newLoginLimiter(o.LoginLimiter, o.Clock),
 	}
 }
 
@@ -280,6 +282,14 @@ func (a *API) register(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 func (a *API) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 	a.register(mux, pattern, a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := principal(r)
+		if p.HouseholdID == onboardingHousehold {
+			switch pattern {
+			case "GET /api/v1/auth/me", "POST /api/v1/auth/me/password":
+			default:
+				writeErr(w, 403, "household_required", "请先创建或加入家庭")
+				return
+			}
+		}
 		if p.Role == "viewer" && r.Method != http.MethodGet && r.Method != http.MethodHead &&
 			pattern != "DELETE /api/v1/auth/session" &&
 			pattern != "PATCH /api/v1/auth/me/profile" &&

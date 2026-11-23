@@ -45,7 +45,7 @@ export async function request<T = any>(path: string, init: RequestInit = {}): Pr
   if (!res.ok) {
     // A 401 on a protected endpoint means the session expired mid-flight.
     // Authentication endpoints are excluded so a failed login never triggers it.
-    if (res.status === 401 && (!path.startsWith('/auth/') || path.startsWith('/auth/me/'))) {
+    if (res.status === 401 && (!path.startsWith('/auth/') || path === '/auth/me' || path.startsWith('/auth/me/'))) {
       window.dispatchEvent(new CustomEvent('tinynest:session-expired'))
     }
     throw new ApiError(data?.error?.code || 'http_error', data?.error?.message || `请求失败 (${res.status})`, res.status)
@@ -79,6 +79,7 @@ export type Me = {
   avatar?: string
   email?: string
   email_verified?: boolean
+  join_pending?: boolean
   role: Role
   csrf_token?: string
   [key: string]: unknown
@@ -335,7 +336,7 @@ export const api = {
     post('/auth/me/password', body),
   logout: () => del('/auth/session'),
 
-  register: (body: { username: string; password: string; email: string; proof: { challenge_id: string; code: string } }) =>
+  register: (body: { username: string; password: string }) =>
     post('/auth/register', body),
   applyInvite: (body: { username: string; password: string; code: string }) => post('/auth/join', body),
   mailChallenge: (body: { email: string; purpose: string }) => post<{ challenge_id: string }>('/auth/mail/challenge', body),

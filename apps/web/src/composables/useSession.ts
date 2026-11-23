@@ -11,7 +11,8 @@ const booted = ref(false)
 const sessionExpired = ref(false)
 const booting = ref(false)
 
-const canWrite = computed(() => authed.value && me.value?.role !== 'viewer')
+const hasHousehold = computed(() => Boolean(me.value?.household_id))
+const canWrite = computed(() => hasHousehold.value && me.value?.role !== 'viewer')
 const isAdmin = computed(() => me.value?.role === 'admin')
 const currentMember = computed(() => members.value.find(m => m.id === me.value?.member_id) ?? null)
 const hasMultipleMembers = computed(() => members.value.length > 1)
@@ -39,7 +40,7 @@ async function boot() {
     me.value = profile
     authed.value = true
     sessionExpired.value = false
-    await loadContext()
+    if (hasHousehold.value) await loadContext()
   } catch {
     clearSession()
   } finally {
@@ -55,7 +56,7 @@ async function login(username: string, password: string) {
   me.value = profile
   authed.value = true
   sessionExpired.value = false
-  await loadContext()
+  if (hasHousehold.value) await loadContext()
 }
 
 async function logout() {
@@ -75,6 +76,8 @@ function expire() {
 async function refreshMe() {
   const profile = await api.me()
   setCSRFToken(profile.csrf_token || '')
+  const joined = !hasHousehold.value && Boolean(profile.household_id)
+  if (joined) await loadContext()
   me.value = profile
 }
 
@@ -98,6 +101,7 @@ export function useSession() {
     booting,
     sessionExpired,
     canWrite,
+    hasHousehold,
     isAdmin,
     currentMember,
     hasMultipleMembers,

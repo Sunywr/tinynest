@@ -12,7 +12,7 @@ const route = useRoute()
 const router = useRouter()
 const session = useSession()
 const entry = useEntrySheet()
-const { authed, booted } = session
+const { authed, booted, hasHousehold } = session
 
 const onPublicRoute = computed(() => APP_ROUTES.has(String(route.name)))
 
@@ -20,10 +20,14 @@ const onPublicRoute = computed(() => APP_ROUTES.has(String(route.name)))
 function syncRoute() {
   if (!booted.value) return
   if (!authed.value && !onPublicRoute.value) router.replace('/')
-  else if (authed.value && onPublicRoute.value) router.replace('/bills')
+  else if (authed.value && !hasHousehold.value && route.name !== 'onboarding') {
+    router.replace({ name: 'onboarding', query: route.query.invite ? { invite: route.query.invite } : {} })
+  } else if (authed.value && hasHousehold.value && (onPublicRoute.value || route.name === 'onboarding')) {
+    router.replace('/bills')
+  }
 }
 
-watch([authed, booted, () => route.name], syncRoute, { immediate: true })
+watch([authed, booted, hasHousehold, () => route.name], syncRoute, { immediate: true })
 watch(authed, signedIn => {
   if (!signedIn) entry.closeEntry()
 })
@@ -48,9 +52,9 @@ onBeforeUnmount(() => {
     <p>正在打开小家…</p>
   </div>
 
-  <router-view v-else-if="!authed" />
+  <router-view v-else-if="(!authed && onPublicRoute) || (authed && !hasHousehold && route.name === 'onboarding')" />
 
-  <div v-else class="app-shell">
+  <div v-else-if="hasHousehold" class="app-shell">
     <TabBar @entry="entry.openEntry()" />
     <main class="app-main">
       <router-view v-slot="{ Component, route: current }">
@@ -61,7 +65,7 @@ onBeforeUnmount(() => {
     </main>
   </div>
 
-  <EntrySheet v-if="entry.open.value" :transaction="entry.editing.value" :preset-type="entry.presetType.value"
+  <EntrySheet v-if="hasHousehold && entry.open.value" :transaction="entry.editing.value" :preset-type="entry.presetType.value"
     @close="entry.closeEntry()" @saved="entry.closeEntry()" />
   <AppToast />
 </template>

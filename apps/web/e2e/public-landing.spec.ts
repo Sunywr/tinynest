@@ -337,14 +337,13 @@ test('刷新保留当前菜单，退出后清除菜单位置', async ({ page }) 
   await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
 })
 
-test('注册与找回密码清楚说明邮箱每日3封上限', async ({ page }) => {
+test('注册可直接提交，找回密码说明邮箱每日3封上限', async ({ page }) => {
   await page.goto('/')
   await openDialog(page)
   await page.getByRole('button', { name: '注册新账号' }).click()
   const dialog = page.getByRole('dialog', { name: '欢迎回家' })
-  await expect(dialog.getByText('同一邮箱每天最多3封邮件', { exact: false })).toBeVisible()
-  await expect(dialog.getByLabel('注册邮箱')).toBeVisible()
-  await expect(dialog.getByLabel('邮箱验证码', { exact: true })).toHaveAttribute('maxlength', '6')
+  await expect(dialog.getByLabel('邮箱验证码', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '注册并登录' })).toBeVisible()
   await page.getByRole('button', { name: '返回登录', exact: true }).click()
   await page.getByRole('button', { name: '忘记密码' }).click()
   await expect(page.locator('.password-recovery').getByText('同一邮箱每天最多3封邮件', { exact: false })).toBeVisible()
