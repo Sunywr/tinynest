@@ -1,8 +1,8 @@
 # TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
-> 契约范围：**56 条业务路由**（按「方法 + 路径」计）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 56。
-> 路由总数由 `TestRouteBudget` 冻结为 ≤56；本次增加已验证用户创建家庭的入口。
+> 契约范围：**57 条业务路由**（按「方法 + 路径」计）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 57。
+> 路由总数由 `TestRouteBudget` 冻结为 ≤57；包括注册及登录使用的图形验证码入口。
 > 信用卡还款计划与投资估值不是新路由，而是 `GET /accounts?include=credit_debt,investments` 的可选投影；`include` 接受空值、`credit_debt`、`investments` 或逗号组合。
 
 ## 1. 通用约定
@@ -43,16 +43,19 @@
 | 方法 | 路径 | 鉴权 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- | --- |
 | POST | `/setup` | 一次性 `X-Setup-Token`（公开端点） | `household_name`、`username`（≥3）、`password`（≥8） | 201 `{household_id,user_id,status:"initialized"}`；同时写入默认分类 | 401 令牌无效、403 `setup_disabled`（未配置令牌或 `TINYNEST_SETUP_DISABLED=true`）、409 已初始化、400 |
-| POST | `/auth/session` | 公开（口令 + 失败限流） | `username`、`password` | 200 `{username,csrf_token,status:"ok"}` + `Set-Cookie: tn_session`（7 天） | 400、401、429 `rate_limited` |
+| GET | `/auth/captcha` | 公开 | 无 | 200 `{id,image}`，PNG data URL | 429 |
+| POST | `/auth/session` | 公开（验证码与密码） | `username`、`password`、`captcha{id,answer}` | 200 `{username,csrf_token,status:"ok"}` + `Set-Cookie: tn_session`（7 天） | 400 `captcha_invalid`、401、429 `rate_limited` / `account_locked` / `account_locked_today` |
 | DELETE | `/auth/session` | 公开（读取 Cookie；无会话也返回成功） | 无 | 200 `{status:"logged_out"}`，存在会话时被吊销 | — |
 | GET | `/auth/me` | 会话 | 无 | 200 `{member_id,member_name,user_id,household_id,username,csrf_token,role,email_verified,email?,avatar?,birthday?,payday?}` | 401 |
 | PATCH | `/auth/me/profile` | 会话 | `name?`（1–50 字）、`avatar?`（≤8 字符或 64×64 JPEG data URL，Base64 ≤32 KiB）、`birthday?`（`YYYY-MM-DD`，1900-01-01 至业务今天）、`payday?`（1–31）、`email?`（只能与原值相同，改邮箱须走验证） | 200 `{status:"ok",updated:[字段名]}` | 400、401、403 CSRF |
 | POST | `/auth/me/password` | 会话 | `current_password`、`new_password`（8–256）、`proof{challenge_id,code}` | 200 `{status:"ok"}`；撤销全部会话并排入安全通知邮件 | 400 `invalid_request` / `verification_failed`、409 |
-| POST | `/auth/register` | 公开（注册限流） | `username`（3–40 位小写字母/数字/`._-`）、`password`（≥12） | 201 `{status:"registered"}`，可立即登录。带 `email` 和 `proof` 的旧版注册仍返回 202。 | 400、409 用户名已使用、429 |
+| POST | `/auth/register` | 公开（注册限流） | `username`（3–40 位小写字母/数字/`._-`）、`password`（至少 8 字符）、`captcha{id,answer}` | 201 `{username,csrf_token,status:"ok"}` 并建立会话。带 `email` 和 `proof` 的旧版注册仍返回 202。 | 400、409 用户名已使用、429 |
 | POST | `/auth/join` | 会话与 CSRF（已验证邮箱）；旧版待审批账号可用凭据 | `code`（邀请码）；旧版附 `username`、`password` | 202 `{status:"pending"}` | 400 邀请码无效/已用、401、403、409、429 |
 
 说明：
 
+- 图形验证码为 6 位数字，2 分钟内一次有效，绑定请求来源。答错或过期时获取新验证码。
+- 同一账号连续 5 次密码错误触发一次锁定。上海时间同日第 1–4 次分别锁 5、10、15、20 分钟，第 5 次锁至次日零点。成功登录清零当前连续错误，保留当日锁定轮数。
 - `POST /setup` 只在空库可用；令牌比较在固定长度 SHA-256 摘要上做常量时间比较。初始化后令牌不能再次创建管理员。
 - 登录成功会清除该用户名的失败计数，但不清 IP 维度计数；失败限流返回 429 与 `Retry-After`。
 - 错误凭据统一返回 401「用户名或密码错误」，不区分账号是否存在。
@@ -226,7 +229,7 @@
 
 `spent_minor` 为该月支出科目净额（借−贷），与账单页预算进度使用同一口径。
 
-## 11. 健康检查（2 条，不计入 56）
+## 11. 健康检查（2 条，不计入 57）
 
 | 方法 | 路径 | 鉴权 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |

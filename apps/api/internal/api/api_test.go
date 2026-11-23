@@ -64,6 +64,7 @@ func newTestServerWithOptions(t testing.TB, opts Options) (*httptest.Server, *te
 	a := New(database, opts)
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
 	ts := httptest.NewServer(mux)
+	registerCaptchaTestServer(t, ts.URL, a)
 	jar, _ := cookiejar.New(nil)
 	// The one-time bootstrap token is used ONLY for the initial setup call.
 	tc := &testClient{mailAPI: a, t: t, base: ts.URL, hc: &http.Client{Jar: jar},
@@ -120,6 +121,9 @@ func (c *testClient) doHeaders(method, path string, body any, headers map[string
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+	if api, ok := captchaTestServers.Load(c.base); ok {
+		attachCaptchaForTest(c.t, req, api.(*API))
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

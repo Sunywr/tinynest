@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { fillCaptcha, captchaProof } from './captcha-fixture'
 
 /**
  * V2 bookkeeping closure suite — written against the frozen API contract in
@@ -38,7 +39,7 @@ async function ensureInitialized(page: Page) {
 /** Sign in through the real API and return the CSRF token for write helpers. */
 async function signIn(page: Page): Promise<string> {
   await ensureInitialized(page)
-  const res = await page.request.post('/api/v1/auth/session', { data: { username: ADMIN, password: PASSWORD } })
+  const res = await page.request.post('/api/v1/auth/session', { data: { username: ADMIN, password: PASSWORD, captcha: await captchaProof(page.request) } })
   expect(res.ok()).toBeTruthy()
   const body = await res.json()
   return String(body.csrf_token || '')
@@ -52,6 +53,7 @@ async function signInUi(page: Page) {
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('用户名').fill(ADMIN)
   await dialog.getByLabel('密码').fill(PASSWORD)
+  await fillCaptcha(page)
   await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
 }
 
@@ -236,6 +238,7 @@ test.describe('A 登录与会话', () => {
     const dialog = page.getByRole('dialog', { name: '欢迎回家' })
     await dialog.getByLabel('用户名').fill('does-not-exist')
     await dialog.getByLabel('密码').fill('wrong-password-123')
+    await fillCaptcha(page)
     await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
     await expect(page.getByRole('alert')).toContainText('用户名或密码错误')
     await expect(page.getByRole('alert')).not.toContainText('不存在')
@@ -970,6 +973,7 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(dialog.getByLabel('邮箱验证码')).toHaveCount(0)
     await dialog.getByLabel('用户名').fill(uid('invitee').toLowerCase())
     await dialog.getByLabel('密码').fill('invitee-test-password')
+    await fillCaptcha(page)
     await dialog.getByRole('button', { name: '注册并登录' }).click()
     await expect(page.getByRole('heading', { name: '验证邮箱' })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('invite')).toBe(code)
@@ -1155,7 +1159,7 @@ test.describe('I 分类配色与金额输入', () => {
     const grid = sheet.getByRole('listbox', { name: '选择分类' })
     // The grid shows one kind at a time: 16 seeded expense categories.
     const expenseOptions = grid.getByRole('option')
-    expect(await expenseOptions.count()).toBeGreaterThanOrEqual(16)
+    await expect(expenseOptions.nth(15)).toBeVisible()
     for (let index = 0; index < 3; index += 1) {
       await expect(expenseOptions.nth(index).locator('.category-tile svg')).toBeVisible()
       await expect(expenseOptions.nth(index).locator('.tile-dot')).toHaveCount(0)

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { fillCaptcha } from './captcha-fixture'
 
 // Public landing + session gate + PWA shell. Real Go API + isolated SQLite
 // (playwright.config.ts). No mocks except where a test explicitly simulates an
@@ -30,6 +31,7 @@ async function loginViaDialog(page: import('@playwright/test').Page) {
   const dialog = page.getByRole('dialog', { name: '欢迎回家' })
   await dialog.getByLabel('用户名').fill('admin')
   await dialog.getByLabel('密码').fill('correct-horse-battery')
+  await fillCaptcha(page)
   await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
   await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
@@ -98,6 +100,7 @@ test('L06 错误凭据显示友好错误且不泄露账号是否存在', async (
   const dialog = page.getByRole('dialog', { name: '欢迎回家' })
   await dialog.getByLabel('用户名').fill('does-not-exist')
   await dialog.getByLabel('密码').fill('wrong-password-123')
+  await fillCaptcha(page)
   await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('用户名或密码错误')
   await expect(page.getByRole('alert')).not.toContainText('不存在')
@@ -343,6 +346,13 @@ test('注册可直接提交，找回密码说明邮箱每日3封上限', async (
   await page.getByRole('button', { name: '注册新账号' }).click()
   const dialog = page.getByRole('dialog', { name: '欢迎回家' })
   await expect(dialog.getByLabel('邮箱验证码', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByLabel('密码')).toHaveAttribute('minlength', '8')
+  const image = dialog.getByRole('img', { name: '六位数字验证码' })
+  await expect(image).toBeVisible()
+  const first = await image.getAttribute('data-challenge-id')
+  await dialog.getByRole('button', { name: '换一张验证码' }).click()
+  await expect(image).toBeVisible()
+  await expect(image).not.toHaveAttribute('data-challenge-id', first!)
   await expect(dialog.getByRole('button', { name: '注册并登录' })).toBeVisible()
   await page.getByRole('button', { name: '返回登录', exact: true }).click()
   await page.getByRole('button', { name: '忘记密码' }).click()

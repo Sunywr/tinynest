@@ -12,7 +12,7 @@ func TestRegistrationCanSignInBeforeVerification(t *testing.T) {
 	defer server.Close()
 	jar, _ := cookiejar.New(nil)
 	c := &testClient{t: t, base: server.URL, hc: &http.Client{Jar: jar}, mailAPI: admin.mailAPI}
-	body := map[string]string{"username": "onboarding_test", "password": "long-test-password"}
+	body := map[string]string{"username": "onboarding_test", "password": "eightpwd"}
 	c.mustOK("POST", "/api/v1/auth/register", body)
 	c.csrf = c.mustOK("POST", "/api/v1/auth/session", body)["csrf_token"].(string)
 	me := c.mustOK("GET", "/api/v1/auth/me", nil)

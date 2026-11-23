@@ -12,6 +12,8 @@ export function getCSRFToken() {
   return csrfToken
 }
 
+export type CaptchaProof = { id: string; answer: string }
+
 export class ApiError extends Error {
   constructor(public code: string, message: string, public status = 0) {
     super(message)
@@ -325,8 +327,8 @@ function query(params: Record<string, string | number | undefined | null>): stri
 
 export const api = {
   // Authentication and identity (unchanged V0.1 behaviour).
-  login: async (username: string, password: string) => {
-    const r = await post<{ csrf_token: string }>('/auth/session', { username, password })
+  login: async (username: string, password: string, captcha: CaptchaProof) => {
+    const r = await post<{ csrf_token: string }>('/auth/session', { username, password, captcha })
     setCSRFToken(r.csrf_token)
     return r
   },
@@ -336,8 +338,9 @@ export const api = {
     post('/auth/me/password', body),
   logout: () => del('/auth/session'),
 
-  register: (body: { username: string; password: string }) =>
-    post('/auth/register', body),
+  captcha: () => get<{ id: string; image: string }>('/auth/captcha'),
+  register: (username: string, password: string, captcha: CaptchaProof) =>
+    post<{ csrf_token: string }>('/auth/register', { username, password, captcha }),
   applyInvite: (body: { username: string; password: string; code: string }) => post('/auth/join', body),
   mailChallenge: (body: { email: string; purpose: string }) => post<{ challenge_id: string }>('/auth/mail/challenge', body),
   mailReset: (body: unknown) => post('/auth/mail/reset', body),

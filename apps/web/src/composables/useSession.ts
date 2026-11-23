@@ -1,7 +1,7 @@
 /** Single source of truth for the signed-in session, household and members. */
 
 import { computed, ref } from 'vue'
-import { api, setCSRFToken, type Household, type Me, type Member } from '../services/api'
+import { api, setCSRFToken, type CaptchaProof, type Household, type Me, type Member } from '../services/api'
 
 const me = ref<Me | null>(null)
 const household = ref<Household | null>(null)
@@ -49,8 +49,17 @@ async function boot() {
   }
 }
 
-async function login(username: string, password: string) {
-  await api.login(username, password)
+async function login(username: string, password: string, captcha: CaptchaProof) {
+  await api.login(username, password, captcha)
+  await loadSignedInSession()
+}
+
+async function register(username: string, password: string, captcha: CaptchaProof) {
+  await api.register(username, password, captcha)
+  await loadSignedInSession()
+}
+
+async function loadSignedInSession() {
   const profile = await api.me()
   setCSRFToken(profile.csrf_token || '')
   me.value = profile
@@ -107,6 +116,7 @@ export function useSession() {
     hasMultipleMembers,
     boot,
     login,
+    register,
     logout,
     expire,
     refreshMe,

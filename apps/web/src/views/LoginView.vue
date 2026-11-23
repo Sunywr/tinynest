@@ -15,6 +15,32 @@ const registration = reactive({ invite: '' })
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
+const captcha = ref<{ id: string; image: string }>()
+const captchaAnswer = ref('')
+const captchaLoading = ref(false)
+const captchaError = ref('')
+let captchaRequest = 0
+
+function needsCaptcha() {
+  return mode.value === 'login' || mode.value === 'register'
+}
+
+async function refreshCaptcha() {
+  const request = ++captchaRequest
+  captcha.value = undefined
+  captchaAnswer.value = ''
+  captchaError.value = ''
+  captchaLoading.value = needsCaptcha()
+  if (!needsCaptcha()) return
+  try {
+    const challenge = await api.captcha()
+    if (request === captchaRequest) captcha.value = challenge
+  } catch (e) {
+    if (request === captchaRequest) captchaError.value = e instanceof Error ? e.message : '验证码加载失败，请刷新'
+  } finally {
+    if (request === captchaRequest) captchaLoading.value = false
+  }
+}
 
 const dialog = ref<HTMLElement | null>(null)
 const usernameInput = ref<HTMLInputElement | null>(null)
@@ -28,6 +54,7 @@ function switchMode(next: 'login' | 'register' | 'join' | 'recover') {
   mode.value = next
   resetMessages()
   form.password = ''
+  void refreshCaptcha()
   if (next === 'login') void nextTick(() => usernameInput.value?.focus())
 }
 
@@ -36,11 +63,6 @@ async function submit() {
   loading.value = true
   resetMessages()
   try {
-    if (mode.value === 'login') {
-      await session.login(form.username, form.password)
-      form.password = ''
-      return
-    }
     if (mode.value === 'join') {
       if (!registration.invite.trim()) throw new Error('请填写邀请码')
       await api.applyInvite({
@@ -52,12 +74,17 @@ async function submit() {
       form.password = ''
       return
     }
-    await api.register({ username: form.username, password: form.password })
-    mode.value = 'login'
-    await session.login(form.username, form.password)
+    if (!captcha.value || !/^\d{6}$/.test(captchaAnswer.value)) throw new Error('请输入图片中的 6 位验证码')
+    const proof = { id: captcha.value.id, answer: captchaAnswer.value }
+    if (mode.value === 'register') {
+      await session.register(form.username, form.password, proof)
+    } else {
+      await session.login(form.username, form.password, proof)
+    }
     form.password = ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : '操作失败，请重试'
+    if (needsCaptcha()) void refreshCaptcha()
   } finally {
     loading.value = false
   }
@@ -89,10 +116,12 @@ onMounted(async () => {
     registration.invite = invite
     notice.value = '邀请码已带入。登录并验证邮箱后可提交加入申请。'
   }
+  void refreshCaptcha()
   await nextTick()
   usernameInput.value?.focus()
 })
 onBeforeUnmount(() => {
+  captchaRequest++
   document.body.classList.remove('no-scroll')
   window.removeEventListener('keydown', onKeydown)
 })
@@ -113,8 +142,21 @@ onBeforeUnmount(() => {
           <input ref="usernameInput" v-model="form.username" autocomplete="username" required />
         </label>
         <label>密码
-          <input v-model="form.password" type="password" :autocomplete="mode === 'register' ? 'new-password' : 'current-password'" required :minlength="mode === 'register' ? 12 : 8" />
+          <input v-model="form.password" type="password" :autocomplete="mode === 'register' ? 'new-password' : 'current-password'" required minlength="8" maxlength="256" />
         </label>
+
+        <template v-if="needsCaptcha()">
+          <div class="captcha-row">
+            <img v-if="captcha" :src="captcha.image" :data-challenge-id="captcha.id" alt="六位数字验证码" width="202" height="56" />
+            <button type="button" class="btn-quiet" :disabled="loading || captchaLoading" @click="refreshCaptcha">
+              {{ captchaLoading ? '加载中…' : '换一张验证码' }}
+            </button>
+          </div>
+          <p v-if="captchaError" class="err" role="alert">{{ captchaError }}</p>
+          <label>图形验证码
+            <input v-model="captchaAnswer" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required />
+          </label>
+        </template>
 
         <template v-if="mode === 'join'">
           <p class="email-flow-hint">
@@ -125,10 +167,10 @@ onBeforeUnmount(() => {
           </label>
         </template>
 
-        <button v-if="mode === 'login'" class="btn-quiet" type="button" @click="switchMode('recover')">忘记密码</button>
+        <button v-if="mode === 'login'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('recover')">忘记密码</button>
         <p v-if="error" class="err" role="alert">{{ error }}</p>
         <p v-if="notice" role="status">{{ notice }}</p>
-        <button class="btn-primary" type="submit" :disabled="loading">
+        <button class="btn-primary" type="submit" :disabled="loading || (needsCaptcha() && !captcha)">
           {{ loading ? '处理中…' : mode === 'login' ? '登录' : mode === 'join' ? '提交加入申请' : '注册并登录' }}
         </button>
         <button v-if="mode === 'register'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('join')">
@@ -144,3 +186,9 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.captcha-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.captcha-row img { max-width: 100%; height: auto; border-radius: 8px; }
+.captcha-row .btn-quiet { width: auto; flex: 1 0 auto; }
+</style>

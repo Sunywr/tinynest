@@ -25,18 +25,19 @@ func (a *API) limitRegistration(w http.ResponseWriter, ip string) bool {
 }
 
 func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if !a.limitRegistration(w, a.clientIP(r)) {
-		return
-	}
 	var in struct {
 		Username string
 		Password string
+		Captcha  captchaProof
 		Email    string    `json:"email"`
 		Proof    mailProof `json:"proof"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	if decode(r, &in) != nil || !registrationName.MatchString(in.Username) || len(in.Password) < 12 || len(in.Password) > 256 {
-		writeErr(w, 400, "invalid_request", "登录名须为 3–40 位小写字母、数字或 ._-，密码至少 12 位")
+	if decode(r, &in) != nil || !registrationName.MatchString(in.Username) || utf8.RuneCountInString(in.Password) < 8 || len(in.Password) > 256 {
+		writeErr(w, 400, "invalid_request", "登录名须为 3–40 位小写字母、数字或 ._-，密码至少 8 位")
+		return
+	}
+	if !a.requireCaptcha(w, r, in.Captcha) || !a.limitRegistration(w, a.clientIP(r)) {
 		return
 	}
 	select {

@@ -28,7 +28,7 @@ const principalKey contextKey = 1
 
 // maxRoutes is the frozen route budget including authenticated household creation. The route-count
 // test asserts Register() never exceeds it.
-const maxRoutes = 56
+const maxRoutes = 57
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {
@@ -73,6 +73,8 @@ type Options struct {
 }
 
 type API struct {
+	captchas             captchaStore
+	loginShards          [64]sync.Mutex
 	DB                   *db.DB
 	opts                 Options
 	trusted              []netip.Prefix

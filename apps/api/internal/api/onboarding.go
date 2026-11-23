@@ -22,6 +22,7 @@ func (a *API) registerStandalone(w http.ResponseWriter, r *http.Request, usernam
 		return
 	}
 	ctx := r.Context()
+	userID := newID("usr")
 	err = a.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		query := `INSERT INTO households(id,name) VALUES(?,?) ON CONFLICT(id) DO NOTHING`
 		if a.DB.IsMySQL() {
@@ -39,7 +40,7 @@ func (a *API) registerStandalone(w http.ResponseWriter, r *http.Request, usernam
 			return errConflict
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO users(id,household_id,username,password_hash,role)
-			VALUES(?,?,?,?,'member')`, newID("usr"), onboardingHousehold, username, hash)
+			VALUES(?,?,?,?,'member')`, userID, onboardingHousehold, username, hash)
 		return err
 	})
 	switch {
@@ -48,7 +49,7 @@ func (a *API) registerStandalone(w http.ResponseWriter, r *http.Request, usernam
 	case err != nil:
 		internalErr(w, err)
 	default:
-		writeJSON(w, 201, map[string]string{"status": "registered"})
+		a.issueSession(w, r, http.StatusCreated, username, userID, hash)
 	}
 }
 
