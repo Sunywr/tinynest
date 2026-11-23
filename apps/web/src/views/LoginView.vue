@@ -11,12 +11,36 @@ const route = useRoute()
 
 const mode = ref<'login' | 'register' | 'join' | 'recover'>('login')
 const form = reactive({ username: '', password: '' })
-const registration = reactive({ email: '', code: '', invite: '' })
-const challenge = ref('')
-const cooldownUntil = ref(0)
+const registration = reactive({ invite: '' })
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
+const captcha = ref<{ id: string; image: string }>()
+const captchaAnswer = ref('')
+const captchaLoading = ref(false)
+const captchaError = ref('')
+let captchaRequest = 0
+
+function needsCaptcha() {
+  return mode.value === 'login' || mode.value === 'register'
+}
+
+async function refreshCaptcha() {
+  const request = ++captchaRequest
+  captcha.value = undefined
+  captchaAnswer.value = ''
+  captchaError.value = ''
+  captchaLoading.value = needsCaptcha()
+  if (!needsCaptcha()) return
+  try {
+    const challenge = await api.captcha()
+    if (request === captchaRequest) captcha.value = challenge
+  } catch (e) {
+    if (request === captchaRequest) captchaError.value = e instanceof Error ? e.message : '验证码加载失败，请刷新'
+  } finally {
+    if (request === captchaRequest) captchaLoading.value = false
+  }
+}
 
 const dialog = ref<HTMLElement | null>(null)
 const usernameInput = ref<HTMLInputElement | null>(null)
@@ -30,24 +54,8 @@ function switchMode(next: 'login' | 'register' | 'join' | 'recover') {
   mode.value = next
   resetMessages()
   form.password = ''
+  void refreshCaptcha()
   if (next === 'login') void nextTick(() => usernameInput.value?.focus())
-}
-
-async function sendRegistrationCode() {
-  if (loading.value) return
-  loading.value = true
-  resetMessages()
-  try {
-    if (Date.now() < cooldownUntil.value) throw new Error('请在60秒后重发')
-    const result = await api.mailChallenge({ email: registration.email, purpose: 'register' })
-    challenge.value = result.challenge_id
-    cooldownUntil.value = Date.now() + 60_000
-    notice.value = '验证码已排队发送，10分钟内有效；同一邮箱每天最多3封邮件。'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '验证码发送失败'
-  } finally {
-    loading.value = false
-  }
 }
 
 async function submit() {
@@ -55,11 +63,6 @@ async function submit() {
   loading.value = true
   resetMessages()
   try {
-    if (mode.value === 'login') {
-      await session.login(form.username, form.password)
-      form.password = ''
-      return
-    }
     if (mode.value === 'join') {
       if (!registration.invite.trim()) throw new Error('请填写邀请码')
       await api.applyInvite({
@@ -67,31 +70,21 @@ async function submit() {
         password: form.password,
         code: registration.invite.trim(),
       })
-      notice.value = '申请已提交，管理员批准后即可登录本家庭。'
+      notice.value = '申请已提交，管理员批准后即可使用家庭账本。'
       form.password = ''
       return
     }
-    if (!challenge.value) throw new Error('请先发送邮箱验证码')
-    await api.register({
-      username: form.username,
-      password: form.password,
-      email: registration.email,
-      proof: { challenge_id: challenge.value, code: registration.code },
-    })
-    if (registration.invite.trim()) {
-      await api.applyInvite({
-        username: form.username,
-        password: form.password,
-        code: registration.invite.trim(),
-      })
-      notice.value = '注册与加入申请已提交，管理员批准后即可登录。'
+    if (!captcha.value || !/^\d{6}$/.test(captchaAnswer.value)) throw new Error('请输入图片中的 6 位验证码')
+    const proof = { id: captcha.value.id, answer: captchaAnswer.value }
+    if (mode.value === 'register') {
+      await session.register(form.username, form.password, proof)
     } else {
-      notice.value = '注册请求已受理。拿到邀请码后可在登录页选择“用邀请码加入”。'
+      await session.login(form.username, form.password, proof)
     }
     form.password = ''
-    registration.code = ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : '操作失败，请重试'
+    if (needsCaptcha()) void refreshCaptcha()
   } finally {
     loading.value = false
   }
@@ -121,12 +114,14 @@ onMounted(async () => {
   if (invite) {
     mode.value = 'register'
     registration.invite = invite
-    notice.value = '邀请码已带入；完成注册后会提交加入申请。已注册但未加入的账号可选择“用邀请码加入”。'
+    notice.value = '邀请码已带入。登录并验证邮箱后可提交加入申请。'
   }
+  void refreshCaptcha()
   await nextTick()
   usernameInput.value?.focus()
 })
 onBeforeUnmount(() => {
+  captchaRequest++
   document.body.classList.remove('no-scroll')
   window.removeEventListener('keydown', onKeydown)
 })
@@ -138,7 +133,7 @@ onBeforeUnmount(() => {
       <button type="button" class="dialog-close" aria-label="关闭登录" @click="emit('close')">×</button>
       <img src="/icons/tinynest-original.png" alt="" class="dialog-logo" />
       <h2 id="login-title">{{ mode === 'join' ? '加入家庭' : '欢迎回家' }}</h2>
-      <p id="login-desc">{{ mode === 'join' ? '使用已注册但尚未加入本家庭的账号与邀请码提交申请。' : '登录后进入你的家庭账本。' }}</p>
+      <p id="login-desc">{{ mode === 'join' ? '使用已注册但尚未加入本家庭的账号与邀请码提交申请。' : mode === 'register' ? '注册后即可登录，验证邮箱后可创建或加入家庭。' : '登录后继续使用小家。' }}</p>
 
       <PasswordRecovery v-if="mode === 'recover'" @close="switchMode('login')" />
 
@@ -147,23 +142,19 @@ onBeforeUnmount(() => {
           <input ref="usernameInput" v-model="form.username" autocomplete="username" required />
         </label>
         <label>密码
-          <input v-model="form.password" type="password" autocomplete="current-password" required minlength="8" />
+          <input v-model="form.password" type="password" :autocomplete="mode === 'register' ? 'new-password' : 'current-password'" required minlength="8" maxlength="256" />
         </label>
 
-        <template v-if="mode === 'register'">
-          <p class="email-flow-hint">
-            ① 填写邮箱并获取验证码 → ② 输入验证码和账号资料 → ③ 注册后凭邀请码申请加入家庭。
-            同一邮箱每天最多3封邮件，上海时间零点重置。
-          </p>
-          <label>注册邮箱
-            <input v-model="registration.email" type="email" required autocomplete="email" />
-          </label>
-          <button type="button" class="btn-quiet" :disabled="loading || !registration.email" @click="sendRegistrationCode">发送注册验证码</button>
-          <label>邮箱验证码
-            <input v-model="registration.code" inputmode="numeric" maxlength="6" required autocomplete="one-time-code" />
-          </label>
-          <label>邀请码（加入家庭时填写）
-            <input v-model="registration.invite" autocomplete="off" />
+        <template v-if="needsCaptcha()">
+          <div class="captcha-row">
+            <img v-if="captcha" :src="captcha.image" :data-challenge-id="captcha.id" alt="六位数字验证码" width="202" height="56" />
+            <button type="button" class="btn-quiet" :disabled="loading || captchaLoading" @click="refreshCaptcha">
+              {{ captchaLoading ? '加载中…' : '换一张验证码' }}
+            </button>
+          </div>
+          <p v-if="captchaError" class="err" role="alert">{{ captchaError }}</p>
+          <label>图形验证码
+            <input v-model="captchaAnswer" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required />
           </label>
         </template>
 
@@ -176,14 +167,14 @@ onBeforeUnmount(() => {
           </label>
         </template>
 
-        <button v-if="mode === 'login'" class="btn-quiet" type="button" @click="switchMode('recover')">忘记密码</button>
+        <button v-if="mode === 'login'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('recover')">忘记密码</button>
         <p v-if="error" class="err" role="alert">{{ error }}</p>
         <p v-if="notice" role="status">{{ notice }}</p>
-        <button class="btn-primary" type="submit" :disabled="loading">
-          {{ loading ? '处理中…' : mode === 'login' ? '登录' : mode === 'join' ? '提交加入申请' : registration.invite.trim() ? '注册并申请加入' : '注册' }}
+        <button class="btn-primary" type="submit" :disabled="loading || (needsCaptcha() && !captcha)">
+          {{ loading ? '处理中…' : mode === 'login' ? '登录' : mode === 'join' ? '提交加入申请' : '注册并登录' }}
         </button>
         <button v-if="mode === 'register'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('join')">
-          已有账号？用邀请码加入
+          旧版待审批账号？用邀请码加入
         </button>
         <button v-if="mode === 'join'" class="btn-quiet" type="button" :disabled="loading" @click="switchMode('register')">
           注册新账号
@@ -195,3 +186,9 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.captcha-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.captcha-row img { max-width: 100%; height: auto; border-radius: 8px; }
+.captcha-row .btn-quiet { width: auto; flex: 1 0 auto; }
+</style>

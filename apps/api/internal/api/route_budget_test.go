@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestRouteBudget freezes the V2 route surface: Register must wire at most 55
+// TestRouteBudget freezes the V2 route surface: Register must wire at most maxRoutes
 // routes (method + path). The count is recorded by the API's registration helper,
 // so this test fails as soon as a route is added without removing another.
 func TestRouteBudget(t *testing.T) {

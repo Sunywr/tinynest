@@ -4,6 +4,7 @@ import ChartsView from './views/ChartsView.vue'
 import AssetsView from './views/AssetsView.vue'
 import MeView from './views/MeView.vue'
 import SettingsView from './views/SettingsView.vue'
+import OnboardingView from './views/OnboardingView.vue'
 import LandingView from './views/LandingView.vue'
 
 /** Vue Router 4 with normal (hash-free) history mode. Protected routes are
@@ -14,6 +15,7 @@ export const router = createRouter({
   routes: [
     { path: '/', name: 'landing', component: LandingView, meta: { public: true } },
     { path: '/login', name: 'login', component: LandingView, meta: { public: true } },
+    { path: '/onboarding', name: 'onboarding', component: OnboardingView },
     { path: '/bills', name: 'bills', component: BillsView, meta: { nav: '账单' } },
     { path: '/charts', name: 'charts', component: ChartsView, meta: { nav: '图表' } },
     { path: '/assets', name: 'assets', component: AssetsView, meta: { nav: '资产' } },

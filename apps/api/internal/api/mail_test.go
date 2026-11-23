@@ -326,7 +326,6 @@ func TestMailAccessAcrossRolesAndCSRF(t *testing.T) {
 	ts, c, d := newTestServer(t)
 	defer ts.Close()
 	defer d.Close()
-	registrationAttempts = newLoginLimiter(LoginLimiterConfig{MaxFailures: 8}, time.Now)
 	anon := &testClient{t: t, base: ts.URL, hc: &http.Client{}}
 	for _, method := range []string{"GET", "POST"} {
 		if status, _ := anon.do(method, "/api/v1/site/mail", map[string]any{}); status != 401 {

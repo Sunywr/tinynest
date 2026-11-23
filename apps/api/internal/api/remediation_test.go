@@ -55,6 +55,7 @@ func newRemEnv(t *testing.T, opts Options) *remEnv {
 	a := New(database, opts)
 	mux := server.NewMux(dir, server.Options{Register: a.Register})
 	ts := httptest.NewServer(mux)
+	registerCaptchaTestServer(t, ts.URL, a)
 	t.Cleanup(func() {
 		ts.Close()
 		_ = database.Close()
@@ -109,6 +110,9 @@ func (c *remClient) call(method, path string, body any, extra map[string]string)
 	}
 	for k, v := range extra {
 		req.Header.Set(k, v)
+	}
+	if api, ok := captchaTestServers.Load(c.base); ok {
+		attachCaptchaForTest(c.t, req, api.(*API))
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
@@ -490,6 +494,14 @@ func TestSessionCookieIgnoresUntrustedForwardedProto(t *testing.T) {
 // serve issues a request with a controllable RemoteAddr so per-IP buckets can
 // be exercised without binding extra listeners.
 func (e *remEnv) serve(method, path string, body any, remoteAddr string, extra map[string]string) remResult {
+	return e.serveRequest(method, path, body, remoteAddr, extra, true)
+}
+
+func (e *remEnv) serveRaw(method, path string, body any, remoteAddr string, extra map[string]string) remResult {
+	return e.serveRequest(method, path, body, remoteAddr, extra, false)
+}
+
+func (e *remEnv) serveRequest(method, path string, body any, remoteAddr string, extra map[string]string, captcha bool) remResult {
 	e.t.Helper()
 	var reader *bytes.Reader
 	if body != nil {
@@ -508,6 +520,9 @@ func (e *remEnv) serve(method, path string, body any, remoteAddr string, extra m
 	}
 	for k, v := range extra {
 		req.Header.Set(k, v)
+	}
+	if captcha {
+		attachCaptchaForTest(e.t, req, e.a)
 	}
 	rec := httptest.NewRecorder()
 	e.mux.ServeHTTP(rec, req)

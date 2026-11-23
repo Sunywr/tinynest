@@ -41,12 +41,12 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'go run ./cmd/server',
+      command: 'go test ./internal/api -run ^TestBrowserFixtureServer$ -timeout 0',
       cwd: path.resolve(here, '../api'),
       env: {
         ...env,
         TINYNEST_LISTEN_ADDR: '127.0.0.1:8787',
-        TINYNEST_DATA_DIR: dataDir,
+        TINYNEST_E2E_FIXTURE_DIR: dataDir,
         TINYNEST_DB_PATH: path.join(dataDir, 'tinynest.sqlite3'),
         TINYNEST_SETUP_TOKEN: setupToken,
         TINYNEST_COOKIE_SECURE: 'false',

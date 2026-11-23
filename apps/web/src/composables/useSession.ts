@@ -1,7 +1,7 @@
 /** Single source of truth for the signed-in session, household and members. */
 
 import { computed, ref } from 'vue'
-import { api, setCSRFToken, type Household, type Me, type Member } from '../services/api'
+import { api, setCSRFToken, type CaptchaProof, type Household, type Me, type Member } from '../services/api'
 
 const me = ref<Me | null>(null)
 const household = ref<Household | null>(null)
@@ -11,7 +11,8 @@ const booted = ref(false)
 const sessionExpired = ref(false)
 const booting = ref(false)
 
-const canWrite = computed(() => authed.value && me.value?.role !== 'viewer')
+const hasHousehold = computed(() => Boolean(me.value?.household_id))
+const canWrite = computed(() => hasHousehold.value && me.value?.role !== 'viewer')
 const isAdmin = computed(() => me.value?.role === 'admin')
 const currentMember = computed(() => members.value.find(m => m.id === me.value?.member_id) ?? null)
 const hasMultipleMembers = computed(() => members.value.length > 1)
@@ -39,7 +40,7 @@ async function boot() {
     me.value = profile
     authed.value = true
     sessionExpired.value = false
-    await loadContext()
+    if (hasHousehold.value) await loadContext()
   } catch {
     clearSession()
   } finally {
@@ -48,14 +49,23 @@ async function boot() {
   }
 }
 
-async function login(username: string, password: string) {
-  await api.login(username, password)
+async function login(username: string, password: string, captcha: CaptchaProof) {
+  await api.login(username, password, captcha)
+  await loadSignedInSession()
+}
+
+async function register(username: string, password: string, captcha: CaptchaProof) {
+  await api.register(username, password, captcha)
+  await loadSignedInSession()
+}
+
+async function loadSignedInSession() {
   const profile = await api.me()
   setCSRFToken(profile.csrf_token || '')
   me.value = profile
   authed.value = true
   sessionExpired.value = false
-  await loadContext()
+  if (hasHousehold.value) await loadContext()
 }
 
 async function logout() {
@@ -75,6 +85,8 @@ function expire() {
 async function refreshMe() {
   const profile = await api.me()
   setCSRFToken(profile.csrf_token || '')
+  const joined = !hasHousehold.value && Boolean(profile.household_id)
+  if (joined) await loadContext()
   me.value = profile
 }
 
@@ -98,11 +110,13 @@ export function useSession() {
     booting,
     sessionExpired,
     canWrite,
+    hasHousehold,
     isAdmin,
     currentMember,
     hasMultipleMembers,
     boot,
     login,
+    register,
     logout,
     expire,
     refreshMe,

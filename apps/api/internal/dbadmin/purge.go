@@ -566,6 +566,8 @@ func assertIdentityKept(before, after Snapshot) error {
 func (snap Snapshot) Unclassified(all []string) []string {
 	known := map[string]bool{
 		"schema_migrations": true,
+		// Login cooldowns are security state. Preserve them during bookkeeping purge.
+		"auth_login_locks": true,
 		// SQLite's own bookkeeping table for AUTOINCREMENT; it holds no
 		// application data and does not exist on MySQL.
 		"sqlite_sequence": true,

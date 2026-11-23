@@ -14,10 +14,9 @@ import (
 
 var registrationName = regexp.MustCompile("^[a-z0-9][a-z0-9_.-]{2,39}$")
 var registrationWork = make(chan struct{}, 2)
-var registrationAttempts = newLoginLimiter(LoginLimiterConfig{MaxFailures: 8}, time.Now)
 
-func limitRegistration(w http.ResponseWriter, ip string) bool {
-	if blocked, retry := registrationAttempts.failure("registration", ip); blocked {
+func (a *API) limitRegistration(w http.ResponseWriter, ip string) bool {
+	if blocked, retry := a.registrationAttempts.failure("registration", ip); blocked {
 		w.Header().Set("Retry-After", retryAfterSeconds(retry))
 		writeErr(w, 429, "rate_limited", "操作太频繁，请稍后重试")
 		return false
@@ -26,18 +25,19 @@ func limitRegistration(w http.ResponseWriter, ip string) bool {
 }
 
 func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if !limitRegistration(w, a.clientIP(r)) {
-		return
-	}
 	var in struct {
 		Username string
 		Password string
+		Captcha  captchaProof
 		Email    string    `json:"email"`
 		Proof    mailProof `json:"proof"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	if decode(r, &in) != nil || !registrationName.MatchString(in.Username) || len(in.Password) < 12 || len(in.Password) > 256 {
-		writeErr(w, 400, "invalid_request", "登录名须为 3–40 位小写字母、数字或 ._-，密码至少 12 位")
+	if decode(r, &in) != nil || !registrationName.MatchString(in.Username) || utf8.RuneCountInString(in.Password) < 8 || len(in.Password) > 256 {
+		writeErr(w, 400, "invalid_request", "登录名须为 3–40 位小写字母、数字或 ._-，密码至少 8 位")
+		return
+	}
+	if !a.requireCaptcha(w, r, in.Captcha) || !a.limitRegistration(w, a.clientIP(r)) {
 		return
 	}
 	select {
@@ -45,6 +45,10 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-registrationWork }()
 	default:
 		writeErr(w, 429, "rate_limited", "请稍后重试")
+		return
+	}
+	if in.Email == "" && in.Proof == (mailProof{}) {
+		a.registerStandalone(w, r, in.Username, in.Password)
 		return
 	}
 	in.Email = normalizeEmail(in.Email)
@@ -147,7 +151,7 @@ func (a *API) handleBindExistingMember(w http.ResponseWriter, r *http.Request, p
 		}
 		return audit(ctx, tx, p, "bind_existing_member", "household_member", memberID, "{}")
 	})
-	if errors.Is(err, unavailable) {
+	if errors.Is(err, unavailable) || errors.Is(err, errConflict) {
 		writeErr(w, 409, "conflict", unavailable.Error())
 		return
 	}
@@ -234,12 +238,22 @@ func (a *API) handleIssueInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleApplyInvite(w http.ResponseWriter, r *http.Request) {
-	if !limitRegistration(w, a.clientIP(r)) {
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2048)
 	var in struct{ Username, Password, Code string }
-	if decode(r, &in) != nil || !registrationName.MatchString(in.Username) || len(in.Password) > 256 || len(in.Code) > 160 {
+	if decode(r, &in) != nil || len(in.Code) > 160 {
+		writeErr(w, 400, "invalid_request", "申请信息无效")
+		return
+	}
+	if in.Username == "" && in.Password == "" {
+		a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+			a.handleSignedInJoin(w, r, in.Code)
+		})(w, r)
+		return
+	}
+	if !a.limitRegistration(w, a.clientIP(r)) {
+		return
+	}
+	if !registrationName.MatchString(in.Username) || len(in.Password) > 256 {
 		writeErr(w, 400, "invalid_request", "申请信息无效")
 		return
 	}
@@ -320,6 +334,9 @@ func (a *API) handleDecideApplication(w http.ResponseWriter, r *http.Request) {
 		if !*in.Approve {
 			return audit(ctx, tx, p, "reject_join", "household_member", "", "{}")
 		}
+		if joined, err := a.approveStandalone(r, tx, p, id); err != nil || joined {
+			return err
+		}
 		var username, member, hash string
 		err = tx.QueryRowContext(ctx, `SELECT i.applicant,i.member_id,r.password_hash FROM household_invites i
   JOIN pending_registrations r ON r.username=i.applicant
@@ -351,7 +368,7 @@ func (a *API) handleDecideApplication(w http.ResponseWriter, r *http.Request) {
 		}
 		return audit(ctx, tx, p, "approve_join", "household_member", member, "{}")
 	})
-	if errors.Is(err, unavailable) {
+	if errors.Is(err, unavailable) || errors.Is(err, errConflict) {
 		writeErr(w, 409, "conflict", unavailable.Error())
 		return
 	}

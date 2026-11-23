@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { fillCaptcha, captchaProof } from './captcha-fixture'
 
 /**
  * V2 bookkeeping closure suite — written against the frozen API contract in
@@ -38,7 +39,7 @@ async function ensureInitialized(page: Page) {
 /** Sign in through the real API and return the CSRF token for write helpers. */
 async function signIn(page: Page): Promise<string> {
   await ensureInitialized(page)
-  const res = await page.request.post('/api/v1/auth/session', { data: { username: ADMIN, password: PASSWORD } })
+  const res = await page.request.post('/api/v1/auth/session', { data: { username: ADMIN, password: PASSWORD, captcha: await captchaProof(page.request) } })
   expect(res.ok()).toBeTruthy()
   const body = await res.json()
   return String(body.csrf_token || '')
@@ -52,6 +53,7 @@ async function signInUi(page: Page) {
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('用户名').fill(ADMIN)
   await dialog.getByLabel('密码').fill(PASSWORD)
+  await fillCaptcha(page)
   await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
 }
 
@@ -236,6 +238,7 @@ test.describe('A 登录与会话', () => {
     const dialog = page.getByRole('dialog', { name: '欢迎回家' })
     await dialog.getByLabel('用户名').fill('does-not-exist')
     await dialog.getByLabel('密码').fill('wrong-password-123')
+    await fillCaptcha(page)
     await dialog.locator('form').getByRole('button', { name: '登录', exact: true }).click()
     await expect(page.getByRole('alert')).toContainText('用户名或密码错误')
     await expect(page.getByRole('alert')).not.toContainText('不存在')
@@ -962,15 +965,23 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(page.getByRole('dialog', { name: '审计日志' })).toBeVisible()
   })
 
-  test('G05 邀请链接会带入邀请码并支持已有账号加入', async ({ page }) => {
+  test('G05 邀请链接允许先注册登录，验证前保留邀请码并拦截家庭页面', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
     const code = `invite-${uid('code')}`
     await page.goto(`/login?invite=${encodeURIComponent(code)}`)
     const dialog = page.getByRole('dialog', { name: '欢迎回家' })
-    await expect(dialog).toBeVisible()
-    await expect(dialog.getByLabel('邀请码（加入家庭时填写）')).toHaveValue(code)
-    await dialog.getByRole('button', { name: '已有账号？用邀请码加入' }).click()
-    await expect(page.getByRole('dialog', { name: '加入家庭' })).toBeVisible()
-    await expect(page.getByLabel('邀请码', { exact: true })).toHaveValue(code)
+    await expect(dialog.getByLabel('邮箱验证码')).toHaveCount(0)
+    await dialog.getByLabel('用户名').fill(uid('invitee').toLowerCase())
+    await dialog.getByLabel('密码').fill('invitee-test-password')
+    await fillCaptcha(page)
+    await dialog.getByRole('button', { name: '注册并登录' }).click()
+    await expect(page.getByRole('heading', { name: '验证邮箱' })).toBeVisible()
+    expect(new URL(page.url()).searchParams.get('invite')).toBe(code)
+    await page.reload()
+    await expect(page.getByRole('heading', { name: '验证邮箱' })).toBeVisible()
+    await page.goto('/bills')
+    await expect(page).toHaveURL(/\/onboarding$/)
+    await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCount(0)
   })
 
   test('G06 管理员可把已有账号绑定到未绑定成员', async ({ page }) => {
@@ -999,11 +1010,13 @@ test.describe('H 角色与视口', () => {
     await signIn(page)
     await page.route('**/api/v1/auth/me', async route => {
       if (route.request().method() !== 'GET') return route.fallback()
+      const response = await route.fetch()
+      const me = await response.json()
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          username: ADMIN,
+          ...me,
           member_id: 'member-viewer',
           member_name: '只读成员',
           role: 'viewer',
@@ -1146,7 +1159,7 @@ test.describe('I 分类配色与金额输入', () => {
     const grid = sheet.getByRole('listbox', { name: '选择分类' })
     // The grid shows one kind at a time: 16 seeded expense categories.
     const expenseOptions = grid.getByRole('option')
-    expect(await expenseOptions.count()).toBeGreaterThanOrEqual(16)
+    await expect(expenseOptions.nth(15)).toBeVisible()
     for (let index = 0; index < 3; index += 1) {
       await expect(expenseOptions.nth(index).locator('.category-tile svg')).toBeVisible()
       await expect(expenseOptions.nth(index).locator('.tile-dot')).toHaveCount(0)

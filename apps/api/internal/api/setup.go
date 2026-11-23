@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"hash/fnv"
 	"net/http"
 	"strings"
 	"time"
@@ -15,15 +16,16 @@ import (
 
 // Register wires every V2 endpoint onto the HTTP mux.
 //
-// The route budget is frozen at 55 (method + path). The list below is grouped
+// The route budget is frozen at 57 (method + path). The list below is grouped
 // by module so a reviewer can compare it with docs/plans/v2-bookkeeping-module-spec.md §5:
-//   - identity, household, admin, mail: 33 routes (unchanged V1 behaviour)
+//   - identity, household, admin, mail: 35 routes
 //   - bookkeeping: 22 routes (4 categories, 7 accounts, 5 transactions, 4 stats, 2 budgets)
 func (a *API) Register(mux *http.ServeMux) {
 	a.routeCount = 0
 
 	// --- setup & authentication (kept) ---
 	a.register(mux, "POST /api/v1/setup", a.handleSetup)
+	a.register(mux, "GET /api/v1/auth/captcha", a.handleCaptcha)
 	a.register(mux, "POST /api/v1/auth/session", a.handleLogin)
 	a.register(mux, "POST /api/v1/auth/register", a.handleRegister)
 	a.register(mux, "POST /api/v1/auth/join", a.handleApplyInvite)
@@ -37,6 +39,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.adminRoute(mux, "GET /api/v1/admin/join-applications", a.handleListApplications)
 	a.adminRoute(mux, "POST /api/v1/admin/join-applications/{id}", a.handleDecideApplication)
 	a.route(mux, "GET /api/v1/household/current", a.handleCurrentHousehold)
+	a.register(mux, "POST /api/v1/household/current", a.requireAuth(a.handleCreateHousehold))
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
 	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)
 	a.route(mux, "DELETE /api/v1/household/members/{id}", a.handleDeleteMember)
@@ -154,17 +157,16 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	hhID, userID := newID("hh"), newID("usr")
 	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		var count int
-		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM households`).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM households WHERE id<>?`, onboardingHousehold).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
 			return errConflict
 		}
-		// Conditional insert keeps the "only ever one household" invariant inside
-		// the database transaction, not in an application-level pre-check alone.
+		// Bootstrap applies only before any real household exists.
 		result, err := tx.ExecContext(r.Context(),
-			`INSERT INTO households(id,name) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM households)`,
-			hhID, in.HouseholdName)
+			`INSERT INTO households(id,name) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM households WHERE id<>?)`,
+			hhID, in.HouseholdName, onboardingHousehold)
 		if err != nil {
 			return err
 		}
@@ -190,40 +192,90 @@ func (a *API) handleSetup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"household_id": hhID, "user_id": userID, "status": "initialized"})
 }
 
+var loginWork = make(chan struct{}, 4)
+
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username string
+		Password string
+		Captcha  captchaProof
 	}
-	if err := decode(r, &in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 2048)
+	if err := decode(r, &in); err != nil || len(in.Username) > 191 || len(in.Password) > 256 {
 		writeErr(w, 400, "invalid_request", "请求格式不正确")
 		return
 	}
-	// Throttle BEFORE touching the password hash: an unbounded stream of
-	// Argon2id verifications is itself a denial-of-service vector.
-	principalName := strings.ToLower(strings.TrimSpace(in.Username))
-	ip := a.clientIP(r)
-	if allowed, retry := a.limiter.allow(principalName, ip); !allowed {
-		w.Header().Set("Retry-After", retryAfterSeconds(retry))
-		writeErr(w, http.StatusTooManyRequests, "rate_limited", "登录尝试过于频繁，请稍后重试")
+	if !a.requireCaptcha(w, r, in.Captcha) {
 		return
 	}
-	var userID, hhID, hash string
+	principalName := strings.ToLower(strings.TrimSpace(in.Username))
+	ip := a.clientIP(r)
+	key := fnv.New32a()
+	_, _ = key.Write([]byte(principalName))
+	shard := &a.loginShards[key.Sum32()%uint32(len(a.loginShards))]
+	shard.Lock()
+	defer shard.Unlock()
+
+	var userID, hash string
 	err := a.DB.QueryRowContext(r.Context(),
-		`SELECT id, household_id, password_hash FROM users WHERE username=? AND status='active'`, in.Username).
-		Scan(&userID, &hhID, &hash)
-	if err != nil || !auth.VerifyPassword(hash, in.Password) {
-		if blocked, retry := a.limiter.failure(principalName, ip); blocked {
-			w.Header().Set("Retry-After", retryAfterSeconds(retry))
-			writeErr(w, http.StatusTooManyRequests, "rate_limited", "登录尝试过于频繁，请稍后重试")
+		`SELECT id,password_hash FROM users WHERE username=? AND status='active'`, in.Username).Scan(&userID, &hash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		internalErr(w, err)
+		return
+	}
+	now := a.now()
+	var state accountLoginState
+	if userID != "" {
+		state, err = a.loginState(r, userID, now)
+		if err != nil {
+			internalErr(w, err)
 			return
+		}
+		if state.lockedUntil > now.Unix() {
+			writeAccountLocked(w, state, now)
+			return
+		}
+	}
+	if allowed, retry := a.limiter.allow(principalName, ip); !allowed {
+		w.Header().Set("Retry-After", retryAfterSeconds(retry))
+		writeErr(w, 429, "rate_limited", "登录尝试过于频繁，请稍后重试")
+		return
+	}
+	select {
+	case loginWork <- struct{}{}:
+		defer func() { <-loginWork }()
+	default:
+		writeErr(w, 429, "rate_limited", "登录请求过多，请稍后重试")
+		return
+	}
+	if userID == "" || !auth.VerifyPassword(hash, in.Password) {
+		a.limiter.failure(principalName, ip)
+		if userID != "" {
+			state, err = a.recordAccountFailure(r, userID, state, now)
+			if err != nil {
+				internalErr(w, err)
+				return
+			}
+			if state.lockedUntil > now.Unix() {
+				a.limiter.reset(principalName, ip)
+				writeAccountLocked(w, state, now)
+				return
+			}
 		}
 		writeErr(w, 401, "unauthorized", "用户名或密码错误")
 		return
 	}
-	// A successful authentication clears the per-principal failure counter, but
-	// never the IP-wide bucket (see loginLimiter.reset).
+	if state.failures > 0 {
+		if _, err := a.DB.ExecContext(r.Context(), `UPDATE auth_login_locks SET failures=0 WHERE user_id=?`, userID); err != nil {
+			internalErr(w, err)
+			return
+		}
+	}
 	a.limiter.reset(principalName, ip)
+	a.issueSession(w, r, http.StatusOK, in.Username, userID, hash)
+}
+
+func (a *API) issueSession(w http.ResponseWriter, r *http.Request, status int, username, userID, hash string) {
 	raw, tokenHash, err := auth.NewToken()
 	if err != nil {
 		internalErr(w, err)
@@ -260,7 +312,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:  7 * 24 * 60 * 60,
 		Expires: a.now().UTC().Add(7 * 24 * time.Hour),
 	})
-	writeJSON(w, 200, map[string]string{"username": in.Username, "csrf_token": csrfRaw, "status": "ok"})
+	writeJSON(w, status, map[string]string{"username": username, "csrf_token": csrfRaw, "status": "ok"})
 }
 
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -282,9 +334,13 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
+	householdID := p.HouseholdID
+	if householdID == onboardingHousehold {
+		householdID = ""
+	}
 	out := map[string]any{
 		"member_id": memberID, "member_name": memberName,
-		"user_id": p.UserID, "household_id": p.HouseholdID,
+		"user_id": p.UserID, "household_id": householdID,
 		"username": p.Username, "csrf_token": p.CSRFToken, "role": p.Role,
 	}
 	var verified int
@@ -293,6 +349,15 @@ func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["email_verified"] = verified == 1
+	if householdID == "" && verified == 1 {
+		var pending bool
+		if err := a.DB.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM household_invites
+			WHERE applicant=? AND decided_at IS NULL AND expires_at>?)`, p.Username, a.nowUTC()).Scan(&pending); err != nil {
+			internalErr(w, err)
+			return
+		}
+		out["join_pending"] = pending
+	}
 	if email.Valid {
 		out["email"] = email.String
 	}

@@ -9,7 +9,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 // User profile self-service and admin user management. Names live on the bound
@@ -39,7 +38,6 @@ func TestUserSelfServiceProfileAndPassword(t *testing.T) {
 	ts, admin, database := newTestServer(t)
 	defer ts.Close()
 	defer database.Close()
-	registrationAttempts = newLoginLimiter(LoginLimiterConfig{MaxFailures: 8}, time.Now)
 	member := newMemberClient(t, ts, admin, "member-self", "member-password-12")
 
 	member.mustOK("PATCH", "/api/v1/auth/me/profile", map[string]any{
@@ -131,7 +129,6 @@ func TestViewerSelfServiceAllowed(t *testing.T) {
 	ts, admin, database := newTestServer(t)
 	defer ts.Close()
 	defer database.Close()
-	registrationAttempts = newLoginLimiter(LoginLimiterConfig{MaxFailures: 8}, time.Now)
 	viewer := newMemberClient(t, ts, admin, "viewer-self", "viewer-password-12")
 	userID := viewer.mustOK("GET", "/api/v1/auth/me", nil)["user_id"].(string)
 	admin.mustOK("PATCH", "/api/v1/admin/users/"+userID+"/role", map[string]string{"role": "viewer"})
@@ -153,7 +150,6 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 	ts, admin, database := newTestServer(t)
 	defer ts.Close()
 	defer database.Close()
-	registrationAttempts = newLoginLimiter(LoginLimiterConfig{MaxFailures: 8}, time.Now)
 	m1 := newMemberClient(t, ts, admin, "managed-one", "managed-password-1")
 	m2 := newMemberClient(t, ts, admin, "managed-two", "managed-password-2")
 	m2id := m2.mustOK("GET", "/api/v1/auth/me", nil)["user_id"].(string)
@@ -179,7 +175,7 @@ func TestAdminManagesUserProfilesAndDeletion(t *testing.T) {
 	accounts := v012Rows(t, m2.mustOK("GET", "/api/v1/accounts", nil))
 	m2.mustOK("POST", "/api/v1/transactions", map[string]any{
 		"type": "expense", "amount_minor": 1200, "occurred_on": "2026-11-10",
-		"account_id": accounts[0]["id"],
+		"account_id":  accounts[0]["id"],
 		"category_id": m2.firstCategory("expense"),
 		"note":        "删除前记录",
 	})
