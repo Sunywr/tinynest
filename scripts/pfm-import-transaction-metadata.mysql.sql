@@ -20,7 +20,8 @@ JOIN pfm.account_account s ON s.id=CAST(JSON_UNQUOTE(JSON_EXTRACT(
 JOIN pfm.auth_user p ON p.id=s.owner_id_id
 JOIN users u ON u.username=CASE p.username WHEN '孙意蔚然' THEN 'sunywr' WHEN '刘洁' THEN 'liuj' END
     AND u.household_id=t.household_id
-JOIN household_user_members m ON m.user_id=u.id AND m.member_id=t.member_id
+JOIN accounts destination ON destination.id=t.to_account_id AND destination.household_id=t.household_id
+JOIN household_user_members m ON m.user_id=u.id AND m.member_id=destination.owner_member_id
 WHERE a.action='pfm_import' AND a.entity='transaction'
   AND JSON_TYPE(JSON_EXTRACT(IF(JSON_VALID(a.payload_json),a.payload_json,'{}'),'$.paired_id'))='INTEGER';
 

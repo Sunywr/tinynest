@@ -34,9 +34,10 @@ LEFT JOIN (
   SELECT DISTINCT id,transfer_id,expenditure,owner_id_id,account_date
   FROM account_account WHERE transfer_id IS NOT NULL AND expenditure>0
 ) e ON a.income>0 AND e.transfer_id=a.transfer_id
-  AND e.expenditure=a.income AND e.owner_id_id=a.owner_id_id AND DATE(e.account_date)=DATE(a.account_date)
+  AND e.expenditure=a.income AND DATE(e.account_date)=DATE(a.account_date)
 LEFT JOIN tinynest_v2.transactions paired
   ON paired.id=CONVERT(CONCAT('pfm-tx-',e.id) USING utf8mb4) COLLATE utf8mb4_0900_bin
   AND paired.type='transfer' AND paired.amount_minor=ROUND(a.income*100)
+  AND paired.to_account_id=CONVERT(CONCAT('pfm-cash-',a.cash_account_id) USING utf8mb4) COLLATE utf8mb4_0900_bin
 WHERE u.username IN ('孙意蔚然','刘洁')
 ORDER BY a.id;

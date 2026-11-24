@@ -3,12 +3,16 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { Ellipsis } from 'lucide-vue-next'
 import CategoryTile from './CategoryTile.vue'
 import { dateLabel, formatMinor, weekdayLabel } from '../services/format'
+import { useSession } from '../composables/useSession'
 import type { Transaction } from '../services/api'
 
 const props = withDefaults(defineProps<{
   items: Transaction[]
   canWrite?: boolean
 }>(), { canWrite: true })
+
+const session = useSession()
+const memberNames = computed(() => new Map(session.members.value.map(member => [member.id, member.name])))
 
 const emit = defineEmits<{
   edit: [transaction: Transaction]
@@ -45,7 +49,8 @@ function title(tx: Transaction): string {
 }
 function subtitle(tx: Transaction): string {
   const note = tx.note?.trim() || tx.source_metadata?.remarks.join(' · ') || tx.source_metadata?.descriptions.join(' · ') || ''
-  return note === title(tx) ? '' : note
+  const member = tx.member_id ? memberNames.value.get(tx.member_id) : undefined
+  return [member, note === title(tx) ? '' : note].filter(Boolean).join(' · ')
 }
 function emoji(tx: Transaction): string {
   return tx.category_emoji || (tx.type === 'income' ? '💰' : tx.type === 'transfer' ? '🔁' : '📝')

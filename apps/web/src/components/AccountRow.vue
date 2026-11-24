@@ -12,13 +12,11 @@ const cycleText = computed(() => {
   if (props.account.statement_day == null || props.account.due_day == null) return '未设置账单日'
   return `账单日 ${props.account.statement_day} 日 · 还款日 ${props.account.due_day} 日`
 })
-const balance = computed(() => {
-  const raw = props.account.balance_minor ?? 0
-  return isCredit.value ? -Math.abs(raw) : raw
-})
+const balance = computed(() => props.account.balance_minor ?? 0)
 const balanceText = computed(() => {
   if (!isCredit.value) return formatMinor(balance.value)
-  return balance.value === 0 ? formatMinor(0) : `欠 ${formatMinor(Math.abs(balance.value))}`
+  if (balance.value < 0) return `欠 ${formatMinor(-balance.value)}`
+  return balance.value > 0 ? `溢缴 ${formatMinor(balance.value)}` : formatMinor(0)
 })
 </script>
 
@@ -31,11 +29,12 @@ const balanceText = computed(() => {
       <span class="account-name">{{ account.name }}</span>
       <span class="account-sub">
         {{ isCredit ? '信用卡 · ' + cycleText : '现金账户' }}
+        <em v-if="account.status === 'disabled'"> · 已停用</em>
         <em v-if="memberName"> · {{ memberName }}</em>
         <em v-else-if="account.note"> · {{ account.note }}</em>
       </span>
     </span>
-    <span class="account-balance" :class="{ negative: isCredit && balance !== 0 }">{{ balanceText }}</span>
+    <span class="account-balance" :class="{ negative: isCredit && balance < 0 }">{{ balanceText }}</span>
   </button>
 </template>
 
