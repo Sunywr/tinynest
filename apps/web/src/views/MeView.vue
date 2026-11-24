@@ -4,7 +4,6 @@ import { useRouter } from 'vue-router'
 import { ChevronRight } from 'lucide-vue-next'
 import AdminUsers from '../components/AdminUsers.vue'
 import AuditLogs from '../components/AuditLogs.vue'
-import BudgetEditor from '../components/BudgetEditor.vue'
 import CategoryEditor from '../components/CategoryEditor.vue'
 import ConfirmSheet from '../components/ConfirmSheet.vue'
 import ExportMenu from '../components/ExportMenu.vue'
@@ -12,7 +11,7 @@ import MembersEditor from '../components/MembersEditor.vue'
 import UserProfileDialog from '../components/UserProfileDialog.vue'
 import { useSession } from '../composables/useSession'
 import { useToast } from '../composables/useToast'
-import { monthKey, monthLabel, monthRange } from '../services/format'
+import { monthKey, monthRange } from '../services/format'
 import { api, type UserProfile } from '../services/api'
 
 const router = useRouter()
@@ -22,7 +21,6 @@ const { toast } = useToast()
 const profileOpen = ref(false)
 const membersOpen = ref(false)
 const categoryOpen = ref(false)
-const budgetOpen = ref(false)
 const exportOpen = ref(false)
 const usersOpen = ref(false)
 const auditOpen = ref(false)
@@ -141,8 +139,8 @@ async function profileSaved() {
       <button v-if="canWrite" type="button" class="me-menu-item" @click="categoryOpen = true">
         <span>分类管理</span><span class="me-menu-meta">改名 · 图标 · 排序 <ChevronRight :size="16" /></span>
       </button>
-      <button v-if="canWrite" type="button" class="me-menu-item" @click="budgetOpen = true">
-        <span>预算设置</span><span class="me-menu-meta">{{ monthLabel(month) }} <ChevronRight :size="16" /></span>
+      <button type="button" class="me-menu-item" @click="router.push('/budgets')">
+        <span>预算设置</span><ChevronRight :size="16" />
       </button>
       <button type="button" class="me-menu-item" @click="exportOpen = true">
         <span>导出账单</span><span class="me-menu-meta">xlsx <ChevronRight :size="16" /></span>
@@ -185,7 +183,6 @@ async function profileSaved() {
       @saved="profileSaved" />
     <MembersEditor v-if="membersOpen" @close="membersOpen = false" />
     <CategoryEditor v-if="categoryOpen" @close="categoryOpen = false" />
-    <BudgetEditor v-if="budgetOpen" :month="month" @close="budgetOpen = false" @saved="budgetOpen = false" />
     <ExportMenu v-if="exportOpen" :from="from" :to="to" @close="exportOpen = false" />
     <AdminUsers v-if="usersOpen" @close="usersOpen = false" />
     <AuditLogs v-if="auditOpen" @close="auditOpen = false" />

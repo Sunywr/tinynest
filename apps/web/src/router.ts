@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import BudgetsView from './views/BudgetsView.vue'
 import BillsView from './views/BillsView.vue'
 import ChartsView from './views/ChartsView.vue'
 import AssetsView from './views/AssetsView.vue'
@@ -17,6 +18,7 @@ export const router = createRouter({
     { path: '/login', name: 'login', component: LandingView, meta: { public: true } },
     { path: '/onboarding', name: 'onboarding', component: OnboardingView },
     { path: '/bills', name: 'bills', component: BillsView, meta: { nav: '账单' } },
+    { path: '/budgets', name: 'budgets', component: BudgetsView, meta: { nav: '预算' } },
     { path: '/charts', name: 'charts', component: ChartsView, meta: { nav: '图表' } },
     { path: '/assets', name: 'assets', component: AssetsView, meta: { nav: '资产' } },
     { path: '/me', name: 'me', component: MeView, meta: { nav: '我的' } },

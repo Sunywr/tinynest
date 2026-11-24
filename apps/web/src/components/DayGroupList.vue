@@ -41,11 +41,11 @@ const groups = computed<Group[]>(() => {
 
 function title(tx: Transaction): string {
   if (tx.type === 'transfer') return `${tx.account_name || '账户'} → ${tx.to_account_name || '账户'}`
-  return tx.note?.trim() || tx.category_name || (tx.type === 'income' ? '收入' : '支出')
+  return tx.category_name || (tx.type === 'income' ? '收入' : '支出')
 }
 function subtitle(tx: Transaction): string {
-  if (tx.type === 'transfer') return tx.note?.trim() || '转账'
-  return tx.category_name || ''
+  const note = tx.note?.trim() || ''
+  return note === title(tx) ? '' : note
 }
 function emoji(tx: Transaction): string {
   return tx.category_emoji || (tx.type === 'income' ? '💰' : tx.type === 'transfer' ? '🔁' : '📝')
@@ -66,7 +66,7 @@ function amountText(tx: Transaction): string {
   return `-${formatMinor(tx.amount_minor)}`
 }
 function rowLabel(tx: Transaction): string {
-  return `${dateLabel(tx.occurred_on)} ${title(tx)}，${amountText(tx)}`
+  return `${dateLabel(tx.occurred_on)} ${title(tx)}${subtitle(tx) ? `，${subtitle(tx)}` : ''}，${amountText(tx)}`
 }
 
 // Long-press deletion: touch/pointer users without a visible overflow button still
@@ -117,11 +117,12 @@ onBeforeUnmount(cancelPress)
             <CategoryTile class="tx-glyph" :icon="emoji(tx)" :color="tx.category_color" :index="txIndex(tx)" :size="38" />
             <span class="tx-body">
               <span class="tx-name">{{ title(tx) }}</span>
-              <span class="tx-category">{{ subtitle(tx) }}</span>
+                <span v-if="subtitle(tx)" class="tx-category" :title="subtitle(tx)">{{ subtitle(tx) }}</span>
+                <span v-if="tx.budget_name" class="tx-category">{{ tx.budget_name }}</span>
             </span>
             <span class="tx-amount" :class="amountClass(tx)">{{ amountText(tx) }}</span>
           </button>
-          <button v-if="canWrite" type="button" class="tx-more" :aria-label="`更多操作：${title(tx)}`"
+          <button v-if="canWrite" type="button" class="tx-more" :aria-label="`更多操作：${subtitle(tx) || title(tx)}`"
             @click.stop="emit('remove', tx)">
             <Ellipsis :size="18" aria-hidden="true" />
           </button>
@@ -168,8 +169,8 @@ onBeforeUnmount(cancelPress)
 .tx-emoji { font-size: 19px; line-height: 1; }
 .tx-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .tx-name { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tx-category { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tx-amount { font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tx-category { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tx-amount { font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tx-amount.income { color: #5d836c; }
 .tx-amount.transfer { color: var(--muted); }
 .tx-more { flex: none; width: var(--touch-min); height: var(--touch-min); display: grid; place-items: center; border: 0; border-radius: 12px; background: transparent; color: var(--muted); }

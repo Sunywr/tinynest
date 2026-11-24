@@ -92,6 +92,9 @@ func (a *API) registerBookkeeping(mux *http.ServeMux) {
 	a.route(mux, "GET /api/v1/stats/monthly", a.handleStatsMonthly)
 
 	// Budgets
+	a.route(mux, "GET /api/v1/project-budgets", a.handleListProjectBudgets)
+	a.route(mux, "POST /api/v1/project-budgets", a.handleSaveProjectBudget)
+	a.route(mux, "PUT /api/v1/project-budgets/{id}", a.handleSaveProjectBudget)
 	a.route(mux, "GET /api/v1/budgets/{month}", a.handleGetBudget)
 	a.route(mux, "PUT /api/v1/budgets/{month}", a.handlePutBudget)
 }

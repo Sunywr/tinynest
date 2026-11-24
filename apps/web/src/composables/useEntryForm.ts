@@ -3,7 +3,7 @@
  *  focus management and keyboard behaviour. Amounts are integer minor units. */
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { api, idempotencyKey, type Account, type Category, type Transaction, type TransactionInput, type TransactionType } from '../services/api'
+import { api, idempotencyKey, type Account, type Category, type ProjectBudget, type Transaction, type TransactionInput, type TransactionType } from '../services/api'
 import { groupDigits, parseMinor, today } from '../services/format'
 import { usePreferences } from './usePreferences'
 import { useSession } from './useSession'
@@ -28,6 +28,9 @@ export function useEntryForm(options: EntryFormOptions) {
   const toAccountId = ref('')
   const categoryId = ref('')
   const memberId = ref('')
+  const budgetId = ref('')
+  const projectBudgets = ref<ProjectBudget[]>([])
+  const budgetOptions = computed(() => [{ id: '', name: '仅计入月度支出' }, ...projectBudgets.value])
   const categories = ref<Category[]>([])
   const accounts = ref<Account[]>([])
   const loading = ref(true)
@@ -43,7 +46,14 @@ export function useEntryForm(options: EntryFormOptions) {
   const expenseCategories = computed(() => categories.value.filter(c => c.kind === 'expense'))
   const incomeCategories = computed(() => categories.value.filter(c => c.kind === 'income'))
   const activeCategories = computed(() => (type.value === 'income' ? incomeCategories.value : expenseCategories.value))
-  const accountOptions = computed(() => activeAccounts.value.map(a => ({ id: a.id, name: a.name, hint: a.kind === 'credit' ? '信用卡' : '现金' })))
+  const accountOptions = computed(() => {
+    const options = activeAccounts.value.map(a => ({ id: a.id, name: a.name, hint: a.kind === 'credit' ? '信用卡' : '现金' }))
+    const original = editing.value
+    if (original?.account_id && !options.some(a => a.id === original.account_id)) {
+      options.push({ id: original.account_id, name: original.account_name || '原账户', hint: '历史账户' })
+    }
+    return options
+  })
   const memberOptions = computed(() => session.members.value.filter(m => m.status === 'active').map(m => ({ id: m.id, name: m.name })))
   const accountMissing = computed(() => !loading.value && activeAccounts.value.length === 0)
   const categoryMissing = computed(() => !loading.value && type.value !== 'transfer' && activeCategories.value.length === 0)
@@ -51,7 +61,7 @@ export function useEntryForm(options: EntryFormOptions) {
   const transferInvalid = computed(() => type.value === 'transfer' && (!accountId.value || !toAccountId.value || accountId.value === toAccountId.value))
   const canSave = computed(() => !saving.value && !loading.value && !offline.value && !amountInvalid.value && !transferInvalid.value
     && (type.value === 'transfer' ? true : !!categoryId.value && !!accountId.value))
-  const dirty = computed(() => amount.value !== '0' || note.value.trim() !== '')
+  const dirty = computed(() => amount.value !== '0' || note.value.trim() !== '' || budgetId.value !== '')
 
   function ensureDefaults(forceCategory = false) {
     if (activeAccounts.value.length && !activeAccounts.value.some(a => a.id === accountId.value)) {
@@ -81,6 +91,8 @@ export function useEntryForm(options: EntryFormOptions) {
     accountId.value = tx.account_id || ''
     categoryId.value = tx.category_id || ''
     memberId.value = tx.member_id || ''
+    budgetId.value = tx.budget_id || ''
+    toAccountId.value = tx.to_account_id || ''
   }
 
   function initialiseNew() {
@@ -97,12 +109,12 @@ export function useEntryForm(options: EntryFormOptions) {
     loading.value = true
     error.value = ''
     try {
-      const [categoryResult, accountResult] = await Promise.all([api.categories(), api.accounts()])
+      const [categoryResult, accountResult, budgetResult] = await Promise.all([api.categories(), api.accounts(), api.projectBudgets()])
+      projectBudgets.value = budgetResult.items
       categories.value = categoryResult.items
       accounts.value = accountResult.items
       if (editing.value) initialiseFromTransaction(editing.value)
       else initialiseNew()
-      ensureDefaults()
     } catch (e) {
       error.value = e instanceof Error ? e.message : '加载失败，请重试'
     } finally {
@@ -183,7 +195,7 @@ export function useEntryForm(options: EntryFormOptions) {
       type: type.value,
       amount_minor: amountMinor.value as number,
       occurred_on: date.value,
-      note: note.value.trim() || null,
+      note: note.value.trim(),
       member_id: memberId.value || null,
     }
     if (type.value === 'transfer') {
@@ -193,10 +205,16 @@ export function useEntryForm(options: EntryFormOptions) {
       body.category_id = categoryId.value
       body.account_id = accountId.value
     }
+    if (type.value === 'expense') body.budget_id = budgetId.value
+    const original = editing.value
+    const budgetOnly = original?.type === 'expense' && original.amount_minor === body.amount_minor
+      && original.occurred_on === body.occurred_on && (original.note?.trim() || '') === body.note
+      && (original.member_id || null) === body.member_id && original.category_id === body.category_id
+      && original.account_id === body.account_id && (original.budget_id || '') !== budgetId.value
     try {
       const key = idempotencyKey()
       const result = isEdit.value
-        ? await api.correctTransaction(editing.value!.id, body, key)
+        ? await api.correctTransaction(editing.value!.id, budgetOnly ? { budget_id: budgetId.value } : body, key)
         : await api.createTransaction(body, key)
       prefs.rememberType(type.value)
       if (type.value !== 'transfer') prefs.rememberCategory(categoryId.value)
@@ -230,7 +248,7 @@ export function useEntryForm(options: EntryFormOptions) {
   })
 
   return {
-    session, type, amount, note, date, accountId, toAccountId, categoryId, memberId,
+    session, type, amount, note, date, accountId, toAccountId, categoryId, memberId, budgetId, budgetOptions,
     categories, accounts, loading, saving, error, offline, isEdit, amountMinor, display,
     activeCategories, accountOptions, memberOptions, accountMissing, categoryMissing, canSave, dirty,
     load, reloadCategories, selectType, press, backspace, setAmount, save,

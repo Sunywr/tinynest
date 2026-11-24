@@ -267,6 +267,9 @@ export type AccountsOverview = {
 export type AccountsWithInvestments = { items: Account[]; investments: InvestmentOverview }
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type Transaction = {
+  budget_id?: string | null
+  budget_name?: string | null
+  to_account_id?: string | null
   id: string
   type: TransactionType
   amount_minor: number
@@ -285,6 +288,7 @@ export type Transaction = {
 }
 export type TransactionList = { items: Transaction[]; next_cursor: string | null }
 export type TransactionInput = {
+  budget_id?: string
   type: TransactionType
   amount_minor: number
   occurred_on: string
@@ -298,6 +302,7 @@ export type Summary = { from: string; to: string; income_minor: number; expense_
 export type CategoryStat = { category_id: string; name: string; emoji: string; color?: string; amount_minor: number; share_bp: number }
 export type DailyStat = { day: string; expense_minor: number; income_minor: number }
 export type MonthlyStat = { month: string; income_minor: number; expense_minor: number }
+export type ProjectBudget = { id: string; name: string; amount_minor: number; spent_minor: number }
 export type Budget = { month: string; amount_minor: number | null; spent_minor?: number }
 export type Invitation = { id: string; member_name: string; target_username: string; expires_at: string }
 export type JoinApplication = { id: string; username: string; member_name: string }
@@ -410,7 +415,7 @@ export const api = {
   transactions: (params: TransactionQuery = {}) => get<TransactionList>(`/transactions${query(params)}`),
   transaction: (id: string) => get<Transaction>(`/transactions/${encodeURIComponent(id)}`),
   createTransaction: (body: TransactionInput, key: string) => post<Transaction>('/transactions', body, { 'Idempotency-Key': key }),
-  correctTransaction: (id: string, body: TransactionInput, key: string) =>
+  correctTransaction: (id: string, body: Partial<TransactionInput>, key: string) =>
     patch<Transaction>(`/transactions/${encodeURIComponent(id)}`, body, { 'Idempotency-Key': key }),
   deleteTransaction: (id: string) => del<{ id: string; status: string }>(`/transactions/${encodeURIComponent(id)}`),
 
@@ -420,6 +425,13 @@ export const api = {
   dailyStats: (month: string) => get<{ days: DailyStat[] }>(`/stats/daily${query({ month })}`),
   monthlyStats: (months = 6) => get<{ months: MonthlyStat[] }>(`/stats/monthly${query({ months })}`),
 
+  projectBudgets: () => get<{ items: ProjectBudget[] }>('/project-budgets'),
+  saveProjectBudget: (id: string, name: string, amountMinor: number) => {
+    const body = { name, amount_minor: amountMinor }
+    return id
+      ? put<{ id: string }>(`/project-budgets/${encodeURIComponent(id)}`, body)
+      : post<{ id: string }>('/project-budgets', body)
+  },
   budget: (month: string) => get<Budget | null>(`/budgets/${encodeURIComponent(month)}`),
   setBudget: (month: string, amountMinor: number) => put<Budget>(`/budgets/${encodeURIComponent(month)}`, { amount_minor: amountMinor }),
 

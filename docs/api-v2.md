@@ -222,7 +222,7 @@
 
 口径定义见 [V2 账务规则](accounting-rules-v2.md) §6：收入科目 `4010:%`（贷−借），支出科目 `5010:%`（借−贷），分类 ID 为 `SUBSTR(account_code, 6)`；`share_bp` 为金额占同口径合计的万分比整数（向下取整）。
 
-## 10. 预算（2 条）
+## 10. 预算（5 条）
 
 | 方法 | 路径 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
@@ -230,6 +230,14 @@
 | PUT | `/budgets/{month}` | `amount_minor`（≥0 整数分） | 200 `{month,amount_minor,spent_minor}`；按 `(household_id,month)` 覆盖写入并写审计 | 400、500 |
 
 `spent_minor` 为该月支出科目净额（借−贷），与账单页预算进度使用同一口径。
+
+| 方法 | 路径 | 请求 | 成功 |
+| --- | --- | --- | --- |
+| GET | `/project-budgets` | 无 | `{items:[{id,name,amount_minor,spent_minor}]}` |
+| POST | `/project-budgets` | `name`、`amount_minor`（正整数分） | `{id}` |
+| PUT | `/project-budgets/{id}` | `name`、`amount_minor`（正整数分） | `{id}` |
+
+支出可通过 `budget_id` 关联一个家庭内项目。更正时省略该字段保留关联，传空字符串清除关联。仅提交 `budget_id` 时只更新关联和审计记录。项目实际支出按关联的有效分录跨月累计，同时仍计入发生当月的月度预算。
 
 ## 11. 健康检查（2 条，不计入 57）
 

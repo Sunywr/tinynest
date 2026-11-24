@@ -28,7 +28,7 @@ const form = useEntryForm({
   },
 })
 const {
-  type, amount, note, date, accountId, toAccountId, categoryId, memberId,
+  type, amount, note, date, accountId, toAccountId, categoryId, memberId, budgetId, budgetOptions,
   loading, saving, error, offline, isEdit, display, activeCategories,
   accountOptions, memberOptions, accountMissing, categoryMissing, canSave, dirty,
   selectType, press, backspace, save, load, reloadCategories,
@@ -141,6 +141,11 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="entry-meta">
+              <label v-if="type === 'expense' && budgetOptions.length > 1" class="meta-row">
+                <span class="meta-label">项目预算</span>
+              <SmartSelect v-model="budgetId" class="meta-control" :options="budgetOptions"
+                placeholder="搜索项目预算" :disabled="saving" />
+            </label>
             <label class="meta-row">
               <span class="meta-label">备注</span>
               <input v-model="note" class="meta-control meta-input" maxlength="200" placeholder="写点什么…"

@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"context"
@@ -44,6 +44,7 @@ func (a *API) lookupReplay(r *http.Request, householdID, key string) (string, er
 
 // transactionValues is one fully-resolved "流水" row (used by POST and PATCH).
 type transactionValues struct {
+	BudgetID    *string
 	Type        string
 	Amount      money.Minor
 	OccurredOn  string
@@ -79,6 +80,15 @@ func trimPtr(s *string) *string {
 // balanced journal entry. Nothing is persisted here; the caller commits it with
 // the transaction row in one database transaction.
 func (a *API) buildTransactionEntry(ctx context.Context, q db.Queryer, householdID string, v transactionValues, txID, entryID string) (*ledger.Entry, error) {
+	if v.BudgetID != nil {
+		var id string
+		if v.Type != "expense" {
+			return nil, errors.New("预算仅适用于支出")
+		}
+		if err := q.QueryRowContext(ctx, `SELECT id FROM project_budgets WHERE household_id=? AND id=?`, householdID, *v.BudgetID).Scan(&id); err != nil {
+			return nil, errors.New("项目预算不存在")
+		}
+	}
 	c := ledger.Context{EntryID: entryID, BizID: txID, OccurredOn: v.OccurredOn}
 	switch v.Type {
 	case "transfer":
@@ -146,6 +156,10 @@ func insertTransactionRow(ctx context.Context, tx *sql.Tx, householdID string, v
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,'posted',?,?,?)`,
 		txID, householdID, v.Type, int64(v.Amount), "CNY", v.OccurredOn,
 		v.CategoryID, v.AccountID, v.ToAccountID, v.MemberID, v.Note, entryID, nullableKey(key), actor)
+	if err != nil || v.BudgetID == nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO transaction_budget_links(transaction_id,budget_id) VALUES(?,?)`, txID, *v.BudgetID)
 	return err
 }
 
@@ -188,6 +202,7 @@ type transactionRequest struct {
 	AccountID   *string `json:"account_id"`
 	ToAccountID *string `json:"to_account_id"`
 	MemberID    *string `json:"member_id"`
+	BudgetID    *string `json:"budget_id"`
 	Note        *string `json:"note"`
 }
 
@@ -215,7 +230,12 @@ func (a *API) handleCreateTransaction(w http.ResponseWriter, r *http.Request) {
 		AccountID:   trimPtr(in.AccountID),
 		ToAccountID: trimPtr(in.ToAccountID),
 		MemberID:    trimPtr(in.MemberID),
+		BudgetID:    trimPtr(in.BudgetID),
 		Note:        in.Note,
+	}
+	if values.BudgetID != nil && values.Type != "expense" {
+		writeErr(w, 400, "invalid_request", "预算仅适用于支出")
+		return
 	}
 	key := idempotencyKey(r)
 	txID, entryID := newID("tx"), newID("je")
@@ -286,12 +306,14 @@ const transactionSelect = `
 	SELECT t.id,t.type,t.amount_minor,t.currency,t.occurred_on,
 	       t.category_id,c.name,c.emoji,c.color,
 	       t.account_id,a.name,t.to_account_id,b.name,
-	       t.member_id,t.note,t.status,t.entry_id,t.created_at
+	       t.member_id,t.note,t.status,t.entry_id,t.created_at,pb.id,pb.name
 	FROM transactions t
 	LEFT JOIN categories c ON c.id=t.category_id AND c.household_id=t.household_id
 	LEFT JOIN accounts a ON a.id=t.account_id AND a.household_id=t.household_id
 	LEFT JOIN accounts b ON b.id=t.to_account_id AND b.household_id=t.household_id
-	WHERE t.household_id=?`
+	LEFT JOIN transaction_budget_links bl ON bl.transaction_id=t.id
+ LEFT JOIN project_budgets pb ON pb.id=bl.budget_id AND pb.household_id=t.household_id
+ WHERE t.household_id=?`
 
 type transactionRow struct {
 	ID            string
@@ -312,6 +334,8 @@ type transactionRow struct {
 	Status        string
 	EntryID       string
 	CreatedAt     string
+	BudgetID      sql.NullString
+	BudgetName    sql.NullString
 }
 
 func (row transactionRow) public() map[string]any {
@@ -320,9 +344,10 @@ func (row transactionRow) public() map[string]any {
 		"occurred_on": row.OccurredOn,
 		"category_id": nullString(row.CategoryID), "category_name": nullString(row.CategoryName),
 		"category_emoji": nullString(row.CategoryEmoji), "category_color": nullString(row.CategoryColor),
-		"account_id":     nullString(row.AccountID), "account_name": nullString(row.AccountName),
+		"account_id": nullString(row.AccountID), "account_name": nullString(row.AccountName),
 		"to_account_id": nullString(row.ToAccountID), "to_account_name": nullString(row.ToAccountName),
 		"member_id": nullString(row.MemberID), "note": nullString(row.Note),
+		"budget_id": nullString(row.BudgetID), "budget_name": nullString(row.BudgetName),
 		"status": row.Status, "entry_id": row.EntryID, "created_at": row.CreatedAt,
 	}
 }
@@ -408,7 +433,7 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&row.ID, &row.Type, &row.AmountMinor, &row.Currency, &row.OccurredOn,
 			&row.CategoryID, &row.CategoryName, &row.CategoryEmoji, &row.CategoryColor,
 			&row.AccountID, &row.AccountName, &row.ToAccountID, &row.ToAccountName,
-			&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt); err != nil {
+			&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt, &row.BudgetID, &row.BudgetName); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -438,7 +463,7 @@ func (a *API) loadTransactionRow(ctx context.Context, q db.Queryer, householdID,
 		&row.ID, &row.Type, &row.AmountMinor, &row.Currency, &row.OccurredOn,
 		&row.CategoryID, &row.CategoryName, &row.CategoryEmoji, &row.CategoryColor,
 		&row.AccountID, &row.AccountName, &row.ToAccountID, &row.ToAccountName,
-		&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt)
+		&row.MemberID, &row.Note, &row.Status, &row.EntryID, &row.CreatedAt, &row.BudgetID, &row.BudgetName)
 	return row, err
 }
 
@@ -565,6 +590,7 @@ func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 		AccountID   *string `json:"account_id"`
 		ToAccountID *string `json:"to_account_id"`
 		MemberID    *string `json:"member_id"`
+		BudgetID    *string `json:"budget_id"`
 		Note        *string `json:"note"`
 	}
 	if err := decode(r, &in); err != nil {
@@ -582,6 +608,32 @@ func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 		if row.Status != "posted" {
 			return errTransactionNotPosted
 		}
+		if in.BudgetID != nil && in.Type == nil && in.AmountMinor == nil && in.OccurredOn == nil &&
+			in.CategoryID == nil && in.AccountID == nil && in.ToAccountID == nil && in.MemberID == nil && in.Note == nil {
+			if row.Type != "expense" {
+				return errors.New("预算仅适用于支出")
+			}
+			budgetID := trimPtr(in.BudgetID)
+			if budgetID != nil {
+				var id string
+				if err := tx.QueryRowContext(r.Context(), `SELECT id FROM project_budgets WHERE household_id=? AND id=?`, p.HouseholdID, *budgetID).Scan(&id); err != nil {
+					return errors.New("项目预算不存在")
+				}
+			}
+			if _, err := tx.ExecContext(r.Context(), `DELETE FROM transaction_budget_links WHERE transaction_id=?`, row.ID); err != nil {
+				return err
+			}
+			if budgetID != nil {
+				if _, err := tx.ExecContext(r.Context(), `INSERT INTO transaction_budget_links(transaction_id,budget_id) VALUES(?,?)`, row.ID, *budgetID); err != nil {
+					return err
+				}
+			}
+			if err := audit(r.Context(), tx, p, "set_transaction_budget", "transaction", row.ID, "{}"); err != nil {
+				return err
+			}
+			response = map[string]any{"id": row.ID, "entry_id": row.EntryID, "status": "posted"}
+			return nil
+		}
 		if in.Type != nil && *in.Type != row.Type {
 			return errors.New("更正不支持修改流水类型，请冲正后重新记账")
 		}
@@ -592,6 +644,7 @@ func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 			CategoryID: nullPtr(row.CategoryID),
 			AccountID:  nullPtr(row.AccountID),
 			MemberID:   nullPtr(row.MemberID),
+			BudgetID:   nullPtr(row.BudgetID),
 			Note:       nullPtr(row.Note),
 		}
 		if row.ToAccountID.Valid {
@@ -615,6 +668,9 @@ func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MemberID != nil {
 			values.MemberID = trimPtr(in.MemberID)
+		}
+		if in.BudgetID != nil {
+			values.BudgetID = trimPtr(in.BudgetID)
 		}
 		if in.Note != nil {
 			values.Note = in.Note

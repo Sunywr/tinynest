@@ -116,6 +116,9 @@ func seedAll(t *testing.T, admin *Admin) fixture {
 		"tx2", f.household, "expense", 2000, "2026-11-02", "reversed", "je2", f.account, f.category)
 	mustExec(t, admin, `INSERT INTO budgets (household_id, month, amount_minor) VALUES (?,?,?)`,
 		f.household, "2026-11", 5000)
+	mustExec(t, admin, `INSERT INTO project_budgets(id,household_id,name,amount_minor) VALUES(?,?,?,?)`,
+		"budget1", f.household, "装修", 5000)
+	mustExec(t, admin, `INSERT INTO transaction_budget_links(transaction_id,budget_id) VALUES(?,?)`, "tx1", "budget1")
 
 	// Audit trail.
 	mustExec(t, admin, `INSERT INTO audit_logs (household_id, actor, action, entity, entity_id) VALUES (?,?,?,?,?)`,
