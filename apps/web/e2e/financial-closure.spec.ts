@@ -549,6 +549,7 @@ test.describe('C 账单列表', () => {
   test('重复点击搜索时只打开一次搜索栏', async ({ page }) => {
     await gotoBills(page)
     await page.getByRole('button', { name: '搜索', exact: true }).evaluate(button => {
+      if (!(button instanceof HTMLButtonElement)) throw new Error('Expected search button')
       button.click()
       button.click()
     })
@@ -600,12 +601,15 @@ test.describe('C 账单列表', () => {
     await page.getByRole('button', { name: '上个月' }).click()
     try {
       await expect(month).toHaveText(previous!.trim())
-      await expect(page.getByRole('status', { name: '正在加载' })).toBeVisible()
+      await expect(page.getByRole('button', { name: '上个月' })).toBeDisabled()
+      await expect(page.getByRole('button', { name: '下个月' })).toBeDisabled()
+      await expect(page.locator('.request-progress')).toBeVisible()
     } finally {
       release()
     }
     await expect(month).not.toHaveText(previous!.trim())
-    await expect(page.getByRole('status', { name: '正在加载' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '上个月' })).toBeEnabled()
+    await expect(page.locator('.request-progress')).toHaveCount(0)
   })
 
   test('C10 账单页汇总显示本月支出、收入与结余', async ({ page }) => {
@@ -683,6 +687,29 @@ test.describe('D 图表', () => {
     await page.goto('/charts')
     for (let i = 0; i < 15; i += 1) await page.getByRole('button', { name: '下个月' }).click()
     await expect(page.getByRole('status').filter({ hasText: '没有支出数据' })).toBeVisible()
+  })
+
+  test('图表切换期间禁用筛选按钮，请求失败后可重试', async ({ page }) => {
+    await gotoBills(page)
+    await page.goto('/charts')
+    const income = page.getByRole('button', { name: '收入', exact: true })
+    await expect(income).toBeEnabled()
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { release = resolve })
+    await page.route('**/api/v1/stats/categories?*', async route => {
+      await waiting
+      await route.fulfill({ status: 500, json: { error: { message: '图表加载测试失败' } } })
+    })
+    await income.click()
+    try {
+      await expect(income).toBeDisabled()
+      await expect(page.getByRole('button', { name: '投资', exact: true })).toBeDisabled()
+      await expect(page.getByRole('button', { name: '上个月' })).toBeDisabled()
+    } finally {
+      release()
+    }
+    await expect(page.getByRole('alert')).toContainText('图表加载测试失败')
+    await expect(income).toBeEnabled()
   })
 
   test('D06 投资收益视图展示总览、占比与持仓排行', async ({ page }) => {

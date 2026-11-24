@@ -89,19 +89,22 @@ async function load(target = requested) {
   try {
     const keyword = query.value.trim()
     const [from, to] = keyword ? [undefined, undefined] : target.day ? [target.day, target.day] : monthRange(target.month)
-    const [monthly, budgetValue, list] = await Promise.all([
+    const [monthly, budgetValue, list] = await Promise.allSettled([
       api.summary(...monthRange(target.month)),
       api.budget(target.month),
       api.transactions({ from, to, q: keyword || undefined, limit: 100 }),
     ])
     if (token !== requestId) return
+    if (monthly.status === 'rejected') throw monthly.reason
+    if (budgetValue.status === 'rejected') throw budgetValue.reason
+    if (list.status === 'rejected') throw list.reason
     month.value = target.month
     selectedDay.value = target.day
     appliedQuery.value = keyword
-    summary.value = monthly
-    budget.value = budgetValue
-    items.value = list.items
-    nextCursor.value = list.next_cursor
+    summary.value = monthly.value
+    budget.value = budgetValue.value
+    items.value = list.value.items
+    nextCursor.value = list.value.next_cursor
   } catch (e) {
     if (token === requestId) error.value = e instanceof Error ? e.message : '流水加载失败'
   } finally {
@@ -131,10 +134,12 @@ async function loadMore() {
 }
 
 function goMonth(delta: number) {
+  if (loading.value) return
   void load({ month: shiftMonth(requested.month, delta), day: '' })
 }
 
 function backToThisMonth() {
+  if (loading.value) return
   void load({ month: monthKey(), day: '' })
 }
 
@@ -164,11 +169,13 @@ function openCalendar() {
 }
 
 function selectDay(day: string) {
+  if (loading.value || calendarLoading.value) return
   closeCalendar()
   void load({ month: day.slice(0, 7), day })
 }
 
 function clearDay() {
+  if (loading.value || calendarLoading.value) return
   void load({ month: requested.month, day: '' })
 }
 
@@ -224,11 +231,11 @@ onBeforeUnmount(() => {
 <template>
   <section class="page bills-page">
     <header class="bills-head" :aria-busy="loading">
-      <button type="button" class="icon-btn" data-repeat-click aria-label="上个月" @click="goMonth(-1)"><ChevronLeft :size="20" /></button>
-      <button type="button" class="month-switch period-value" :aria-label="`当前月份 ${monthLabel(month)}，回到本月`" @click="backToThisMonth">
+      <button type="button" class="icon-btn" data-repeat-click :disabled="loading" aria-label="上个月" @click="goMonth(-1)"><ChevronLeft :size="20" /></button>
+      <button type="button" class="month-switch period-value" data-repeat-click :disabled="loading" :aria-label="`当前月份 ${monthLabel(month)}，回到本月`" @click="backToThisMonth">
         {{ monthLabel(month) }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" />
       </button>
-      <button type="button" class="icon-btn" data-repeat-click aria-label="下个月" @click="goMonth(1)"><ChevronRight :size="20" /></button>
+      <button type="button" class="icon-btn" data-repeat-click :disabled="loading" aria-label="下个月" @click="goMonth(1)"><ChevronRight :size="20" /></button>
       <div class="head-actions">
         <button type="button" class="icon-btn" aria-label="搜索" :aria-expanded="searchOpen" @click="toggleSearch">
           <Search :size="20" />
@@ -258,7 +265,7 @@ onBeforeUnmount(() => {
 
     <div class="bills-toolbar">
       <span v-if="selectedDay" class="toolbar-chip">已筛选 {{ selectedDay }}
-        <button type="button" aria-label="清除日期筛选" @click="clearDay">×</button>
+        <button type="button" aria-label="清除日期筛选" :disabled="loading" @click="clearDay">×</button>
       </span>
       <span v-if="appliedQuery" class="toolbar-chip">全部日期 · 「{{ appliedQuery }}」
         <button type="button" aria-label="清除搜索" @click="closeSearch">×</button>
@@ -268,7 +275,7 @@ onBeforeUnmount(() => {
 
     <SurfaceTransition name="popover">
       <MonthCalendar v-if="calendarOpen" :month="calendarMonth" :selected="selectedDay" :days="daily"
-       :loading="calendarLoading" :error="calendarError"
+       :loading="calendarLoading" :selection-disabled="loading" :error="calendarError"
         @update:month="loadDaily" @select="selectDay" @clear="clearDay" @close="closeCalendar" />
     </SurfaceTransition>
 

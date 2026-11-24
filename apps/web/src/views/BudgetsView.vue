@@ -47,7 +47,7 @@ function changeMonth(event: Event) {
   const input = event.target as HTMLInputElement
   const selected = input.value
   input.value = month.value
-  if (selected && selected !== month.value) void loadMonth(selected)
+  if (!monthLoading.value && selected && selected !== month.value) void loadMonth(selected)
 }
 
 async function loadProjects() {
@@ -105,7 +105,7 @@ onMounted(() => { void loadProjects(); void loadMonth() })
     <section class="budget-section" aria-labelledby="monthly-heading">
       <div class="section-head">
         <h2 id="monthly-heading">月度预算</h2>
-        <input :value="month" type="month" aria-label="预算月份" :aria-busy="monthLoading" @change="changeMonth" />
+        <input :value="month" type="month" aria-label="预算月份" :disabled="monthLoading" :aria-busy="monthLoading" @change="changeMonth" />
       </div>
       <p class="budget-hint">当月所有支出自动计入，包括已关联项目的支出。</p>
       <p v-if="monthLoading" class="budget-hint" role="status">正在读取月度预算…</p>

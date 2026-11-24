@@ -268,6 +268,11 @@ a { color: var(--primary-deep); }
 @keyframes sheet-dismiss { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(10px) scale(.99); } }
 
 .period-value { position: relative; }
+.bills-head button:disabled, .chart-nav button:disabled, .segmented-btn:disabled,
+.month-calendar button:disabled, .account-row:disabled {
+  opacity: .55;
+  cursor: wait;
+}
 .period-spinner { position: absolute; inset-block-start: 50%; inset-inline-end: 6px; margin-top: -5px; width: 10px; height: 10px; }
 .chart-period-label .period-spinner, .calendar-bar .period-spinner { inset-inline-end: -15px; }
 

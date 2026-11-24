@@ -81,6 +81,7 @@ function closeForm() {
 }
 
 async function openJournal(account: Account) {
+  if (journalLoading.value) return
   journalFor.value = account
   journal.value = []
   journalLoading.value = true
@@ -153,14 +154,14 @@ onMounted(() => void load())
       <div class="assets-group-grid">
         <section class="card assets-group" aria-label="现金账户">
           <header class="group-head"><h2>现金账户</h2><span>{{ cashAccounts.length }} 个</span></header>
-          <AccountRow v-for="account in cashAccounts" :key="account.id" :account="account"
+          <AccountRow data-repeat-click :disabled="journalLoading" v-for="account in cashAccounts" :key="account.id" :account="account"
             :member-name="memberName(account.owner_member_id)" @select="openJournal(account)" />
           <p v-if="!cashAccounts.length" class="group-empty">还没有现金账户</p>
         </section>
 
         <section class="card assets-group" aria-label="信用卡账户">
           <header class="group-head"><h2>信用卡（负债）</h2><span>{{ creditAccounts.length }} 个</span></header>
-          <AccountRow v-for="account in creditAccounts" :key="account.id" :account="account"
+          <AccountRow data-repeat-click :disabled="journalLoading" v-for="account in creditAccounts" :key="account.id" :account="account"
             :member-name="memberName(account.owner_member_id)" @select="openJournal(account)" />
           <p v-if="!creditAccounts.length" class="group-empty">还没有信用卡账户</p>
         </section>

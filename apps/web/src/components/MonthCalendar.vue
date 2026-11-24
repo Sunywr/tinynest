@@ -9,6 +9,7 @@ const props = defineProps<{
   selected: string
   days: DailyStat[]
   loading?: boolean
+  selectionDisabled?: boolean
   error?: string
 }>()
 
@@ -62,11 +63,11 @@ function compactTotal(minor: number): string {
 <template>
   <section ref="root" class="month-calendar" aria-label="选择日期" :aria-busy="loading" @keydown.esc.stop="emit('close')">
     <header class="calendar-bar">
-      <button type="button" class="icon-btn" data-repeat-click aria-label="上个月" @click="emit('update:month', shiftMonth(month, -1))">
+      <button type="button" class="icon-btn" data-repeat-click :disabled="loading" aria-label="上个月" @click="emit('update:month', shiftMonth(month, -1))">
         <ChevronLeft :size="20" />
       </button>
       <strong class="period-value" aria-live="polite">{{ monthLabel(month) }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" /></strong>
-      <button type="button" class="icon-btn" data-repeat-click aria-label="下个月" @click="emit('update:month', shiftMonth(month, 1))">
+      <button type="button" class="icon-btn" data-repeat-click :disabled="loading" aria-label="下个月" @click="emit('update:month', shiftMonth(month, 1))">
         <ChevronRight :size="20" />
       </button>
     </header>
@@ -76,7 +77,7 @@ function compactTotal(minor: number): string {
     </div>
     <div class="calendar-cells">
       <template v-for="(cell, index) in cells" :key="index">
-        <button v-if="cell" type="button" class="calendar-cell" :class="{ selected: cell.date === selected, today: cell.current }"
+        <button v-if="cell" type="button" class="calendar-cell" :disabled="loading || selectionDisabled" :class="{ selected: cell.date === selected, today: cell.current }"
           :aria-pressed="cell.date === selected" :aria-label="`${cell.day}日${cell.total ? `，支出 ${formatMinor(cell.total)}` : ''}`"
           @click="emit('select', cell.date)">
           <span class="cell-day">{{ cell.day }}</span>
@@ -88,7 +89,7 @@ function compactTotal(minor: number): string {
     <footer class="calendar-footer">
       <span v-if="selected">已筛选 {{ selected }}</span>
       <span v-else>点选日期筛选流水</span>
-      <button v-if="selected" type="button" class="calendar-clear" @click="emit('clear')">查看整月</button>
+      <button v-if="selected" type="button" class="calendar-clear" :disabled="loading || selectionDisabled" @click="emit('clear')">查看整月</button>
     </footer>
   </section>
 </template>

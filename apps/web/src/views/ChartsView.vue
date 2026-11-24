@@ -21,6 +21,7 @@ const loading = ref(false)
 const error = ref('')
 const investmentLoading = ref(false)
 const investmentError = ref('')
+const switching = computed(() => loading.value || investmentLoading.value)
 let requestId = 0
 let investmentRequestId = 0
 let requested = { kind: kind.value, period: period.value, month: month.value, year: year.value }
@@ -87,17 +88,19 @@ async function load(target = requested) {
   error.value = ''
   try {
     const [from, to] = target.period === 'month' ? monthRange(target.month) : yearRange(target.year)
-    const [summaryResult, rankingResult] = await Promise.all([
+    const [summaryResult, rankingResult] = await Promise.allSettled([
       api.summary(from, to),
       api.categoryStats(from, to, target.kind),
     ])
     if (token !== requestId) return
+    if (summaryResult.status === 'rejected') throw summaryResult.reason
+    if (rankingResult.status === 'rejected') throw rankingResult.reason
     kind.value = target.kind
     period.value = target.period
     month.value = target.month
     year.value = target.year
-    summary.value = summaryResult
-    ranking.value = rankingResult.items
+    summary.value = summaryResult.value
+    ranking.value = rankingResult.value.items
   } catch (e) {
     if (token === requestId) error.value = e instanceof Error ? e.message : '图表数据加载失败'
   } finally {
@@ -121,22 +124,26 @@ async function loadInvestments() {
 }
 
 function showKind(next: 'expense' | 'income') {
+  if (switching.value) return
   investmentView.value = false
   void load({ ...requested, kind: next })
 }
 
 function showInvestment() {
+  if (switching.value) return
   investmentView.value = true
   void loadInvestments()
 }
 
 function shift(delta: number) {
+  if (switching.value) return
   void load(requested.period === 'month'
     ? { ...requested, month: shiftMonth(requested.month, delta) }
     : { ...requested, year: requested.year + delta })
 }
 
 function setPeriod(next: 'month' | 'year') {
+  if (switching.value) return
   void load({ ...requested, period: next })
 }
 
@@ -152,22 +159,22 @@ onMounted(() => void load())
       </div>
       <div v-if="!investmentView" class="chart-period">
         <div class="segmented small" role="group" aria-label="统计周期">
-          <button type="button" class="segmented-btn" :class="{ active: period === 'month' }" :aria-pressed="period === 'month'" @click="setPeriod('month')">月</button>
-          <button type="button" class="segmented-btn" :class="{ active: period === 'year' }" :aria-pressed="period === 'year'" @click="setPeriod('year')">年</button>
+          <button type="button" class="segmented-btn" data-repeat-click :disabled="switching" :class="{ active: period === 'month' }" :aria-pressed="period === 'month'" @click="setPeriod('month')">月</button>
+          <button type="button" class="segmented-btn" data-repeat-click :disabled="switching" :class="{ active: period === 'year' }" :aria-pressed="period === 'year'" @click="setPeriod('year')">年</button>
         </div>
       </div>
     </header>
 
     <div class="chart-controls">
       <div class="segmented" role="group" aria-label="统计类型">
-        <button type="button" class="segmented-btn" :class="{ active: !investmentView && kind === 'expense' }" :aria-pressed="!investmentView && kind === 'expense'" @click="showKind('expense')">支出</button>
-        <button type="button" class="segmented-btn" :class="{ active: !investmentView && kind === 'income' }" :aria-pressed="!investmentView && kind === 'income'" @click="showKind('income')">收入</button>
-        <button type="button" class="segmented-btn" :class="{ active: investmentView }" :aria-pressed="investmentView" @click="showInvestment">投资</button>
+        <button type="button" class="segmented-btn" data-repeat-click :disabled="switching" :class="{ active: !investmentView && kind === 'expense' }" :aria-pressed="!investmentView && kind === 'expense'" @click="showKind('expense')">支出</button>
+        <button type="button" class="segmented-btn" data-repeat-click :disabled="switching" :class="{ active: !investmentView && kind === 'income' }" :aria-pressed="!investmentView && kind === 'income'" @click="showKind('income')">收入</button>
+        <button type="button" class="segmented-btn" data-repeat-click :disabled="switching" :class="{ active: investmentView }" :aria-pressed="investmentView" @click="showInvestment">投资</button>
       </div>
       <div v-if="!investmentView" class="chart-nav" :aria-busy="loading">
-        <button type="button" class="icon-btn" data-repeat-click :aria-label="period === 'month' ? '上个月' : '上一年'" @click="shift(-1)"><ChevronLeft :size="18" /></button>
+        <button type="button" class="icon-btn" data-repeat-click :disabled="switching" :aria-label="period === 'month' ? '上个月' : '上一年'" @click="shift(-1)"><ChevronLeft :size="18" /></button>
         <span class="chart-period-label period-value" aria-live="polite">{{ periodLabel }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" /></span>
-        <button type="button" class="icon-btn" data-repeat-click :aria-label="period === 'month' ? '下个月' : '下一年'" @click="shift(1)"><ChevronRight :size="18" /></button>
+        <button type="button" class="icon-btn" data-repeat-click :disabled="switching" :aria-label="period === 'month' ? '下个月' : '下一年'" @click="shift(1)"><ChevronRight :size="18" /></button>
       </div>
     </div>
 
