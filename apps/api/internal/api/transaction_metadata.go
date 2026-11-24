@@ -2,10 +2,39 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"tinynest/api/internal/db"
 )
+
+var noteHashtag = regexp.MustCompile(`(?:^|[\p{Z}\t\r\n])[#＃]([\p{L}\p{M}\p{N}_-]+)`)
+
+func saveNoteTags(ctx context.Context, tx *sql.Tx, id string, note *string) error {
+	if note == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for _, match := range noteHashtag.FindAllStringSubmatch(*note, -1) {
+		tag := match[1]
+		key := strings.ToLower(tag)
+		if seen[key] {
+			continue
+		}
+		if len(seen) >= 12 || utf8.RuneCountInString(tag) > 40 {
+			return errors.New("每笔最多 12 个标签，每个标签最多 40 字")
+		}
+		seen[key] = true
+		if _, err := tx.ExecContext(ctx, `INSERT INTO transaction_source_metadata(transaction_id,source_id,item_key,kind,value)
+			VALUES(?,0,?,'label',?)`, id, key, tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type transactionMetadata struct {
 	Labels       []string `json:"labels"`

@@ -62,11 +62,11 @@ function compactTotal(minor: number): string {
 <template>
   <section ref="root" class="month-calendar" aria-label="选择日期" :aria-busy="loading" @keydown.esc.stop="emit('close')">
     <header class="calendar-bar">
-      <button type="button" class="icon-btn" aria-label="上个月" @click="emit('update:month', shiftMonth(month, -1))">
+      <button type="button" class="icon-btn" data-repeat-click aria-label="上个月" @click="emit('update:month', shiftMonth(month, -1))">
         <ChevronLeft :size="20" />
       </button>
       <strong class="period-value" aria-live="polite">{{ monthLabel(month) }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" /></strong>
-      <button type="button" class="icon-btn" aria-label="下个月" @click="emit('update:month', shiftMonth(month, 1))">
+      <button type="button" class="icon-btn" data-repeat-click aria-label="下个月" @click="emit('update:month', shiftMonth(month, 1))">
         <ChevronRight :size="20" />
       </button>
     </header>

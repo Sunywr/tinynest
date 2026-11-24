@@ -6,6 +6,7 @@ import { beginRequest } from './interactionFeedback'
 
 const BASE = '/api/v1'
 let csrfToken = ''
+const pendingWrites = new Map<string, Promise<unknown>>()
 
 export function setCSRFToken(token: string) {
   csrfToken = token
@@ -24,10 +25,19 @@ export class ApiError extends Error {
 }
 
 export async function request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method || 'GET').toUpperCase()
+  const key = method !== 'GET' && (init.body == null || typeof init.body === 'string')
+    ? JSON.stringify([csrfToken, method, path, init.body ?? ''])
+    : null
+  const existing = key && pendingWrites.get(key)
+  if (existing) return existing as Promise<T>
   const complete = beginRequest()
+  const pending = performRequest<T>(path, init)
+  if (key) pendingWrites.set(key, pending)
   try {
-    return await performRequest<T>(path, init)
+    return await pending
   } finally {
+    if (key) pendingWrites.delete(key)
     complete()
   }
 }

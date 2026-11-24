@@ -583,6 +583,8 @@ dialog.dialog-dismissing[open]::backdrop { animation: backdrop-out var(--motion-
 @keyframes caret-blink { 50% { opacity: 0; } }
 .entry-loading { margin: 0; padding: 26px 16px; color: var(--muted); text-align: center; font-size: 13px; }
 .entry-categories { flex: 1; min-height: 120px; overflow-y: auto; padding: 6px 12px; }
+.entry-tag-hint { display: flex; flex-wrap: wrap; gap: 4px; padding-inline-start: 4px; color: var(--muted); font-size: 11px; }
+.entry-tag { padding: 2px 6px; border-radius: 6px; background: var(--soft); color: var(--primary-deep); overflow-wrap: anywhere; }
 .entry-hint { margin: 8px 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .entry-hint.error { color: #a04e43; }
 .entry-meta { display: grid; gap: 2px; padding: 4px 16px 8px; border-top: 1px solid var(--border); }

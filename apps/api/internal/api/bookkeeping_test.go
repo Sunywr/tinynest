@@ -115,6 +115,35 @@ func TestSearchImportedTransactionMetadata(t *testing.T) {
 	journalBalanced(t, database)
 }
 
+func TestNoteHashtagsFollowTransactionCorrections(t *testing.T) {
+	ts, c, database := newTestServerWithOptions(t, Options{})
+	defer ts.Close()
+	defer database.Close()
+	account := c.createAccount("cash", "标签测试", 0)
+	base := "/api/v1/transactions"
+	row := c.mustOK("POST", base, map[string]any{
+		"type": "expense", "amount_minor": 100, "occurred_on": "2026-11-01",
+		"category_id": c.firstCategory("expense"), "account_id": account,
+		"note": "备忘 #装修 ＃厨房 #装修",
+	})
+	id := row["id"].(string)
+	assertLabels := func(transactionID string, want int) {
+		t.Helper()
+		var count int
+		if err := database.QueryRow(`SELECT COUNT(*) FROM transaction_source_metadata
+			WHERE transaction_id=? AND source_id=0 AND kind='label'`, transactionID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != want {
+			t.Fatalf("got %d labels, want %d", count, want)
+		}
+	}
+	assertLabels(id, 2)
+	row = c.mustOK("PATCH", base+"/"+id, map[string]any{"note": "改备注 #客厅"})
+	assertLabels(row["id"].(string), 1)
+	journalBalanced(t, database)
+}
+
 func TestBookkeepingLifecycle(t *testing.T) {
 	ts, c, database := newTestServerWithOptions(t, Options{})
 	defer ts.Close()

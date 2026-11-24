@@ -546,6 +546,15 @@ test.describe('C 账单列表', () => {
     await expect(page.locator('.tx-row', { hasText: '另一种咖啡' })).toBeVisible()
   })
 
+  test('重复点击搜索时只打开一次搜索栏', async ({ page }) => {
+    await gotoBills(page)
+    await page.getByRole('button', { name: '搜索', exact: true }).evaluate(button => {
+      button.click()
+      button.click()
+    })
+    await expect(page.getByRole('searchbox', { name: /搜索备注或分类/ })).toBeVisible()
+  })
+
   test('C07 日历显示每日支出并可筛选某一天', async ({ page }) => {
     const csrf = await gotoBills(page)
     const today = new Date().toISOString().slice(0, 10)

@@ -165,9 +165,9 @@ onMounted(() => void load())
         <button type="button" class="segmented-btn" :class="{ active: investmentView }" :aria-pressed="investmentView" @click="showInvestment">投资</button>
       </div>
       <div v-if="!investmentView" class="chart-nav" :aria-busy="loading">
-        <button type="button" class="icon-btn" :aria-label="period === 'month' ? '上个月' : '上一年'" @click="shift(-1)"><ChevronLeft :size="18" /></button>
+        <button type="button" class="icon-btn" data-repeat-click :aria-label="period === 'month' ? '上个月' : '上一年'" @click="shift(-1)"><ChevronLeft :size="18" /></button>
         <span class="chart-period-label period-value" aria-live="polite">{{ periodLabel }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" /></span>
-        <button type="button" class="icon-btn" :aria-label="period === 'month' ? '下个月' : '下一年'" @click="shift(1)"><ChevronRight :size="18" /></button>
+        <button type="button" class="icon-btn" data-repeat-click :aria-label="period === 'month' ? '下个月' : '下一年'" @click="shift(1)"><ChevronRight :size="18" /></button>
       </div>
     </div>
 

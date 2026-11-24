@@ -146,7 +146,7 @@ function moveDay(event: KeyboardEvent) {
           <button class="calendar-icon" type="button" aria-label="关闭日历" @click="closeCalendar">×</button>
         </header>
         <div class="calendar-navigation">
-          <button class="calendar-icon" type="button" aria-label="上个月" @click="moveMonth(-1)">‹</button>
+          <button class="calendar-icon" type="button" data-repeat-click aria-label="上个月" @click="moveMonth(-1)">‹</button>
           <template v-if="years.length">
             <select class="calendar-select" aria-label="年份" :value="focused.getUTCFullYear()" @change="jumpYear">
               <option v-for="year in years" :key="year" :value="year">{{ year }} 年</option>
@@ -156,7 +156,7 @@ function moveDay(event: KeyboardEvent) {
                 :disabled="!monthInRange(month)">{{ month }} 月</option>
             </select>
           </template>
-          <button class="calendar-icon" type="button" aria-label="下个月" @click="moveMonth(1)">›</button>
+          <button class="calendar-icon" type="button" data-repeat-click aria-label="下个月" @click="moveMonth(1)">›</button>
         </div>
         <div class="calendar-grid">
           <span v-for="day in weekdays" :key="day" class="weekday" aria-hidden="true">{{ day }}</span>

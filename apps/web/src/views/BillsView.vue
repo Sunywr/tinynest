@@ -224,11 +224,11 @@ onBeforeUnmount(() => {
 <template>
   <section class="page bills-page">
     <header class="bills-head" :aria-busy="loading">
-      <button type="button" class="icon-btn" aria-label="上个月" @click="goMonth(-1)"><ChevronLeft :size="20" /></button>
+      <button type="button" class="icon-btn" data-repeat-click aria-label="上个月" @click="goMonth(-1)"><ChevronLeft :size="20" /></button>
       <button type="button" class="month-switch period-value" :aria-label="`当前月份 ${monthLabel(month)}，回到本月`" @click="backToThisMonth">
         {{ monthLabel(month) }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" />
       </button>
-      <button type="button" class="icon-btn" aria-label="下个月" @click="goMonth(1)"><ChevronRight :size="20" /></button>
+      <button type="button" class="icon-btn" data-repeat-click aria-label="下个月" @click="goMonth(1)"><ChevronRight :size="20" /></button>
       <div class="head-actions">
         <button type="button" class="icon-btn" aria-label="搜索" :aria-expanded="searchOpen" @click="toggleSearch">
           <Search :size="20" />

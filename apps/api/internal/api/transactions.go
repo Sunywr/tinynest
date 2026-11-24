@@ -156,11 +156,15 @@ func insertTransactionRow(ctx context.Context, tx *sql.Tx, householdID string, v
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,'posted',?,?,?)`,
 		txID, householdID, v.Type, int64(v.Amount), "CNY", v.OccurredOn,
 		v.CategoryID, v.AccountID, v.ToAccountID, v.MemberID, v.Note, entryID, nullableKey(key), actor)
-	if err != nil || v.BudgetID == nil {
+	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO transaction_budget_links(transaction_id,budget_id) VALUES(?,?)`, txID, *v.BudgetID)
-	return err
+	if v.BudgetID != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO transaction_budget_links(transaction_id,budget_id) VALUES(?,?)`, txID, *v.BudgetID); err != nil {
+			return err
+		}
+	}
+	return saveNoteTags(ctx, tx, txID, v.Note)
 }
 
 // saveTransfer books cash -> cash or cash -> credit, records the transfer flow
@@ -740,7 +744,7 @@ func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.ExecContext(r.Context(), `INSERT INTO transaction_source_metadata(transaction_id,source_id,item_key,kind,value)
 			SELECT ?,m.source_id,m.item_key,m.kind,m.value
 			FROM transaction_source_metadata m JOIN transactions t ON t.id=m.transaction_id
-			WHERE t.household_id=? AND m.transaction_id=?`, newIDValue, p.HouseholdID, oldID); err != nil {
+			WHERE t.household_id=? AND m.transaction_id=? AND m.source_id<>0`, newIDValue, p.HouseholdID, oldID); err != nil {
 			return err
 		}
 		if err := audit(r.Context(), tx, p, "reverse_transaction", "transaction", oldID, reversalID); err != nil {

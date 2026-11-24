@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import SurfaceTransition from "./SurfaceTransition.vue"
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { X } from 'lucide-vue-next'
 import AmountKeypad from './AmountKeypad.vue'
 import CategoryEditor from './CategoryEditor.vue'
@@ -35,6 +35,14 @@ const {
   selectType, press, backspace, save, load, reloadCategories,
 } = form
 const hasMultipleMembers = form.session.hasMultipleMembers
+const noteTags = computed(() => {
+  const tags = new Map<string, string>()
+  for (const match of note.value.matchAll(/(?:^|\s)[#＃]([\p{L}\p{M}\p{N}_-]+)/gu)) {
+    const tag = match[1]
+    if (!tags.has(tag.toLowerCase())) tags.set(tag.toLowerCase(), tag)
+  }
+  return [...tags.values()]
+})
 
 const TYPES: { key: TransactionType; label: string }[] = [
   { key: 'expense', label: '支出' },
@@ -149,8 +157,15 @@ onBeforeUnmount(() => {
           <label class="meta-row">
             <span class="meta-label">备注</span>
             <input v-model="note" class="meta-control meta-input" maxlength="200" placeholder="写点什么…"
+              aria-describedby="entry-tag-hint"
               :disabled="saving" @keydown.enter.prevent="save" />
           </label>
+          <div id="entry-tag-hint" class="entry-tag-hint" aria-live="polite">
+            <template v-if="noteTags.length">
+              <span v-for="tag in noteTags" :key="tag" class="entry-tag">#{{ tag }}</span>
+            </template>
+            <span v-else>在备注输入 #装修 #厨房 可添加多个标签</span>
+          </div>
           <div class="meta-row">
             <span class="meta-label">日期</span>
             <DatePicker v-model="date" :max="today()" class="meta-control" />
