@@ -187,9 +187,8 @@ onBeforeUnmount(() => {
         @close="categoryEditor = false" @saved="reloadCategories" />
       </SurfaceTransition>
     </section>
+    <ConfirmSheet :open="closeConfirm" title="放弃这笔记录？" message="这笔记录还没有保存，关闭后需要重新输入。"
+      confirm-label="放弃并关闭" cancel-label="继续记账" danger
+      @confirm="closeConfirm = false; emit('close')" @cancel="closeConfirm = false" />
   </div>
-
-  <ConfirmSheet :open="closeConfirm" title="放弃这笔记录？" message="金额与备注还没有保存，关闭后需要重新输入。"
-    confirm-label="放弃并关闭" cancel-label="继续记账" danger
-    @confirm="closeConfirm = false; emit('close')" @cancel="closeConfirm = false" />
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId } from 'vue'
 import { today } from '../services/format'
+import { dismissNativeDialog, isOutsideDialog } from './nativeDialogMotion'
 
 const model = defineModel<string>({ required: true })
 const props = defineProps<{ required?: boolean; min?: string; max?: string; openOnClick?: boolean }>()
@@ -82,7 +83,12 @@ function openFromInput(event: MouseEvent) {
 
 function choose(value: string) {
   model.value = value
-  dialog.value?.close()
+  void closeCalendar()
+}
+
+function closeCalendar() { return dismissNativeDialog(dialog.value) }
+function onBackdrop(event: MouseEvent) {
+  if (isOutsideDialog(event)) void closeCalendar()
 }
 
 function moveMonth(amount: number) {
@@ -132,11 +138,12 @@ function moveDay(event: KeyboardEvent) {
   </span>
 
   <Teleport to="body">
-    <dialog ref="dialog" class="calendar" :aria-labelledby="headingId" @close="trigger?.focus()" @click.self="dialog?.close()">
+    <dialog ref="dialog" class="calendar" :aria-labelledby="headingId" @close="trigger?.focus()"
+      @click.self="onBackdrop" @cancel.prevent="closeCalendar">
       <div class="calendar-body">
         <header class="calendar-header">
           <h2 :id="headingId" aria-live="polite">{{ monthLabel }}</h2>
-          <button class="calendar-icon" type="button" aria-label="关闭日历" @click="dialog?.close()">×</button>
+          <button class="calendar-icon" type="button" aria-label="关闭日历" @click="closeCalendar">×</button>
         </header>
         <div class="calendar-navigation">
           <button class="calendar-icon" type="button" aria-label="上个月" @click="moveMonth(-1)">‹</button>

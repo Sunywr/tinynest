@@ -40,6 +40,11 @@ const budgetEditor = ref(false)
 
 let requestId = 0
 let searchTimer = 0
+let requested = { month: month.value, day: '' }
+let dailyRequest = 0
+let requestedCalendarMonth = calendarMonth.value
+const calendarLoading = ref(false)
+const calendarError = ref('')
 
 const range = computed<[string, string]>(() => (selectedDay.value ? [selectedDay.value, selectedDay.value] : monthRange(month.value)))
 const expense = computed(() => summary.value?.expense_minor ?? 0)
@@ -58,31 +63,42 @@ function shortTitle(tx: Transaction): string {
   return tx.note?.trim() || tx.category_name || (tx.type === 'income' ? '收入' : '支出')
 }
 
-async function loadDaily() {
+async function loadDaily(target = requestedCalendarMonth) {
+  requestedCalendarMonth = target
+  const token = ++dailyRequest
+  calendarLoading.value = true
+  calendarError.value = ''
   try {
-    daily.value = (await api.dailyStats(calendarMonth.value)).days
+    const result = await api.dailyStats(target)
+    if (token !== dailyRequest) return
+    daily.value = result.days
+    calendarMonth.value = target
   } catch {
-    daily.value = []
+    if (token === dailyRequest) calendarError.value = '日历数据加载失败，请重试'
+  } finally {
+    if (token === dailyRequest) calendarLoading.value = false
   }
 }
 
-async function load() {
+async function load(target = requested) {
+  requested = target
   const token = ++requestId
   loading.value = true
   error.value = ''
   try {
-    const [from, to] = range.value
+    const [from, to] = target.day ? [target.day, target.day] : monthRange(target.month)
     const [monthly, budgetValue, list] = await Promise.all([
-      api.summary(...monthRange(month.value)),
-      api.budget(month.value).catch(() => null),
+      api.summary(...monthRange(target.month)),
+      api.budget(target.month),
       api.transactions({ from, to, q: query.value.trim() || undefined, limit: 100 }),
     ])
     if (token !== requestId) return
+    month.value = target.month
+    selectedDay.value = target.day
     summary.value = monthly
     budget.value = budgetValue
     items.value = list.items
     nextCursor.value = list.next_cursor
-    if (calendarOpen.value) await loadDaily()
   } catch (e) {
     if (token === requestId) error.value = e instanceof Error ? e.message : '流水加载失败'
   } finally {
@@ -91,32 +107,30 @@ async function load() {
 }
 
 async function loadMore() {
-  if (!nextCursor.value || loadingMore.value) return
+  if (!nextCursor.value || loadingMore.value || loading.value || error.value) return
+  const token = requestId
   loadingMore.value = true
   try {
     const list = await api.transactions({
       from: range.value[0], to: range.value[1], q: query.value.trim() || undefined,
       limit: 100, cursor: nextCursor.value,
     })
+    if (token !== requestId) return
     items.value = [...items.value, ...list.items]
     nextCursor.value = list.next_cursor
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '加载更多失败'
+    if (token === requestId) error.value = e instanceof Error ? e.message : '加载更多失败'
   } finally {
     loadingMore.value = false
   }
 }
 
 function goMonth(delta: number) {
-  month.value = shiftMonth(month.value, delta)
-  calendarMonth.value = month.value
-  selectedDay.value = ''
+  void load({ month: shiftMonth(requested.month, delta), day: '' })
 }
 
 function backToThisMonth() {
-  month.value = monthKey()
-  calendarMonth.value = month.value
-  selectedDay.value = ''
+  void load({ month: monthKey(), day: '' })
 }
 
 function toggleSearch() {
@@ -133,19 +147,24 @@ function closeSearch() {
   query.value = ''
 }
 
+function closeCalendar() {
+  calendarOpen.value = false
+  dailyRequest += 1
+}
+
 function openCalendar() {
-  calendarOpen.value = !calendarOpen.value
-  calendarMonth.value = month.value
-  if (calendarOpen.value) void loadDaily()
+  if (calendarOpen.value) return closeCalendar()
+  calendarOpen.value = true
+  void loadDaily(month.value)
 }
 
 function selectDay(day: string) {
-  selectedDay.value = day
-  calendarOpen.value = false
+  closeCalendar()
+  void load({ month: day.slice(0, 7), day })
 }
 
 function clearDay() {
-  selectedDay.value = ''
+  void load({ month: requested.month, day: '' })
 }
 
 function openCreate() {
@@ -179,19 +198,10 @@ async function confirmDelete() {
   }
 }
 
-watch(month, () => {
-  selectedDay.value = ''
-  void load()
-})
-watch(selectedDay, () => void load())
-watch(calendarMonth, () => {
-  if (calendarOpen.value) void loadDaily()
-})
 watch(query, () => {
   window.clearTimeout(searchTimer)
   searchTimer = window.setTimeout(() => {
-    selectedDay.value = ''
-    void load()
+    void load({ ...requested, day: '' })
   }, 300)
 })
 watch(entry.savedTick, () => {
@@ -199,22 +209,26 @@ watch(entry.savedTick, () => {
 })
 
 onMounted(() => void load())
-onBeforeUnmount(() => window.clearTimeout(searchTimer))
+onBeforeUnmount(() => {
+  window.clearTimeout(searchTimer)
+  requestId += 1
+  dailyRequest += 1
+})
 </script>
 
 <template>
   <section class="page bills-page">
-    <header class="bills-head">
+    <header class="bills-head" :aria-busy="loading">
       <button type="button" class="icon-btn" aria-label="上个月" @click="goMonth(-1)"><ChevronLeft :size="20" /></button>
-      <button type="button" class="month-switch" :aria-label="`当前月份 ${monthLabel(month)}，回到本月`" @click="backToThisMonth">
-        {{ monthLabel(month) }}
+      <button type="button" class="month-switch period-value" :aria-label="`当前月份 ${monthLabel(month)}，回到本月`" @click="backToThisMonth">
+        {{ monthLabel(month) }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" />
       </button>
       <button type="button" class="icon-btn" aria-label="下个月" @click="goMonth(1)"><ChevronRight :size="20" /></button>
       <div class="head-actions">
         <button type="button" class="icon-btn" aria-label="搜索" :aria-expanded="searchOpen" @click="toggleSearch">
           <Search :size="20" />
         </button>
-        <button type="button" class="icon-btn" aria-label="选择日期" :aria-expanded="calendarOpen" @click="openCalendar">
+        <button type="button" class="icon-btn" data-bills-calendar-trigger aria-label="选择日期" :aria-expanded="calendarOpen" @click="openCalendar">
           <CalendarDays :size="20" />
         </button>
       </div>
@@ -249,12 +263,13 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
 
     <SurfaceTransition name="popover">
       <MonthCalendar v-if="calendarOpen" :month="calendarMonth" :selected="selectedDay" :days="daily"
-      @update:month="calendarMonth = $event" @select="selectDay" @clear="clearDay" />
+       :loading="calendarLoading" :error="calendarError"
+        @update:month="loadDaily" @select="selectDay" @clear="clearDay" @close="closeCalendar" />
     </SurfaceTransition>
 
     <p v-if="error" class="inline-error bills-error" role="alert">
       {{ error }}
-      <button type="button" class="error-retry" @click="load">重试</button>
+      <button type="button" class="error-retry" @click="load()">重试</button>
     </p>
 
     <AppSkeleton v-if="loading && !items.length" :rows="4" />
@@ -265,7 +280,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       :hint="query.trim() ? '换个关键词试试，或清除搜索查看全部流水。' : '记下今天的第一笔，让每一笔都有迹可循。'"
       :action-label="canWrite && !query.trim() ? '记一笔' : ''" @action="openCreate" />
 
-    <button v-if="nextCursor" type="button" class="load-more" :disabled="loadingMore" @click="loadMore">
+    <button v-if="nextCursor" type="button" class="load-more" :disabled="loading || loadingMore" @click="loadMore">
       {{ loadingMore ? '加载中…' : '加载更多' }}
     </button>
 
@@ -276,7 +291,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       @confirm="confirmDelete" @cancel="deleteTarget = null" />
 
     <SurfaceTransition>
-      <BudgetEditor v-if="budgetEditor" :month="month" @close="budgetEditor = false" @saved="load" />
+      <BudgetEditor v-if="budgetEditor" :month="month" @close="budgetEditor = false" @saved="load()" />
     </SurfaceTransition>
   </section>
 </template>

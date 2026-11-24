@@ -259,10 +259,17 @@ a { color: var(--primary-deep); }
 
 .overlay-enter-active { animation: backdrop-in var(--motion-fast) var(--ease-soft) both; }
 .overlay-enter-active > .login-dialog { animation: sheet-rise var(--motion-base) var(--ease-soft) both; }
-.overlay-leave-active { animation: backdrop-in var(--motion-fast) var(--ease-soft) reverse both; }
+.overlay-leave-active { animation: backdrop-out var(--motion-fast) var(--ease-soft) both; }
 .overlay-leave-active > :is(.sheet, .login-dialog) {
-  animation: sheet-rise var(--motion-fast) var(--ease-soft) reverse both;
+  animation: sheet-dismiss var(--motion-fast) var(--ease-soft) both;
 }
+
+@keyframes backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes sheet-dismiss { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(10px) scale(.99); } }
+
+.period-value { position: relative; }
+.period-spinner { position: absolute; inset-block-start: 50%; inset-inline-end: 6px; margin-top: -5px; width: 10px; height: 10px; }
+.chart-period-label .period-spinner, .calendar-bar .period-spinner { inset-inline-end: -15px; }
 
 .flow-in, .flow-enter-active { animation: flow-in var(--motion-base) var(--ease-soft) both; }
 .flow-leave-active { animation: flow-in var(--motion-fast) var(--ease-soft) reverse both; }
@@ -276,10 +283,12 @@ a { color: var(--primary-deep); }
   to { opacity: 1; transform: none; }
 }
 
-.profile-dialog[open], .emoji-picker[open] .emoji-popover,
+.profile-dialog[open],
 .investment-holdings[open] > :not(summary) {
   animation: flow-in var(--motion-fast) var(--ease-soft) both;
 }
+dialog.dialog-dismissing[open] { animation: sheet-dismiss var(--motion-fast) var(--ease-soft) both; }
+dialog.dialog-dismissing[open]::backdrop { animation: backdrop-out var(--motion-fast) var(--ease-soft) both; }
 
 @media (min-width: 1024px) {
   .sheet-backdrop { align-items: center; }

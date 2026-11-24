@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { api, type UserProfile } from '../services/api'
 import { today } from '../services/format'
 import DatePicker from './DatePicker.vue'
+import { dismissNativeDialog, isOutsideDialog } from './nativeDialogMotion'
 
 const props = defineProps<{ profile: UserProfile; userId?: string }>()
 const emit = defineEmits<{ close: []; saved: [message: string, profileChanged: boolean] }>()
@@ -20,6 +21,14 @@ const draft = reactive({
 const avatarImage = computed(() => draft.avatar.startsWith('data:image/jpeg;base64,'))
 
 onMounted(() => dialog.value?.showModal())
+
+async function closeProfile() {
+  if (!busy.value && await dismissNativeDialog(dialog.value)) emit('close')
+}
+
+function onBackdrop(event: MouseEvent) {
+  if (isOutsideDialog(event)) void closeProfile()
+}
 
 async function submit(action: () => Promise<unknown>, message: string, profileChanged: boolean) {
   if (busy.value) return
@@ -84,10 +93,11 @@ async function uploadAvatar(event: Event) {
 </script>
 
 <template>
-  <dialog ref="dialog" class="profile-dialog" aria-labelledby="profile-heading" @cancel.self.prevent="!busy && emit('close')">
+  <dialog ref="dialog" class="profile-dialog" aria-labelledby="profile-heading"
+    @cancel.self.prevent="closeProfile" @click.self="onBackdrop">
     <div class="profile-heading">
       <h2 id="profile-heading">{{ userId ? '编辑用户资料' : '个人资料' }}</h2>
-      <button class="ghost" type="button" :disabled="busy" @click="emit('close')">关闭</button>
+      <button class="ghost" type="button" :disabled="busy" @click="closeProfile">关闭</button>
     </div>
     <p>登录用户名 <strong>{{ profile.username }}</strong></p>
     <form class="profile-fields" @submit.prevent="saveProfile">

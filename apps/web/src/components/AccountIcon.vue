@@ -24,7 +24,6 @@ const fallbackIcon = computed(() => {
   display: inline-grid;
   width: 24px;
   height: 24px;
-  margin-inline-end: 7px;
   border-radius: 5px;
   vertical-align: middle;
   object-fit: contain;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { formatMinor, monthLabel, shiftMonth, today } from '../services/format'
 import type { DailyStat } from '../services/api'
@@ -8,13 +8,24 @@ const props = defineProps<{
   month: string
   selected: string
   days: DailyStat[]
+  loading?: boolean
+  error?: string
 }>()
 
 const emit = defineEmits<{
   'update:month': [month: string]
   select: [date: string]
   clear: []
+  close: []
 }>()
+
+const root = ref<HTMLElement>()
+function onOutside(event: PointerEvent) {
+  if (event.target instanceof Element && !root.value?.contains(event.target)
+      && !event.target.closest('[data-bills-calendar-trigger]')) emit('close')
+}
+onMounted(() => document.addEventListener('pointerdown', onOutside))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -49,16 +60,17 @@ function compactTotal(minor: number): string {
 </script>
 
 <template>
-  <section class="month-calendar" aria-label="选择日期">
+  <section ref="root" class="month-calendar" aria-label="选择日期" :aria-busy="loading" @keydown.esc.stop="emit('close')">
     <header class="calendar-bar">
       <button type="button" class="icon-btn" aria-label="上个月" @click="emit('update:month', shiftMonth(month, -1))">
         <ChevronLeft :size="20" />
       </button>
-      <strong aria-live="polite">{{ monthLabel(month) }}</strong>
+      <strong class="period-value" aria-live="polite">{{ monthLabel(month) }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" /></strong>
       <button type="button" class="icon-btn" aria-label="下个月" @click="emit('update:month', shiftMonth(month, 1))">
         <ChevronRight :size="20" />
       </button>
     </header>
+    <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
     <div class="calendar-weekdays" aria-hidden="true">
       <span v-for="day in WEEKDAYS" :key="day">{{ day }}</span>
     </div>

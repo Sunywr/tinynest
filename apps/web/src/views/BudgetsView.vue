@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import SurfaceTransition from "../components/SurfaceTransition.vue"
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import BudgetBar from '../components/BudgetBar.vue'
 import BudgetEditor from '../components/BudgetEditor.vue'
 import SmartSelect from '../components/SmartSelect.vue'
@@ -22,16 +22,32 @@ const saving = ref(false)
 const error = ref('')
 const formError = ref('')
 
-async function loadMonth() {
-  const selected = month.value
-  monthly.value = null
+const monthLoading = ref(false)
+const monthError = ref('')
+let monthRequest = 0
+
+async function loadMonth(selected = month.value) {
   if (!/^\d{4}-\d{2}$/.test(selected)) return
+  const token = ++monthRequest
+  monthLoading.value = true
+  monthError.value = ''
   try {
     const budget = await api.budget(selected)
-    if (month.value === selected) monthly.value = budget
+    if (token !== monthRequest) return
+    month.value = selected
+    monthly.value = budget
   } catch (e) {
-    if (month.value === selected) error.value = e instanceof Error ? e.message : '月度预算加载失败'
+    if (token === monthRequest) monthError.value = e instanceof Error ? e.message : '月度预算加载失败'
+  } finally {
+    if (token === monthRequest) monthLoading.value = false
   }
+}
+
+function changeMonth(event: Event) {
+  const input = event.target as HTMLInputElement
+  const selected = input.value
+  input.value = month.value
+  if (selected && selected !== month.value) void loadMonth(selected)
 }
 
 async function loadProjects() {
@@ -76,7 +92,6 @@ async function save() {
 }
 
 onMounted(() => { void loadProjects(); void loadMonth() })
-watch(month, () => { editMonthly.value = false; void loadMonth() })
 </script>
 
 <template>
@@ -90,11 +105,13 @@ watch(month, () => { editMonthly.value = false; void loadMonth() })
     <section class="budget-section" aria-labelledby="monthly-heading">
       <div class="section-head">
         <h2 id="monthly-heading">月度预算</h2>
-        <input v-model="month" type="month" aria-label="预算月份" />
+        <input :value="month" type="month" aria-label="预算月份" :aria-busy="monthLoading" @change="changeMonth" />
       </div>
       <p class="budget-hint">当月所有支出自动计入，包括已关联项目的支出。</p>
+      <p v-if="monthLoading" class="budget-hint" role="status">正在读取月度预算…</p>
+      <p v-if="monthError" class="inline-error" role="alert">{{ monthError }}</p>
       <BudgetBar :budget="monthly" :spent-minor="monthly?.spent_minor ?? 0"
-        :editable="canWrite && !!monthly" @edit="editMonthly = true" />
+        :editable="canWrite && !!monthly && !monthLoading" @edit="editMonthly = true" />
     </section>
 
     <section class="budget-section" aria-labelledby="projects-heading">
@@ -140,7 +157,7 @@ watch(month, () => { editMonthly.value = false; void loadMonth() })
       </article>
     </section>
     <SurfaceTransition>
-      <BudgetEditor v-if="editMonthly" :month="month" @close="editMonthly = false" @saved="loadMonth" />
+      <BudgetEditor v-if="editMonthly" :month="month" @close="editMonthly = false" @saved="loadMonth()" />
     </SurfaceTransition>
   </div>
 </template>

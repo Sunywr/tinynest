@@ -61,7 +61,14 @@ export function useEntryForm(options: EntryFormOptions) {
   const transferInvalid = computed(() => type.value === 'transfer' && (!accountId.value || !toAccountId.value || accountId.value === toAccountId.value))
   const canSave = computed(() => !saving.value && !loading.value && !offline.value && !amountInvalid.value && !transferInvalid.value
     && (type.value === 'transfer' ? true : !!categoryId.value && !!accountId.value))
-  const dirty = computed(() => amount.value !== '0' || note.value.trim() !== '' || budgetId.value !== '')
+  const dirty = computed(() => {
+    const original = editing.value
+    if (!original) return amount.value !== '0' || note.value.trim() !== '' || budgetId.value !== ''
+    return amountMinor.value !== original.amount_minor || note.value.trim() !== (original.note?.trim() || '')
+      || date.value !== original.occurred_on || categoryId.value !== (original.category_id || '')
+      || accountId.value !== (original.account_id || '') || toAccountId.value !== (original.to_account_id || '')
+      || memberId.value !== (original.member_id || '') || budgetId.value !== (original.budget_id || '')
+  })
 
   function ensureDefaults(forceCategory = false) {
     if (activeAccounts.value.length && !activeAccounts.value.some(a => a.id === accountId.value)) {

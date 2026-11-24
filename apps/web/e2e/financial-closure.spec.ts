@@ -331,6 +331,17 @@ test.describe('B 记账面板', () => {
     await expect(icon).toHaveAttribute('fill', 'none')
   })
 
+  test('记账分类可搜索，点击遮罩时播放退场动画', async ({ page }) => {
+    await gotoBills(page)
+    const dialog = await openEntrySheet(page)
+    await dialog.getByRole('searchbox', { name: '搜索分类' }).fill('交通')
+    await expect(dialog.getByRole('listbox', { name: '选择分类' }).getByRole('option')).toHaveCount(1)
+    await expect(dialog.getByRole('option', { name: '交通' })).toBeVisible()
+    await page.locator('.entry-backdrop').dispatchEvent('click')
+    await expect(page.locator('.entry-backdrop')).toHaveClass(/overlay-leave-active/)
+    await expect(page.locator('.entry-backdrop')).toHaveCount(0)
+  })
+
   test('B03 自定义数字键盘输入与删除末位', async ({ page }) => {
     await gotoBills(page)
     const dialog = await openEntrySheet(page)
@@ -568,6 +579,22 @@ test.describe('C 账单列表', () => {
     await expect(label).not.toHaveText(before || '')
     await label.click()
     await expect(label).toHaveText(before || '')
+  })
+
+  test('账单保留原日期直到新月份数据加载完成', async ({ page }) => {
+    await gotoBills(page)
+    const month = page.locator('.month-switch')
+    const previous = await month.textContent()
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { release = resolve })
+    await page.route('**/api/v1/transactions?*', async route => { await waiting; await route.continue() })
+    await page.getByRole('button', { name: '上个月' }).click()
+    try {
+      await expect(month).toHaveText(previous!.trim())
+    } finally {
+      release()
+    }
+    await expect(month).not.toHaveText(previous!.trim())
   })
 
   test('C10 账单页汇总显示本月支出、收入与结余', async ({ page }) => {

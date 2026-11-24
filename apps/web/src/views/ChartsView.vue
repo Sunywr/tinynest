@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import CategoryTile from '../components/CategoryTile.vue'
 import DonutChart from '../components/DonutChart.vue'
@@ -23,8 +23,8 @@ const investmentLoading = ref(false)
 const investmentError = ref('')
 let requestId = 0
 let investmentRequestId = 0
+let requested = { kind: kind.value, period: period.value, month: month.value, year: year.value }
 
-const range = computed<[string, string]>(() => (period.value === 'month' ? monthRange(month.value) : yearRange(year.value)))
 const periodLabel = computed(() => (period.value === 'month' ? monthLabel(month.value) : `${year.value}年`))
 const total = computed(() => {
   if (summary.value) return kind.value === 'expense' ? summary.value.expense_minor : summary.value.income_minor
@@ -32,7 +32,7 @@ const total = computed(() => {
 })
 const kindLabel = computed(() => (kind.value === 'expense' ? '支出' : '收入'))
 const centreLabel = computed(() => (period.value === 'month' ? `本月${kindLabel.value}` : `本年${kindLabel.value}`))
-const empty = computed(() => !loading.value && !error.value && ranking.value.length === 0)
+const empty = computed(() => !!summary.value && ranking.value.length === 0)
 const pageSub = computed(() => investmentView.value ? '当前持仓的累计收益、股息与结构' : '看清钱花在了哪里')
 const investmentEmpty = computed(() => !!investments.value && investments.value.account_count === 0)
 const investmentTotalMinor = computed(() => investments.value?.total_market_value_minor ?? 0)
@@ -79,18 +79,23 @@ function kindShare(value: number): number {
   return investmentTotalMinor.value > 0 ? Math.round((value / investmentTotalMinor.value) * 10000) : 0
 }
 
-async function load() {
+async function load(target = requested) {
   if (investmentView.value) return
+  requested = target
   const token = ++requestId
   loading.value = true
   error.value = ''
   try {
-    const [from, to] = range.value
+    const [from, to] = target.period === 'month' ? monthRange(target.month) : yearRange(target.year)
     const [summaryResult, rankingResult] = await Promise.all([
       api.summary(from, to),
-      api.categoryStats(from, to, kind.value),
+      api.categoryStats(from, to, target.kind),
     ])
     if (token !== requestId) return
+    kind.value = target.kind
+    period.value = target.period
+    month.value = target.month
+    year.value = target.year
     summary.value = summaryResult
     ranking.value = rankingResult.items
   } catch (e) {
@@ -117,8 +122,7 @@ async function loadInvestments() {
 
 function showKind(next: 'expense' | 'income') {
   investmentView.value = false
-  kind.value = next
-  void load()
+  void load({ ...requested, kind: next })
 }
 
 function showInvestment() {
@@ -127,17 +131,15 @@ function showInvestment() {
 }
 
 function shift(delta: number) {
-  if (period.value === 'month') month.value = shiftMonth(month.value, delta)
-  else year.value += delta
+  void load(requested.period === 'month'
+    ? { ...requested, month: shiftMonth(requested.month, delta) }
+    : { ...requested, year: requested.year + delta })
 }
 
 function setPeriod(next: 'month' | 'year') {
-  period.value = next
+  void load({ ...requested, period: next })
 }
 
-watch([kind, period, month, year], () => {
-  if (!investmentView.value) void load()
-})
 onMounted(() => void load())
 </script>
 
@@ -162,25 +164,25 @@ onMounted(() => void load())
         <button type="button" class="segmented-btn" :class="{ active: !investmentView && kind === 'income' }" :aria-pressed="!investmentView && kind === 'income'" @click="showKind('income')">收入</button>
         <button type="button" class="segmented-btn" :class="{ active: investmentView }" :aria-pressed="investmentView" @click="showInvestment">投资</button>
       </div>
-      <div v-if="!investmentView" class="chart-nav">
+      <div v-if="!investmentView" class="chart-nav" :aria-busy="loading">
         <button type="button" class="icon-btn" :aria-label="period === 'month' ? '上个月' : '上一年'" @click="shift(-1)"><ChevronLeft :size="18" /></button>
-        <span class="chart-period-label" aria-live="polite">{{ periodLabel }}</span>
+        <span class="chart-period-label period-value" aria-live="polite">{{ periodLabel }}<span v-if="loading" class="spinner dark period-spinner" aria-hidden="true" /></span>
         <button type="button" class="icon-btn" :aria-label="period === 'month' ? '下个月' : '下一年'" @click="shift(1)"><ChevronRight :size="18" /></button>
       </div>
     </div>
 
     <p v-if="!investmentView && error" class="inline-error" role="alert">
       {{ error }}
-      <button type="button" class="error-retry" @click="load">重试</button>
+      <button type="button" class="error-retry" @click="load()">重试</button>
     </p>
     <p v-if="investmentView && investmentError" class="inline-error" role="alert">
       {{ investmentError }}
       <button type="button" class="error-retry" @click="loadInvestments">重试</button>
     </p>
-    <AppSkeleton v-if="!investmentView && loading" variant="chart" />
+    <AppSkeleton v-if="!investmentView && loading && !summary" variant="chart" />
     <AppSkeleton v-if="investmentView && investmentLoading" variant="chart" />
 
-    <template v-if="!investmentView && !empty && !error">
+    <template v-if="!investmentView && summary && ranking.length">
       <section :key="kind + periodLabel" class="card chart-card flow-in" aria-label="分类占比环形图">
         <DonutChart :items="ranking" :total-minor="total" :center-label="centreLabel" />
       </section>
