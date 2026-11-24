@@ -104,7 +104,7 @@ export type ProfileUpdate = {
 }
 export type ManagedUser = UserProfile & { id: string; role: string; status: string }
 
-export type Household = { name: string; currency: string; timezone: string }
+export type Household = { id: string; name: string; currency: string; timezone: string }
 export type Member = { id: string; name: string; status: string; bound?: boolean; user_id?: string; username?: string; role?: string; user_status?: string }
 export type Category = { id: string; kind: 'expense' | 'income'; name: string; emoji: string; color?: string; sort: number; active: number | boolean }
 export type Account = {
@@ -346,6 +346,8 @@ export const api = {
   mailReset: (body: unknown) => post('/auth/mail/reset', body),
 
   household: () => get<Household>('/household/current'),
+  updateHousehold: (id: string, name: string) => patch<Pick<Household, 'id' | 'name'>>('/household/current', { id, name }),
+  archiveHousehold: (id: string) => del(`/household/current?id=${encodeURIComponent(id)}`),
   members: () => get<{ items: Member[] }>('/household/members'),
   createMember: (name: string) => post<Member>('/household/members', { name }),
   deleteMember: (id: string) => del(`/household/members/${encodeURIComponent(id)}`),

@@ -72,4 +72,37 @@ func TestRegistrationCanSignInBeforeVerification(t *testing.T) {
 	if me["household_id"] != created["household_id"] || me["role"] != "member" || me["member_id"] == "" {
 		t.Fatalf("unexpected approved access: %v", me)
 	}
+	const path = "/api/v1/household/current"
+	householdID := created["household_id"].(string)
+	deletePath := path + "?id=" + householdID
+	rename := map[string]string{"id": householdID, "name": "重命名家庭"}
+	if status, _ := c.do("PATCH", path, rename); status != 403 {
+		t.Fatalf("member rename status = %d", status)
+	}
+	if status, _ := c.do("DELETE", deletePath, nil); status != 403 {
+		t.Fatalf("member archive status = %d", status)
+	}
+	owner.mustOK("PATCH", path, rename)
+	if got := owner.mustOK("GET", path, nil)["name"]; got != rename["name"] {
+		t.Fatalf("household name = %v", got)
+	}
+	unused := owner.mustOK("POST", "/api/v1/household/invitations", map[string]string{"member_name": "待加入"})
+	owner.mustOK("DELETE", deletePath, nil)
+	for _, member := range []*testClient{owner, c} {
+		me := member.mustOK("GET", "/api/v1/auth/me", nil)
+		if me["household_id"] != "" || me["member_id"] != "" || me["email_verified"] != true {
+			t.Fatalf("unexpected detached identity: %v", me)
+		}
+	}
+	if status, _ := c.do("POST", "/api/v1/auth/join", map[string]any{"code": unused["code"]}); status != 400 {
+		t.Fatalf("archived invitation status = %d", status)
+	}
+	var archivedName string
+	if err := database.QueryRow(`SELECT name FROM households WHERE id=?`, householdID).Scan(&archivedName); err != nil || archivedName != rename["name"] {
+		t.Fatalf("archived household = %q, %v", archivedName, err)
+	}
+	owner.mustOK("POST", path, map[string]string{"name": "新家庭"})
+	if status, _ := owner.do("DELETE", deletePath, nil); status != 409 {
+		t.Fatalf("stale archive request status = %d", status)
+	}
 }

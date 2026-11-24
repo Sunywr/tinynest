@@ -16,9 +16,9 @@ import (
 
 // Register wires every V2 endpoint onto the HTTP mux.
 //
-// The route budget is frozen at 57 (method + path). The list below is grouped
+// The route budget is set at 59 (method + path). The list below is grouped
 // by module so a reviewer can compare it with docs/plans/v2-bookkeeping-module-spec.md §5:
-//   - identity, household, admin, mail: 35 routes
+//   - identity, household, admin, mail: 37 routes
 //   - bookkeeping: 22 routes (4 categories, 7 accounts, 5 transactions, 4 stats, 2 budgets)
 func (a *API) Register(mux *http.ServeMux) {
 	a.routeCount = 0
@@ -39,6 +39,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.adminRoute(mux, "GET /api/v1/admin/join-applications", a.handleListApplications)
 	a.adminRoute(mux, "POST /api/v1/admin/join-applications/{id}", a.handleDecideApplication)
 	a.route(mux, "GET /api/v1/household/current", a.handleCurrentHousehold)
+	a.adminRoute(mux, "PATCH /api/v1/household/current", a.handleUpdateHousehold)
+	a.adminRoute(mux, "DELETE /api/v1/household/current", a.handleArchiveHousehold)
 	a.register(mux, "POST /api/v1/household/current", a.requireAuth(a.handleCreateHousehold))
 	a.route(mux, "GET /api/v1/household/members", a.handleListMembers)
 	a.route(mux, "POST /api/v1/household/members", a.handleCreateMember)

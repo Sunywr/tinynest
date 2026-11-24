@@ -88,6 +88,8 @@
 | POST | `/household/invitations` | 会话（`viewer` 写请求 403；`bind_existing` 需 admin） | 普通邀请：`member_id` 与 `member_name` 二选一、`username` 可空（指定登录名）；已有账号绑定：`bind_existing:true` + `member_id` + `username` | 201 `{code}`（明文邀请码只返回一次，落库保存哈希）；绑定成功 200 `{status:"bound",member_id,username}` | 400、403、404 档案已绑定/不可用、409 已有账号或成员已绑定 |
 | GET | `/household/current` | 会话 | 无 | 200 `{id,name,currency,timezone}` | 401、403、404 |
 | POST | `/household/current` | 会话与 CSRF（已验证邮箱且未加入家庭） | `name`（最多 100 字） | 201 `{household_id}`，创建者为家庭管理员 | 400、401、403、409 |
+| PATCH | `/household/current` | 家庭管理员与 CSRF | `id`、`name`（去除首尾空白后 1–100 字） | 200 `{id,name}` | 400、401、403、409 当前家庭已变化 |
+| DELETE | `/household/current?id={id}` | 家庭管理员与 CSRF | 当前家庭 ID | 200 `{status:"archived"}`，保留历史账本，解绑成员并撤销未决邀请 | 401、403、409 当前家庭已变化 |
 | GET | `/household/members` | 会话 | 无 | 200 `{items:[{id,name,status,bound,user_id?,username?,role?,user_status?}],total}`（排除已删除；`bound` 表示已绑定登录账号，`user_status` 为绑定账号状态） | 401 |
 | POST | `/household/members` | 会话 | `name`（1–100 字） | 201 `{id,name,status:"active"}` | 400 |
 | DELETE | `/household/members/{id}` | 会话 | 无 | 200 `{id,status:"deleted"}`（软删除） | 404、409 `member_in_use`（已绑定登录、被邀请或被账务引用） |

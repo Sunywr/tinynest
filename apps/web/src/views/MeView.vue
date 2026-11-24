@@ -13,7 +13,7 @@ import UserProfileDialog from '../components/UserProfileDialog.vue'
 import { useSession } from '../composables/useSession'
 import { useToast } from '../composables/useToast'
 import { monthKey, monthLabel, monthRange } from '../services/format'
-import type { UserProfile } from '../services/api'
+import { api, type UserProfile } from '../services/api'
 
 const router = useRouter()
 const session = useSession()
@@ -28,6 +28,48 @@ const usersOpen = ref(false)
 const auditOpen = ref(false)
 const logoutOpen = ref(false)
 const loggingOut = ref(false)
+const householdName = ref<string | null>(null)
+const householdBusy = ref(false)
+const archiveOpen = ref(false)
+const archiveID = ref('')
+const householdError = ref('')
+
+async function saveHousehold() {
+  const current = session.household.value
+  if (!current || householdName.value === null || householdBusy.value) return
+  householdBusy.value = true
+  householdError.value = ''
+  try {
+    const updated = await api.updateHousehold(current.id, householdName.value.trim())
+    if (session.household.value?.id === updated.id) {
+      session.household.value = { ...current, name: updated.name }
+    }
+    householdName.value = null
+    toast('家庭设置已保存')
+  } catch (error) {
+    householdError.value = error instanceof Error ? error.message : '保存失败，请重试'
+  } finally {
+    householdBusy.value = false
+  }
+}
+
+async function archiveHousehold() {
+  if (!archiveID.value || householdBusy.value) return
+  householdBusy.value = true
+  householdError.value = ''
+  try {
+    await api.archiveHousehold(archiveID.value)
+    archiveOpen.value = false
+    householdName.value = null
+    toast('家庭已删除，历史账本已归档')
+    await session.refreshMe()
+  } catch (error) {
+    archiveOpen.value = false
+    householdError.value = error instanceof Error ? error.message : '删除失败，请重试'
+  } finally {
+    householdBusy.value = false
+  }
+}
 
 const me = computed(() => session.me.value)
 const profile = computed<UserProfile>(() => ({
@@ -108,6 +150,18 @@ async function profileSaved() {
       <button type="button" class="me-menu-item" @click="openSettings">
         <span>邮箱与密码</span><span class="me-menu-meta"><ChevronRight :size="16" /></span>
       </button>
+      <button v-if="isAdmin && session.household.value" type="button" class="me-menu-item"
+        @click="householdName = session.household.value.name; householdError = ''">
+        <span>家庭设置</span><ChevronRight :size="16" />
+      </button>
+      <form v-if="isAdmin && householdName !== null" class="card settings-card" @submit.prevent="saveHousehold">
+        <label>家庭名称<input v-model="householdName" maxlength="100" required :disabled="householdBusy" /></label>
+        <p v-if="householdError" class="err" role="alert">{{ householdError }}</p>
+        <button class="btn-primary" :disabled="householdBusy || !householdName.trim()">保存</button>
+        <button type="button" class="btn-quiet" :disabled="householdBusy" @click="householdName = null">取消</button>
+        <button type="button" class="btn-danger" :disabled="householdBusy"
+          @click="archiveID = session.household.value?.id || ''; archiveOpen = true">删除家庭</button>
+      </form>
       <div class="me-household">
         <span>家庭</span>
         <strong>{{ session.household.value?.name || '—' }}</strong>
@@ -135,6 +189,10 @@ async function profileSaved() {
     <ExportMenu v-if="exportOpen" :from="from" :to="to" @close="exportOpen = false" />
     <AdminUsers v-if="usersOpen" @close="usersOpen = false" />
     <AuditLogs v-if="auditOpen" @close="auditOpen = false" />
+    <ConfirmSheet :open="archiveOpen" title="确认删除家庭？"
+      message="历史账本将归档，所有成员将回到创建或加入家庭页面，未使用的邀请码将失效。"
+      confirm-label="删除家庭" danger :busy="householdBusy"
+      @confirm="archiveHousehold" @cancel="archiveOpen = false" />
     <ConfirmSheet :open="logoutOpen" title="要退出登录吗？" message="退出后需要重新登录才能查看家庭账目。"
       confirm-label="退出登录" danger :busy="loggingOut"
       @confirm="logout" @cancel="logoutOpen = false" />

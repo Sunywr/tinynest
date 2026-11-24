@@ -28,7 +28,7 @@ const principalKey contextKey = 1
 
 // maxRoutes is the frozen route budget including authenticated household creation. The route-count
 // test asserts Register() never exceeds it.
-const maxRoutes = 57
+const maxRoutes = 59
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {

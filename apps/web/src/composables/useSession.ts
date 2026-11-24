@@ -87,6 +87,10 @@ async function refreshMe() {
   setCSRFToken(profile.csrf_token || '')
   const joined = !hasHousehold.value && Boolean(profile.household_id)
   if (joined) await loadContext()
+  if (!profile.household_id) {
+    household.value = null
+    members.value = []
+  }
   me.value = profile
 }
 

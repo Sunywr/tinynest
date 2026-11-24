@@ -115,6 +115,9 @@ func (a *API) handleBindExistingMember(w http.ResponseWriter, r *http.Request, p
 	unavailable := errors.New("成员或账号已绑定、不存在或不可用")
 	ctx := r.Context()
 	err := a.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := a.lockHouseholdActor(r, tx, p); err != nil {
+			return err
+		}
 		status, err := a.lockMember(r, tx, p.HouseholdID, memberID)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && status != "active") {
 			return unavailable
@@ -195,6 +198,9 @@ func (a *API) handleIssueInvite(w http.ResponseWriter, r *http.Request) {
 	unavailable := errors.New("成员档案已绑定或不可用，请选择其他档案")
 	err = a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		ctx := r.Context()
+		if err := a.lockHouseholdActor(r, tx, p); err != nil {
+			return err
+		}
 		if in.MemberName != "" {
 			in.MemberID = newID("mem")
 			if _, err := tx.ExecContext(ctx, `INSERT INTO household_members(id,household_id,name) VALUES(?,?,?)`,
@@ -323,6 +329,9 @@ func (a *API) handleDecideApplication(w http.ResponseWriter, r *http.Request) {
 	unavailable := errors.New("申请已处理、已过期或成员已绑定")
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		ctx := r.Context()
+		if err := a.lockHouseholdActor(r, tx, p); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE household_invites SET decided_at=?
   WHERE token_hash=? AND household_id=? AND applicant IS NOT NULL AND decided_at IS NULL AND expires_at>?`, a.nowUTC(), id, p.HouseholdID, a.nowUTC())
 		if err != nil {
