@@ -71,7 +71,10 @@ async function performRequest<T>(path: string, init: RequestInit): Promise<T> {
     if (res.status === 401 && (!path.startsWith('/auth/') || path === '/auth/me' || path.startsWith('/auth/me/'))) {
       window.dispatchEvent(new CustomEvent('tinynest:session-expired'))
     }
-    throw new ApiError(data?.error?.code || 'http_error', data?.error?.message || `请求失败 (${res.status})`, res.status)
+    const message = res.status === 504 && method === 'GET'
+      ? '服务器响应超时，请重试'
+      : `请求失败 (${res.status})`
+    throw new ApiError(data?.error?.code || 'http_error', data?.error?.message || message, res.status)
   }
   return data as T
 }

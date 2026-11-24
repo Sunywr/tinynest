@@ -88,19 +88,17 @@ async function load(target = requested) {
   error.value = ''
   try {
     const [from, to] = target.period === 'month' ? monthRange(target.month) : yearRange(target.year)
-    const [summaryResult, rankingResult] = await Promise.allSettled([
+    const [summaryResult, rankingResult] = await Promise.all([
       api.summary(from, to),
       api.categoryStats(from, to, target.kind),
     ])
     if (token !== requestId) return
-    if (summaryResult.status === 'rejected') throw summaryResult.reason
-    if (rankingResult.status === 'rejected') throw rankingResult.reason
     kind.value = target.kind
     period.value = target.period
     month.value = target.month
     year.value = target.year
-    summary.value = summaryResult.value
-    ranking.value = rankingResult.value.items
+    summary.value = summaryResult
+    ranking.value = rankingResult.items
   } catch (e) {
     if (token === requestId) error.value = e instanceof Error ? e.message : '图表数据加载失败'
   } finally {

@@ -698,7 +698,7 @@ test.describe('D 图表', () => {
     const waiting = new Promise<void>(resolve => { release = resolve })
     await page.route('**/api/v1/stats/categories?*', async route => {
       await waiting
-      await route.fulfill({ status: 500, json: { error: { message: '图表加载测试失败' } } })
+      await route.fulfill({ status: 504, contentType: 'text/html', body: '<h1>Gateway Timeout</h1>' })
     })
     await income.click()
     try {
@@ -708,7 +708,7 @@ test.describe('D 图表', () => {
     } finally {
       release()
     }
-    await expect(page.getByRole('alert')).toContainText('图表加载测试失败')
+    await expect(page.getByRole('alert')).toContainText('服务器响应超时，请重试')
     await expect(income).toBeEnabled()
   })
 
