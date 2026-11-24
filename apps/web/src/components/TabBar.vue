@@ -9,7 +9,7 @@ const route = useRoute()
 const session = useSession()
 
 const name = computed(() => String(route.name || ''))
-const onMe = computed(() => name.value === 'me' || name.value === 'settings')
+const onMe = computed(() => ['me', 'settings', 'budgets'].includes(name.value))
 const canWrite = computed(() => session.canWrite.value)
 </script>
 
@@ -74,7 +74,9 @@ const canWrite = computed(() => session.canWrite.value)
   font-size: 11px;
   border-radius: 12px;
 }
+.tab > svg { transition: transform var(--motion-fast) var(--ease-soft); }
 .tab.active { color: var(--primary-deep); }
+.tab.active > svg { transform: translateY(-2px); }
 .tab.active .tab-label { font-weight: 750; }
 .tab-label { font-size: 11px; line-height: 1.2; }
 .tab-entry {

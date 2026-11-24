@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "../components/SurfaceTransition.vue"
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ChevronRight } from 'lucide-vue-next'
@@ -152,7 +153,7 @@ async function profileSaved() {
         @click="householdName = session.household.value.name; householdError = ''">
         <span>家庭设置</span><ChevronRight :size="16" />
       </button>
-      <form v-if="isAdmin && householdName !== null" class="card settings-card" @submit.prevent="saveHousehold">
+      <form v-if="isAdmin && householdName !== null" class="card settings-card flow-in" @submit.prevent="saveHousehold">
         <label>家庭名称<input v-model="householdName" maxlength="100" required :disabled="householdBusy" /></label>
         <p v-if="householdError" class="err" role="alert">{{ householdError }}</p>
         <button class="btn-primary" :disabled="householdBusy || !householdName.trim()">保存</button>
@@ -181,11 +182,21 @@ async function profileSaved() {
 
     <UserProfileDialog v-if="profileOpen" :profile="profile" @close="profileOpen = false"
       @saved="profileSaved" />
-    <MembersEditor v-if="membersOpen" @close="membersOpen = false" />
-    <CategoryEditor v-if="categoryOpen" @close="categoryOpen = false" />
-    <ExportMenu v-if="exportOpen" :from="from" :to="to" @close="exportOpen = false" />
-    <AdminUsers v-if="usersOpen" @close="usersOpen = false" />
-    <AuditLogs v-if="auditOpen" @close="auditOpen = false" />
+    <SurfaceTransition>
+      <MembersEditor v-if="membersOpen" @close="membersOpen = false" />
+    </SurfaceTransition>
+    <SurfaceTransition>
+      <CategoryEditor v-if="categoryOpen" @close="categoryOpen = false" />
+    </SurfaceTransition>
+    <SurfaceTransition>
+      <ExportMenu v-if="exportOpen" :from="from" :to="to" @close="exportOpen = false" />
+    </SurfaceTransition>
+    <SurfaceTransition>
+      <AdminUsers v-if="usersOpen" @close="usersOpen = false" />
+    </SurfaceTransition>
+    <SurfaceTransition>
+      <AuditLogs v-if="auditOpen" @close="auditOpen = false" />
+    </SurfaceTransition>
     <ConfirmSheet :open="archiveOpen" title="确认删除家庭？"
       message="历史账本将归档，所有成员将回到创建或加入家庭页面，未使用的邀请码将失效。"
       confirm-label="删除家庭" danger :busy="householdBusy"

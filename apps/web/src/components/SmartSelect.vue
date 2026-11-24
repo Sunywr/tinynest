@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "./SurfaceTransition.vue"
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import CategoryIcon from './CategoryIcon.vue'
 import { activeOpenId, nextUid } from './dropdownState'
@@ -112,30 +113,32 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       <span v-if="selected?.badge" class="ss-badge" :class="{ income: selected.badge === '收入' }">{{ selected.badge }}</span>
       <span class="ss-caret select-caret">▾</span>
     </button>
-    <div v-if="isOpen" class="ss-dropdown select-popover">
-      <input ref="searchInput" v-model="query" class="ss-search" type="text"
-        :placeholder="placeholder || '搜索…'" @input="onInput"
-        @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)"
-        @keydown.enter.prevent="onEnter" @keydown.esc.prevent="closeMenu()" />
-      <ul class="ss-list" role="listbox">
-        <li v-if="!rows.length" class="ss-empty">无匹配项</li>
-        <template v-for="(r, i) in rows" :key="i">
-          <li v-if="r.kind === 'option'" class="ss-option" :class="{ hl: i === highlighted, sel: r.option.id === modelValue }"
-            role="option" :aria-selected="r.option.id === modelValue"
-            @mouseenter="highlighted = i" @mousedown.prevent="selectOption(r.option)">
-            <CategoryIcon v-if="r.option.emoji" class="ss-emoji" :value="r.option.emoji" />
-            <span class="ss-name">{{ r.option.name }}</span>
-            <span v-if="r.option.badge" class="ss-badge" :class="{ income: r.option.badge === '收入' }">{{ r.option.badge }}</span>
-            <span v-if="r.option.hint" class="ss-hint">{{ r.option.hint }}</span>
-            <span v-if="r.option.id === modelValue" class="ss-check">✓</span>
-          </li>
-          <li v-else class="ss-option ss-create" :class="{ hl: i === highlighted }"
-            role="option" @mouseenter="highlighted = i" @mousedown.prevent="emitCreate()">
-            <span class="ss-plus">＋</span><span class="ss-name">{{ createRowLabel }}</span>
-          </li>
-        </template>
-      </ul>
-    </div>
+    <SurfaceTransition name="popover">
+      <div v-if="isOpen" class="ss-dropdown select-popover">
+        <input ref="searchInput" v-model="query" class="ss-search" type="text"
+          :placeholder="placeholder || '搜索…'" @input="onInput"
+          @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)"
+          @keydown.enter.prevent="onEnter" @keydown.esc.prevent="closeMenu()" />
+        <ul class="ss-list" role="listbox">
+          <li v-if="!rows.length" class="ss-empty">无匹配项</li>
+          <template v-for="(r, i) in rows" :key="i">
+            <li v-if="r.kind === 'option'" class="ss-option" :class="{ hl: i === highlighted, sel: r.option.id === modelValue }"
+              role="option" :aria-selected="r.option.id === modelValue"
+              @mouseenter="highlighted = i" @mousedown.prevent="selectOption(r.option)">
+              <CategoryIcon v-if="r.option.emoji" class="ss-emoji" :value="r.option.emoji" />
+              <span class="ss-name">{{ r.option.name }}</span>
+              <span v-if="r.option.badge" class="ss-badge" :class="{ income: r.option.badge === '收入' }">{{ r.option.badge }}</span>
+              <span v-if="r.option.hint" class="ss-hint">{{ r.option.hint }}</span>
+              <span v-if="r.option.id === modelValue" class="ss-check">✓</span>
+            </li>
+            <li v-else class="ss-option ss-create" :class="{ hl: i === highlighted }"
+              role="option" @mouseenter="highlighted = i" @mousedown.prevent="emitCreate()">
+              <span class="ss-plus">＋</span><span class="ss-name">{{ createRowLabel }}</span>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </SurfaceTransition>
   </div>
 </template>
 

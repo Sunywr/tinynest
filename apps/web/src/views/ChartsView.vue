@@ -181,11 +181,11 @@ onMounted(() => void load())
     <AppSkeleton v-if="investmentView && investmentLoading" variant="chart" />
 
     <template v-if="!investmentView && !empty && !error">
-      <section class="card chart-card" aria-label="分类占比环形图">
+      <section :key="kind + periodLabel" class="card chart-card flow-in" aria-label="分类占比环形图">
         <DonutChart :items="ranking" :total-minor="total" :center-label="centreLabel" />
       </section>
 
-      <section class="card chart-ranking" aria-label="分类排行">
+      <section :key="kind + periodLabel + '-ranking'" class="card chart-ranking flow-in" aria-label="分类排行">
         <h2 class="section-title">分类排行（{{ kindLabel }}）</h2>
         <ol class="ranking-list">
           <li v-for="(item, index) in ranking" :key="item.category_id" class="ranking-row" :style="{ '--i': index }">
@@ -213,7 +213,7 @@ onMounted(() => void load())
         hint="在资产页导入证券/理财账户和持仓后，这里会显示收益统计。" />
 
       <template v-if="investments && !investmentEmpty">
-        <section class="card inv-summary" aria-label="投资收益总览">
+        <section class="card inv-summary flow-in" aria-label="投资收益总览">
           <header class="inv-summary-head">
             <div>
               <h2 class="section-title">投资收益</h2>
@@ -229,7 +229,7 @@ onMounted(() => void load())
           </div>
         </section>
 
-        <div class="inv-chart-grid">
+        <div class="inv-chart-grid flow-in">
           <section class="card chart-card inv-donut-card" aria-label="证券与理财占比">
             <DonutChart :items="investmentDonut" :total-minor="investmentTotalMinor" center-label="投资市值" />
             <ul class="inv-legend">

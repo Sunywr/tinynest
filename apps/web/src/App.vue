@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "./components/SurfaceTransition.vue"
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppToast from './components/AppToast.vue'
@@ -52,21 +53,28 @@ onBeforeUnmount(() => {
     <p>正在打开小家…</p>
   </div>
 
-  <router-view v-else-if="(!authed && onPublicRoute) || (authed && !hasHousehold && route.name === 'onboarding')" />
+  <router-view v-else-if="(!authed && onPublicRoute) || (authed && !hasHousehold && route.name === 'onboarding')"
+    v-slot="{ Component }">
+    <component :is="Component" :class="{ 'app-enter': authed }" />
+  </router-view>
 
-  <div v-else-if="hasHousehold" class="app-shell">
+  <div v-else-if="hasHousehold" class="app-shell app-enter">
     <TabBar @entry="entry.openEntry()" />
     <main class="app-main">
       <router-view v-slot="{ Component, route: current }">
-        <Transition name="view" mode="out-in">
+        <SurfaceTransition name="view" mode="out-in">
           <component :is="Component" :key="current.path" />
-        </Transition>
+        </SurfaceTransition>
       </router-view>
     </main>
   </div>
 
-  <EntrySheet v-if="hasHousehold && entry.open.value" :transaction="entry.editing.value" :preset-type="entry.presetType.value"
-    @close="entry.closeEntry()" @saved="entry.closeEntry()" />
+  <Teleport v-if="hasHousehold" to="body">
+    <SurfaceTransition>
+      <EntrySheet v-if="entry.open.value" :transaction="entry.editing.value" :preset-type="entry.presetType.value"
+        @close="entry.closeEntry()" @saved="entry.closeEntry()" />
+    </SurfaceTransition>
+  </Teleport>
   <AppToast />
 </template>
 
@@ -86,6 +94,7 @@ onBeforeUnmount(() => {
   object-fit: contain;
   border-radius: 24px;
 }
+.app-enter { animation: backdrop-in var(--motion-base) var(--ease-soft); }
 .app-shell { min-height: 100dvh; background: var(--bg); }
 .app-main {
   padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 16px);

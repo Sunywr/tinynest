@@ -135,9 +135,9 @@ onBeforeUnmount(() => {
       <h2 id="login-title">{{ mode === 'join' ? '加入家庭' : '欢迎回家' }}</h2>
       <p id="login-desc">{{ mode === 'join' ? '使用已注册但尚未加入本家庭的账号与邀请码提交申请。' : mode === 'register' ? '注册后即可登录，验证邮箱后可创建或加入家庭。' : '登录后继续使用小家。' }}</p>
 
-      <PasswordRecovery v-if="mode === 'recover'" @close="switchMode('login')" />
+      <PasswordRecovery v-if="mode === 'recover'" class="flow-in" @close="switchMode('login')" />
 
-      <form v-else @submit.prevent="submit">
+      <form v-else :key="mode" class="flow-in" @submit.prevent="submit">
         <label>用户名
           <input ref="usernameInput" v-model="form.username" autocomplete="username" required />
         </label>

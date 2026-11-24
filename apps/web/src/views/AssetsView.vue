@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "../components/SurfaceTransition.vue"
 import { computed, onMounted, ref } from 'vue'
 import { ArrowLeftRight, Plus, X } from 'lucide-vue-next'
 import AccountForm from '../components/AccountForm.vue'
@@ -174,7 +175,7 @@ onMounted(() => void load())
     <EmptyState v-if="empty" title="还没有资产账户" hint="先创建一个现金账户，或导入证券/理财账户。"
       :action-label="canWrite ? '新增账户' : ''" @action="openCreate" />
 
-    <section v-if="journalFor" class="card journal-card" aria-label="账户流水">
+    <section v-if="journalFor" class="card journal-card flow-in" aria-label="账户流水">
       <header class="group-head">
         <h2>{{ journalFor.name }} · 账户流水</h2>
         <button type="button" class="icon-btn" aria-label="关闭账户流水" @click="journalFor = null"><X :size="18" /></button>
@@ -191,7 +192,11 @@ onMounted(() => void load())
       </ul>
     </section>
 
-    <AccountForm v-if="formOpen" :account="formAccount" @close="closeForm" @saved="load" />
-    <TransferForm v-if="transferOpen" :accounts="active" @close="transferOpen = false" @saved="load" />
+    <SurfaceTransition>
+      <AccountForm v-if="formOpen" :account="formAccount" @close="closeForm" @saved="load" />
+    </SurfaceTransition>
+    <SurfaceTransition>
+      <TransferForm v-if="transferOpen" :accounts="active" @close="transferOpen = false" @saved="load" />
+    </SurfaceTransition>
   </section>
 </template>

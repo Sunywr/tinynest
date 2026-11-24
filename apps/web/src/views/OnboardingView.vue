@@ -89,7 +89,7 @@ function refresh() {
       <img src="/icons/tinynest-original.png" alt="" class="dialog-logo" />
       <h2 id="onboarding-title">{{ verified ? '创建或加入家庭' : '验证邮箱' }}</h2>
       <p>{{ verified ? '邮箱已验证，可使用密码找回。创建或加入家庭后即可记账、查看资产与报表。' : '你已登录。验证邮箱后可找回密码，也可以创建或申请加入家庭。' }}</p>
-      <form v-if="!verified" @submit.prevent="verify">
+      <form v-if="!verified" class="flow-in" @submit.prevent="verify">
         <label>邮箱<input v-model="email" :disabled="busy" type="email" autocomplete="email" required /></label>
         <label>当前密码<input v-model="password" :disabled="busy" type="password" autocomplete="current-password" required /></label>
         <button type="button" class="btn-quiet" :disabled="busy || !email || !password" @click="sendCode">发送验证码</button>
@@ -98,11 +98,11 @@ function refresh() {
         <button class="btn-primary" :disabled="busy || !challenge">验证邮箱</button>
       </form>
       <template v-else>
-        <form @submit.prevent="create">
+        <form class="flow-in" @submit.prevent="create">
           <label>家庭名称<input v-model="household" :disabled="busy" maxlength="100" required /></label>
           <button class="btn-primary" :disabled="busy">创建家庭</button>
         </form>
-        <form @submit.prevent="join">
+        <form class="flow-in" @submit.prevent="join">
           <label>邀请码<input v-model="invite" :disabled="busy" maxlength="160" autocomplete="off" required /></label>
           <button class="btn-primary" :disabled="busy">申请加入家庭</button>
         </form>

@@ -102,7 +102,7 @@ async function submit() {
           <SmartSelect v-model="form.owner" :options="memberOptions" placeholder="不指定成员" :disabled="busy" />
         </div>
         <template v-if="form.kind === 'credit'">
-          <div class="form-row cycle-fields">
+          <div class="form-row cycle-fields flow-in">
             <label class="field-label">账单日（1–31）
               <input v-model="form.statementDay" type="number" min="1" max="31" step="1" inputmode="numeric"
                 placeholder="例如 5" :disabled="busy" />

@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import SurfaceTransition from "../components/SurfaceTransition.vue"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CalendarDays, ChevronLeft, ChevronRight, Search, X } from 'lucide-vue-next'
 import BudgetBar from '../components/BudgetBar.vue'
@@ -219,7 +220,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       </div>
     </header>
 
-    <div v-if="searchOpen" class="bills-search">
+    <div v-if="searchOpen" class="bills-search flow-in">
       <label class="sr-only" for="bills-search-input">搜索备注或分类</label>
       <input id="bills-search-input" ref="searchInput" v-model="query" type="search" placeholder="搜索备注或分类名称" />
       <button type="button" class="icon-btn" aria-label="关闭搜索" @click="closeSearch"><X :size="18" /></button>
@@ -246,8 +247,10 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       <button v-if="canWrite" type="button" class="quick-add" @click="openCreate">＋ 记一笔</button>
     </div>
 
-    <MonthCalendar v-if="calendarOpen" :month="calendarMonth" :selected="selectedDay" :days="daily"
+    <SurfaceTransition name="popover">
+      <MonthCalendar v-if="calendarOpen" :month="calendarMonth" :selected="selectedDay" :days="daily"
       @update:month="calendarMonth = $event" @select="selectDay" @clear="clearDay" />
+    </SurfaceTransition>
 
     <p v-if="error" class="inline-error bills-error" role="alert">
       {{ error }}
@@ -272,6 +275,8 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       confirm-label="删除并冲正" cancel-label="取消" danger :busy="deleting"
       @confirm="confirmDelete" @cancel="deleteTarget = null" />
 
-    <BudgetEditor v-if="budgetEditor" :month="month" @close="budgetEditor = false" @saved="load" />
+    <SurfaceTransition>
+      <BudgetEditor v-if="budgetEditor" :month="month" @close="budgetEditor = false" @saved="load" />
+    </SurfaceTransition>
   </section>
 </template>

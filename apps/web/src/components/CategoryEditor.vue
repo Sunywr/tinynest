@@ -163,7 +163,7 @@ onMounted(load)
         <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
         <p v-if="loading" class="inline-notice" role="status">正在加载分类…</p>
 
-        <ul v-if="!loading" class="editor-list">
+        <ul v-if="!loading" :key="kind" class="editor-list flow-in">
           <li v-for="(category, index) in visible" :key="category.id" class="editor-row" :class="{ inactive: Number(category.active) === 0 }">
             <CategoryTile :icon="category.emoji" :color="category.color" :index="index" :size="40" />
             <span class="editor-name">{{ category.name }}</span>
@@ -185,7 +185,7 @@ onMounted(load)
 
         <button v-if="!formOpen" type="button" class="btn-primary" @click="startCreate">＋ 新建分类</button>
 
-        <form v-else class="inline-form" @submit.prevent="save">
+        <form v-else class="inline-form flow-in" @submit.prevent="save">
           <h3 class="inline-form-title">{{ title }}</h3>
           <label class="field-label">名称
             <input v-model="form.name" maxlength="40" required placeholder="例如：餐饮" />

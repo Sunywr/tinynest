@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "../components/SurfaceTransition.vue"
 import { computed, onMounted, ref, watch } from 'vue'
 import BudgetBar from '../components/BudgetBar.vue'
 import BudgetEditor from '../components/BudgetEditor.vue'
@@ -107,21 +108,23 @@ watch(month, () => { editMonthly.value = false; void loadMonth() })
       <p v-if="loading" role="status">正在读取预算…</p>
       <p v-else-if="!projects.length && !error" class="budget-hint">还没有项目预算。</p>
 
-      <form v-if="editor" class="project-editor" @submit.prevent="save">
-        <h3>{{ editor.id ? '编辑项目预算' : '新增项目预算' }}</h3>
-        <label class="field-label">项目名称
-          <input v-model="editor.name" maxlength="80" placeholder="例如 新房装修" :disabled="saving" required />
-        </label>
-        <label class="field-label">预算金额（元）
-          <input v-model="editor.amount" inputmode="decimal" :disabled="saving" required />
-        </label>
-        <p v-if="formError" class="inline-error" role="alert">{{ formError }}</p>
-        <div class="form-actions">
-          <button type="button" class="btn-quiet" :disabled="saving" @click="editor = null">取消</button>
-          <button type="submit" class="btn-primary" :disabled="saving">{{ saving ? '保存中…' : '保存项目预算' }}</button>
-        </div>
-      </form>
-      <article v-for="project in visible" :key="project.id" class="project-budget">
+      <SurfaceTransition name="flow">
+        <form v-if="editor" class="project-editor" @submit.prevent="save">
+          <h3>{{ editor.id ? '编辑项目预算' : '新增项目预算' }}</h3>
+          <label class="field-label">项目名称
+            <input v-model="editor.name" maxlength="80" placeholder="例如 新房装修" :disabled="saving" required />
+          </label>
+          <label class="field-label">预算金额（元）
+            <input v-model="editor.amount" inputmode="decimal" :disabled="saving" required />
+          </label>
+          <p v-if="formError" class="inline-error" role="alert">{{ formError }}</p>
+          <div class="form-actions">
+            <button type="button" class="btn-quiet" :disabled="saving" @click="editor = null">取消</button>
+            <button type="submit" class="btn-primary" :disabled="saving">{{ saving ? '保存中…' : '保存项目预算' }}</button>
+          </div>
+        </form>
+      </SurfaceTransition>
+      <article v-for="project in visible" :key="project.id" class="project-budget flow-in">
         <div class="section-head">
           <h3>{{ project.name }}</h3>
           <button v-if="canWrite" type="button" class="btn-quiet" @click="edit(project)">编辑</button>
@@ -136,7 +139,9 @@ watch(month, () => { editMonthly.value = false; void loadMonth() })
         </dl>
       </article>
     </section>
-    <BudgetEditor v-if="editMonthly" :month="month" @close="editMonthly = false" @saved="loadMonth" />
+    <SurfaceTransition>
+      <BudgetEditor v-if="editMonthly" :month="month" @close="editMonthly = false" @saved="loadMonth" />
+    </SurfaceTransition>
   </div>
 </template>
 

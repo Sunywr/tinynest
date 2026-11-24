@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "../components/SurfaceTransition.vue"
 import { computed, nextTick, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ClipboardList, PenLine, PieChart, ShieldCheck, Users, Wallet } from 'lucide-vue-next'
@@ -104,6 +105,8 @@ function scrollToFeatures() {
       </footer>
     </div>
 
-    <LoginView v-if="loginOpen" @close="closeLogin" />
+    <SurfaceTransition>
+      <LoginView v-if="loginOpen" @close="closeLogin" />
+    </SurfaceTransition>
   </div>
 </template>

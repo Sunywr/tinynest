@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SurfaceTransition from "./SurfaceTransition.vue"
 import { nextTick, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -61,23 +62,25 @@ function onKeydown(event: KeyboardEvent) {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="sheet-backdrop confirm-backdrop" @click.self="cancel" @keydown="onKeydown">
-      <div ref="panel" class="sheet confirm-sheet" role="dialog" aria-modal="true" :aria-labelledby="'confirm-title'">
-        <div class="confirm-body">
-          <h2 id="confirm-title" class="sheet-title">{{ title }}</h2>
-          <p v-if="message" class="confirm-message">{{ message }}</p>
-          <p v-if="detail" class="inline-notice confirm-detail">{{ detail }}</p>
-        </div>
-        <div class="confirm-actions">
-          <button type="button" class="btn-quiet" :disabled="busy" @click="cancel">{{ cancelLabel }}</button>
-          <button ref="confirmButton" type="button" :class="danger ? 'btn-danger' : 'btn-primary'" :disabled="busy"
-            @click="emit('confirm')">
-            <span v-if="busy" class="spinner dark" aria-hidden="true"></span>
-            {{ busy ? '处理中…' : confirmLabel }}
-          </button>
+    <SurfaceTransition>
+      <div v-if="open" class="sheet-backdrop confirm-backdrop" @click.self="cancel" @keydown="onKeydown">
+        <div ref="panel" class="sheet confirm-sheet" role="dialog" aria-modal="true" :aria-labelledby="'confirm-title'">
+          <div class="confirm-body">
+            <h2 id="confirm-title" class="sheet-title">{{ title }}</h2>
+            <p v-if="message" class="confirm-message">{{ message }}</p>
+            <p v-if="detail" class="inline-notice confirm-detail">{{ detail }}</p>
+          </div>
+          <div class="confirm-actions">
+            <button type="button" class="btn-quiet" :disabled="busy" @click="cancel">{{ cancelLabel }}</button>
+            <button ref="confirmButton" type="button" :class="danger ? 'btn-danger' : 'btn-primary'" :disabled="busy"
+              @click="emit('confirm')">
+              <span v-if="busy" class="spinner dark" aria-hidden="true"></span>
+              {{ busy ? '处理中…' : confirmLabel }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </SurfaceTransition>
   </Teleport>
 </template>
 

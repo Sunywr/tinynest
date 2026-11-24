@@ -179,6 +179,9 @@ test('L13 按钮使用统一过渡并尊重减少动态效果设置', async ({ p
   for (const transition of properties) {
     expect(transition).toEqual(expect.arrayContaining(['transform', 'filter', 'background-color']))
   }
+  await expect(page.locator('.login-dialog form')).toHaveCSS('animation-name', 'flow-in')
+  await page.getByRole('button', { name: '忘记密码' }).click()
+  await expect(page.locator('.password-recovery')).toHaveCSS('animation-name', 'flow-in')
 
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
@@ -186,6 +189,7 @@ test('L13 按钮使用统一过渡并尊重减少动态效果设置', async ({ p
   expect(animation).toBe('none')
   await openDialog(page)
   await expect(page.getByRole('dialog', { name: '欢迎回家' })).toBeVisible()
+  await expect(page.locator('.login-dialog form')).toHaveCSS('animation-name', 'none')
   const durations = await visibleButtons.evaluateAll(buttons =>
     buttons.map(button => getComputedStyle(button).transitionDuration),
   )

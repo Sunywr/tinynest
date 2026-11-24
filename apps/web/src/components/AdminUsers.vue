@@ -146,7 +146,7 @@ onMounted(load)
                 {{ confirmDelete === user.id ? '确认删除' : '删除' }}
               </button>
             </span>
-            <form v-if="resetFor === user.id" class="reset-row" @submit.prevent="submitReset(user)">
+            <form v-if="resetFor === user.id" class="reset-row flow-in" @submit.prevent="submitReset(user)">
               <label class="field-label">新密码（至少 12 位）
                 <input v-model="resetPassword.value" type="password" minlength="12" maxlength="256" required autocomplete="new-password" />
               </label>

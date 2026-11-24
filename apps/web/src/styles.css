@@ -253,10 +253,33 @@ a { color: var(--primary-deep); }
 
 /* Route transitions: the incoming view lifts in while the outgoing one fades
    away, so a tab switch reads as a continuous surface instead of a repaint. */
-.view-enter-active { transition: opacity var(--motion-base) var(--ease-soft), transform var(--motion-base) var(--ease-soft); }
-.view-leave-active { transition: opacity var(--motion-fast) var(--ease-soft), transform var(--motion-fast) var(--ease-soft); }
-.view-enter-from { opacity: 0; transform: translateY(10px); }
-.view-leave-to { opacity: 0; transform: translateY(-4px); }
+.view-enter-active { transition: opacity var(--motion-base) var(--ease-soft); }
+.view-leave-active { transition: opacity calc(var(--motion-fast) * .6) var(--ease-soft); }
+.view-enter-from, .view-leave-to { opacity: 0; }
+
+.overlay-enter-active { animation: backdrop-in var(--motion-fast) var(--ease-soft) both; }
+.overlay-enter-active > .login-dialog { animation: sheet-rise var(--motion-base) var(--ease-soft) both; }
+.overlay-leave-active { animation: backdrop-in var(--motion-fast) var(--ease-soft) reverse both; }
+.overlay-leave-active > :is(.sheet, .login-dialog) {
+  animation: sheet-rise var(--motion-fast) var(--ease-soft) reverse both;
+}
+
+.flow-in, .flow-enter-active { animation: flow-in var(--motion-base) var(--ease-soft) both; }
+.flow-leave-active { animation: flow-in var(--motion-fast) var(--ease-soft) reverse both; }
+.popover-enter-active, .popover-leave-active {
+  transition: opacity var(--motion-fast) var(--ease-soft), transform var(--motion-fast) var(--ease-soft);
+}
+.popover-enter-from, .popover-leave-to { opacity: 0; transform: translateY(4px); }
+
+@keyframes flow-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.profile-dialog[open], .emoji-picker[open] .emoji-popover,
+.investment-holdings[open] > :not(summary) {
+  animation: flow-in var(--motion-fast) var(--ease-soft) both;
+}
 
 @media (min-width: 1024px) {
   .sheet-backdrop { align-items: center; }

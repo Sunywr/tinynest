@@ -325,7 +325,7 @@ onMounted(load)
             </div>
           </form>
 
-          <section v-if="issued" class="invite-output" aria-label="新邀请" role="status">
+          <section v-if="issued" class="invite-output flow-in" aria-label="新邀请" role="status">
             <p class="invite-output-head"><Check :size="16" /> {{ issued.memberName }} 的邀请码</p>
             <code class="invite-code">{{ issued.code }}</code>
             <p class="invite-link"><Link2 :size="13" /> <span>{{ inviteLink(issued.code) }}</span></p>
