@@ -315,6 +315,22 @@ test.describe('B 记账面板', () => {
     await expect(dialog.getByRole('button', { name: '编辑分类' })).toBeVisible()
   })
 
+  test('导入分类的旧图标键显示为单色描边图标', async ({ page }) => {
+    const csrf = await gotoBills(page)
+    const name = uid('礼金')
+    const created = await page.request.post('/api/v1/categories', {
+      data: { kind: 'expense', name, emoji: '🎁', color: '7' },
+      headers: writeHeaders(csrf),
+    })
+    expect(created.ok()).toBeTruthy()
+    await page.reload()
+    const dialog = await openEntrySheet(page)
+    const icon = dialog.getByRole('option', { name, exact: true }).locator('svg')
+    await expect(icon).toHaveClass(/lucide-gift/)
+    await expect(icon).toHaveAttribute('stroke', 'currentColor')
+    await expect(icon).toHaveAttribute('fill', 'none')
+  })
+
   test('B03 自定义数字键盘输入与删除末位', async ({ page }) => {
     await gotoBills(page)
     const dialog = await openEntrySheet(page)

@@ -1,5 +1,5 @@
 ﻿import {
-  Apple, Baby, Backpack, Banknote, Beef, Bike, BookOpen, BriefcaseBusiness, Building2,
+  Apple, ArrowLeftRight, Baby, Backpack, Banknote, Beef, Bike, BookOpen, BriefcaseBusiness, Building2,
   Bus, CakeSlice, Car, Cat, Cherry, CircleDollarSign, ClipboardList, Cloud, Clover,
   Coffee, Cookie, CreditCard, Croissant, CupSoda, Dog, Dumbbell, Film, Fish, Flower2, Fuel,
   Gamepad2, Gift, GraduationCap, Hammer, Heart, HeartPulse, Hospital, House, IceCreamCone,
@@ -71,5 +71,8 @@ const icons = new Map(categoryIconGroups.flatMap(group => group.entries.map(
 )))
 
 export function categoryIcon(value: string) {
-  return icons.get(normalize(value)) ?? Star
+  const key = normalize(value)
+  if (key === '🔁') return ArrowLeftRight
+  if (key === '📝') return ReceiptText
+  return icons.get(key) ?? Star
 }
