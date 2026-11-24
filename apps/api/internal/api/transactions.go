@@ -398,9 +398,20 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 		args = append(args, accountID, accountID)
 	}
 	if keyword := strings.TrimSpace(query.Get("q")); keyword != "" {
-		pattern := "%" + keyword + "%"
-		sqlQuery += ` AND (COALESCE(t.note,'') LIKE ? OR COALESCE(c.name,'') LIKE ?)`
-		args = append(args, pattern, pattern)
+		terms := strings.Fields(keyword)
+		if len(terms) > 16 || len(keyword) > 1024 {
+			writeErr(w, 400, "invalid_request", "搜索内容过长")
+			return
+		}
+		escape := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+		for _, term := range terms {
+			pattern := "%" + escape.Replace(strings.ToLower(term)) + "%"
+			sqlQuery += ` AND (LOWER(COALESCE(t.note,'')) LIKE ? ESCAPE '!'
+				OR LOWER(COALESCE(c.name,'')) LIKE ? ESCAPE '!'
+				OR EXISTS (SELECT 1 FROM transaction_source_metadata m
+					WHERE m.transaction_id=t.id AND LOWER(m.value) LIKE ? ESCAPE '!'))`
+			args = append(args, pattern, pattern, pattern)
+		}
 	}
 	if cursor := strings.TrimSpace(query.Get("cursor")); cursor != "" {
 		var occurredOn, createdAt string
@@ -448,6 +459,24 @@ func (a *API) handleListTransactions(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 		nextCursor = items[limit-1]["id"]
 	}
+	if err := rows.Close(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item["id"].(string))
+	}
+	metadata, err := loadTransactionMetadata(r.Context(), a.DB, p.HouseholdID, ids)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	for i, id := range ids {
+		if details := metadata[id]; details != nil {
+			items[i]["source_metadata"] = details
+		}
+	}
 	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": nextCursor})
 }
 
@@ -484,6 +513,14 @@ func (a *API) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := row.public()
+	metadata, err := loadTransactionMetadata(r.Context(), a.DB, p.HouseholdID, []string{row.ID})
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	if details := metadata[row.ID]; details != nil {
+		out["source_metadata"] = details
+	}
 	out["journal_lines"] = lines
 	writeJSON(w, 200, out)
 }
@@ -698,6 +735,12 @@ func (a *API) handleCorrectTransaction(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if err := insertTransactionRow(r.Context(), tx, p.HouseholdID, values, newIDValue, newEntryID, "", p.Username); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(), `INSERT INTO transaction_source_metadata(transaction_id,source_id,item_key,kind,value)
+			SELECT ?,m.source_id,m.item_key,m.kind,m.value
+			FROM transaction_source_metadata m JOIN transactions t ON t.id=m.transaction_id
+			WHERE t.household_id=? AND m.transaction_id=?`, newIDValue, p.HouseholdID, oldID); err != nil {
 			return err
 		}
 		if err := audit(r.Context(), tx, p, "reverse_transaction", "transaction", oldID, reversalID); err != nil {

@@ -22,6 +22,7 @@ const { toast, error: toastError } = useToast()
 const month = ref(monthKey())
 const selectedDay = ref('')
 const query = ref('')
+const appliedQuery = ref('')
 const searchOpen = ref(false)
 const searchInput = ref<HTMLInputElement | null>(null)
 const calendarOpen = ref(false)
@@ -86,15 +87,17 @@ async function load(target = requested) {
   loading.value = true
   error.value = ''
   try {
-    const [from, to] = target.day ? [target.day, target.day] : monthRange(target.month)
+    const keyword = query.value.trim()
+    const [from, to] = keyword ? [undefined, undefined] : target.day ? [target.day, target.day] : monthRange(target.month)
     const [monthly, budgetValue, list] = await Promise.all([
       api.summary(...monthRange(target.month)),
       api.budget(target.month),
-      api.transactions({ from, to, q: query.value.trim() || undefined, limit: 100 }),
+      api.transactions({ from, to, q: keyword || undefined, limit: 100 }),
     ])
     if (token !== requestId) return
     month.value = target.month
     selectedDay.value = target.day
+    appliedQuery.value = keyword
     summary.value = monthly
     budget.value = budgetValue
     items.value = list.items
@@ -112,7 +115,9 @@ async function loadMore() {
   loadingMore.value = true
   try {
     const list = await api.transactions({
-      from: range.value[0], to: range.value[1], q: query.value.trim() || undefined,
+      from: appliedQuery.value ? undefined : range.value[0],
+      to: appliedQuery.value ? undefined : range.value[1],
+      q: appliedQuery.value || undefined,
       limit: 100, cursor: nextCursor.value,
     })
     if (token !== requestId) return
@@ -235,8 +240,8 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="searchOpen" class="bills-search flow-in">
-      <label class="sr-only" for="bills-search-input">搜索备注或分类</label>
-      <input id="bills-search-input" ref="searchInput" v-model="query" type="search" placeholder="搜索备注或分类名称" />
+      <label class="sr-only" for="bills-search-input">搜索备注或分类及标签</label>
+      <input id="bills-search-input" ref="searchInput" v-model="query" type="search" placeholder="搜索全部日期的备注、分类或标签" />
       <button type="button" class="icon-btn" aria-label="关闭搜索" @click="closeSearch"><X :size="18" /></button>
     </div>
 
@@ -255,7 +260,7 @@ onBeforeUnmount(() => {
       <span v-if="selectedDay" class="toolbar-chip">已筛选 {{ selectedDay }}
         <button type="button" aria-label="清除日期筛选" @click="clearDay">×</button>
       </span>
-      <span v-if="query.trim()" class="toolbar-chip">搜索「{{ query.trim() }}」
+      <span v-if="appliedQuery" class="toolbar-chip">全部日期 · 「{{ appliedQuery }}」
         <button type="button" aria-label="清除搜索" @click="closeSearch">×</button>
       </span>
       <button v-if="canWrite" type="button" class="quick-add" @click="openCreate">＋ 记一笔</button>

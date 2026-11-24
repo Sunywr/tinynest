@@ -44,7 +44,7 @@ function title(tx: Transaction): string {
   return tx.category_name || (tx.type === 'income' ? '收入' : '支出')
 }
 function subtitle(tx: Transaction): string {
-  const note = tx.note?.trim() || ''
+  const note = tx.note?.trim() || tx.source_metadata?.remarks.join(' · ') || tx.source_metadata?.descriptions.join(' · ') || ''
   return note === title(tx) ? '' : note
 }
 function emoji(tx: Transaction): string {
@@ -119,6 +119,10 @@ onBeforeUnmount(cancelPress)
               <span class="tx-name">{{ title(tx) }}</span>
                 <span v-if="subtitle(tx)" class="tx-category" :title="subtitle(tx)">{{ subtitle(tx) }}</span>
                 <span v-if="tx.budget_name" class="tx-category">{{ tx.budget_name }}</span>
+                <span v-if="tx.source_metadata?.labels.length" class="tx-tags" :title="tx.source_metadata.labels.join(' · ')">
+                  <span v-for="label in tx.source_metadata.labels.slice(0, 3)" :key="label">{{ label }}</span>
+                  <span v-if="tx.source_metadata.labels.length > 3">+{{ tx.source_metadata.labels.length - 3 }}</span>
+                </span>
             </span>
             <span class="tx-amount" :class="amountClass(tx)">{{ amountText(tx) }}</span>
           </button>
@@ -170,6 +174,8 @@ onBeforeUnmount(cancelPress)
 .tx-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .tx-name { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tx-category { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tx-tags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.tx-tags > span { padding: 2px 6px; border-radius: 6px; background: var(--soft); color: var(--primary-deep); font-size: 11px; max-width: 100%; overflow-wrap: anywhere; }
 .tx-amount { font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tx-amount.income { color: #5d836c; }
 .tx-amount.transfer { color: var(--muted); }

@@ -591,10 +591,12 @@ test.describe('C 账单列表', () => {
     await page.getByRole('button', { name: '上个月' }).click()
     try {
       await expect(month).toHaveText(previous!.trim())
+      await expect(page.getByRole('status', { name: '正在加载' })).toBeVisible()
     } finally {
       release()
     }
     await expect(month).not.toHaveText(previous!.trim())
+    await expect(page.getByRole('status', { name: '正在加载' })).toHaveCount(0)
   })
 
   test('C10 账单页汇总显示本月支出、收入与结余', async ({ page }) => {

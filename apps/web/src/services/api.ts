@@ -2,6 +2,8 @@
  *  No host, credential, certificate or database path is ever present in browser code.
  *  All amounts are integer minor units (cents); formatting lives in format.ts. */
 
+import { beginRequest } from './interactionFeedback'
+
 const BASE = '/api/v1'
 let csrfToken = ''
 
@@ -22,6 +24,15 @@ export class ApiError extends Error {
 }
 
 export async function request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const complete = beginRequest()
+  try {
+    return await performRequest<T>(path, init)
+  } finally {
+    complete()
+  }
+}
+
+async function performRequest<T>(path: string, init: RequestInit): Promise<T> {
   const method = (init.method || 'GET').toUpperCase()
   const headers: Record<string, string> = { ...((init.headers as Record<string, string>) || {}) }
   if (init.body) headers['Content-Type'] = 'application/json'
@@ -267,6 +278,7 @@ export type AccountsOverview = {
 export type AccountsWithInvestments = { items: Account[]; investments: InvestmentOverview }
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type Transaction = {
+  source_metadata?: { labels: string[]; remarks: string[]; descriptions: string[] }
   budget_id?: string | null
   budget_name?: string | null
   to_account_id?: string | null

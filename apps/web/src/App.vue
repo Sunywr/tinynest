@@ -3,6 +3,7 @@ import SurfaceTransition from "./components/SurfaceTransition.vue"
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppToast from './components/AppToast.vue'
+import RequestProgress from './components/RequestProgress.vue'
 import EntrySheet from './components/EntrySheet.vue'
 import TabBar from './components/TabBar.vue'
 import { useEntrySheet } from './composables/useEntrySheet'
@@ -76,6 +77,7 @@ onBeforeUnmount(() => {
     </SurfaceTransition>
   </Teleport>
   <AppToast />
+  <RequestProgress />
 </template>
 
 <style scoped>

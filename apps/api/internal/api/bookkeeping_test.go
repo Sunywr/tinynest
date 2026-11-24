@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -75,6 +76,44 @@ func (c *testClient) statsSummary(from, to string) (income, expense, balance int
 }
 
 // --- full lifecycle ---------------------------------------------------------
+
+func TestSearchImportedTransactionMetadata(t *testing.T) {
+	ts, c, database := newTestServerWithOptions(t, Options{})
+	defer ts.Close()
+	defer database.Close()
+	account := c.createAccount("cash", "测试账户", 0)
+	category := c.firstCategory("expense")
+	id := c.createExpense(100, "2026-11-01", category, account)
+	for _, metadata := range [][3]string{
+		{"remark", "remark", "旧备注 双十一"},
+		{"label:1", "label", "Home_50%"},
+	} {
+		if _, err := database.Exec(`INSERT INTO transaction_source_metadata(transaction_id,source_id,item_key,kind,value)
+			VALUES(?,1,?,?,?)`, id, metadata[0], metadata[1], metadata[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(text string) []any {
+		return c.mustOK("GET", "/api/v1/transactions?q="+url.QueryEscape(text), nil)["items"].([]any)
+	}
+	results := search("双十一 home_50%")
+	if len(results) != 1 {
+		t.Fatalf("remark and label search returned %d results", len(results))
+	}
+	row := results[0].(map[string]any)
+	if row["id"] != id || row["source_metadata"] == nil {
+		t.Fatalf("unexpected search result: %v", row)
+	}
+	if len(search("Home_5%")) != 0 {
+		t.Fatal("search treated percent as a wildcard")
+	}
+	corrected := c.mustOK("PATCH", "/api/v1/transactions/"+id, map[string]any{"note": "新备注"})
+	result := c.mustOK("GET", "/api/v1/transactions/"+corrected["id"].(string), nil)
+	if result["source_metadata"] == nil {
+		t.Fatal("correction did not preserve source metadata")
+	}
+	journalBalanced(t, database)
+}
 
 func TestBookkeepingLifecycle(t *testing.T) {
 	ts, c, database := newTestServerWithOptions(t, Options{})

@@ -1,9 +1,11 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import { router } from './router'
+import { installPressFeedback } from './services/interactionFeedback'
 import './styles.css'
 
 createApp(App).use(router).mount('#app')
+installPressFeedback(document.body)
 
 // Service Workers require a secure context (HTTPS or localhost); the bookkeeping
 // shell is network-first so offline mode never pretends a write was saved.

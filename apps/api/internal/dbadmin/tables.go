@@ -33,7 +33,7 @@ var PurgeGroups = []Group{
 	{
 		Name:   "记账数据",
 		Note:   "流水、拆分、退款与月度预算",
-		Tables: []string{"transactions", "transaction_splits", "refunds", "budgets", "project_budgets", "transaction_budget_links"},
+		Tables: []string{"transactions", "transaction_splits", "refunds", "budgets", "project_budgets", "transaction_budget_links", "transaction_source_metadata"},
 	},
 	{
 		Name:   "信用账单",
@@ -143,6 +143,7 @@ var deleteOrder = []string{
 	"schedule_due_items",
 	// Transaction and contract children, then the transactions they reference.
 	"transaction_budget_links",
+	"transaction_source_metadata",
 	"project_budgets",
 	"transaction_splits",
 	"installment_schedule_items",
