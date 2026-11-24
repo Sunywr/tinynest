@@ -2,15 +2,14 @@
 -- Run with imports and ledger writes paused. Rehearses unless @pfm_apply=1.
 START TRANSACTION;
 
-CREATE TEMPORARY TABLE pfm_family_correction AS
-WITH candidates AS (
-SELECT t.*, f.ledger_code AS cash_code,
-       s.description AS source_description,
+CREATE TEMPORARY TABLE pfm_family_candidates AS
+SELECT STRAIGHT_JOIN t.*, f.ledger_code AS cash_code,
+       CONVERT(s.description USING utf8mb4) COLLATE utf8mb4_0900_bin AS source_description,
        COALESCE(TRIM(s.description),'')='' AND COALESCE(TRIM(s.remark),'')='' AS no_memo,
        CASE owner.username
          WHEN 'sunywr' THEN IF(t.type='income','老婆转账','转账给老婆')
          WHEN 'liuj' THEN IF(t.type='income','老公转账','转给老公')
-       END AS spouse_description,
+       END COLLATE utf8mb4_0900_bin AS spouse_description,
        CONCAT('pfm-family-clearing-',t.household_id) AS clearing_id,
        CONCAT('pfm-family-transfer-',s.id) AS replacement_id,
        CONCAT('pfm-family-entry-',s.id) AS replacement_entry,
@@ -39,26 +38,32 @@ WHERE s.transfer_id IS NULL AND s.refund_of_id IS NULL
     (t.type='expense' AND s.expenditure>0 AND COALESCE(s.income,0)=0
       AND t.amount_minor=ROUND(s.expenditure*100))
   )
-), pair_candidates AS (
-  SELECT outgoing.id AS expense_id, incoming.id AS income_id,
-         COUNT(*) OVER (PARTITION BY outgoing.id) AS expense_matches,
-         COUNT(*) OVER (PARTITION BY incoming.id) AS income_matches
-  FROM candidates outgoing
-  JOIN candidates incoming ON incoming.household_id=outgoing.household_id
-    AND incoming.member_id<>outgoing.member_id
-    AND incoming.occurred_on=outgoing.occurred_on
-    AND incoming.amount_minor=outgoing.amount_minor
-  WHERE outgoing.type='expense' AND incoming.type='income'
-    AND (outgoing.no_memo OR outgoing.source_description=outgoing.spouse_description)
-    AND (incoming.no_memo OR incoming.source_description=incoming.spouse_description)
-), matched AS (
-  SELECT expense_id AS id FROM pair_candidates WHERE expense_matches=1 AND income_matches=1
-  UNION
-  SELECT income_id FROM pair_candidates WHERE expense_matches=1 AND income_matches=1
-)
-SELECT c.* FROM candidates c
-WHERE c.source_description=c.spouse_description
-   OR c.id IN (SELECT id FROM matched);
+;
+
+-- Materialize the narrow source set before matching to keep MySQL from
+-- optimizing the source joins separately for each side of the pair.
+CREATE TEMPORARY TABLE pfm_family_incoming AS
+SELECT id,household_id,member_id,occurred_on,amount_minor
+FROM pfm_family_candidates
+WHERE type='income' AND (no_memo OR source_description=spouse_description);
+
+CREATE TEMPORARY TABLE pfm_family_pairs AS
+SELECT outgoing.id AS expense_id, incoming.id AS income_id,
+       COUNT(*) OVER (PARTITION BY outgoing.id) AS expense_matches,
+       COUNT(*) OVER (PARTITION BY incoming.id) AS income_matches
+FROM pfm_family_candidates outgoing
+JOIN pfm_family_incoming incoming ON incoming.household_id=outgoing.household_id
+  AND incoming.member_id<>outgoing.member_id
+  AND incoming.occurred_on=outgoing.occurred_on
+  AND incoming.amount_minor=outgoing.amount_minor
+WHERE outgoing.type='expense'
+  AND (outgoing.no_memo OR outgoing.source_description=outgoing.spouse_description);
+
+CREATE TEMPORARY TABLE pfm_family_correction AS
+SELECT c.* FROM pfm_family_candidates c
+LEFT JOIN pfm_family_pairs p ON p.expense_matches=1 AND p.income_matches=1
+  AND c.id IN (p.expense_id,p.income_id)
+WHERE c.source_description=c.spouse_description OR p.expense_id IS NOT NULL;
 
 -- One disabled clearing account per household preserves each known cash leg.
 -- Missing opposite source legs are never fabricated in real member accounts.
