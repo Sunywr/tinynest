@@ -1175,6 +1175,67 @@ test.describe('G 成员 / 分类 / 管理', () => {
       expect(overflow, `settings overflow @ ${width}px`).toBeLessThanOrEqual(1)
     }
   })
+
+  test('信用卡账单邮箱单次提交并清空授权码', async ({ page }) => {
+    await signIn(page)
+    await page.setViewportSize({ width: 390, height: 844 })
+    let attempts = 0
+    await page.route('**/api/v1/credit-statement-mailbox/test', async route => {
+      expect(route.request().method()).toBe('POST')
+      expect(route.request().headers()['x-csrf-token']).toBeTruthy()
+      expect(route.request().postDataJSON()).toEqual({ email: '123@qq.com', auth_code: 'fixture-code' })
+      attempts++
+      await route.fulfill({ json: { status: 'connected' } })
+    })
+    await page.goto('/me/settings')
+    const card = page.getByRole('region', { name: '信用卡账单邮箱' })
+    await card.getByLabel('QQ 邮箱').fill('123@qq.com')
+    await card.getByLabel('邮箱授权码').fill('fixture-code')
+    await card.getByRole('button', { name: '测试连接' }).click()
+    await expect(card.getByRole('status')).toHaveText('QQ 邮箱连接成功，收件箱可读。')
+    await expect(card.getByLabel('邮箱授权码')).toHaveValue('')
+    expect(attempts).toBe(1)
+  })
+
+  test('信用卡账单邮箱保存、换码和停用', async ({ page }) => {
+    await signIn(page)
+    await page.setViewportSize({ width: 390, height: 844 })
+    let version = 0
+    let enabled = false
+    await page.route('**/api/v1/credit-statement-mailbox', async route => {
+      const req = route.request()
+      if (req.method() !== 'GET') {
+        const data = req.postDataJSON()
+        expect(req.headers()['x-csrf-token']).toBeTruthy()
+        expect(data.version).toBe(version)
+        if (req.method() === 'PUT') {
+          expect(data.email).toBe('123@qq.com')
+          expect(data.auth_code).toBe(version === 0 ? 'first-code' : 'new-code')
+          enabled = true
+        } else {
+          expect(req.method()).toBe('DELETE')
+          enabled = false
+        }
+        version++
+      }
+      await route.fulfill({ json: { version, enabled, masked_email: enabled ? '***@qq.com' : '', key_ready: true } })
+    })
+    await page.goto('/me/settings')
+    const card = page.getByRole('region', { name: '信用卡账单邮箱' })
+    await card.getByLabel('QQ 邮箱').fill('123@qq.com')
+    await card.getByLabel('邮箱授权码').fill('first-code')
+    await card.getByRole('button', { name: '验证并保存' }).click()
+    await expect(card.getByText('已启用 · ***@qq.com')).toBeVisible()
+    await expect(card.getByLabel('邮箱授权码')).toHaveValue('')
+    await card.getByLabel('QQ 邮箱').fill('123@qq.com')
+    await card.getByLabel('邮箱授权码').fill('new-code')
+    await card.getByRole('button', { name: '保存新授权码' }).click()
+    await expect(card.getByRole('status')).toHaveText('QQ 邮箱配置已保存。')
+    await card.getByRole('button', { name: '停用邮箱' }).click()
+    await expect(card.getByText('尚未启用')).toBeVisible()
+    await expect(card.getByRole('status')).toHaveText('QQ 邮箱已停用，授权码已清除。')
+    expect(version).toBe(3)
+  })
 })
 
 // ------------------------------------------------------------ H 角色与视口

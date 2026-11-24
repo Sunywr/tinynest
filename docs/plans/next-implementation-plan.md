@@ -1,4 +1,6 @@
-# TinyNest 待实施计划
+# TinyNest V0.1 实施交接（历史归档）
+
+> 下方内容保留 V0.1 的进度和发布证据。当前请从[信用卡账单导入与对账计划](credit-card-statement-import/plan.md)及[实施进度](credit-card-statement-import/实施进度.md)接续。
 
 交接日期 2026-11-15，核对基线为 `main` 的 `e89d3fa`。本页是继续开发的入口。产品设计和原始范围见 [V0.1 核心账本计划](../plan-v0.1.md)，历史验证见 [发布候选复核](../reviews/rc-readiness.md)。
 

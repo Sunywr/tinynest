@@ -43,6 +43,10 @@ func validEmail(s string) bool {
 	return e == nil && a.Address == s && len(s) <= 254 && !strings.ContainsAny(s, "\r\n")
 }
 func (a *API) mailCrypt(value string, decrypt bool) (string, error) {
+	return a.mailCryptWithPurpose(value, decrypt, "tinynest-mail-v1")
+}
+
+func (a *API) mailCryptWithPurpose(value string, decrypt bool, purpose string) (string, error) {
 	if len(a.opts.MailKey) != 32 {
 		return "", errors.New("mail encryption key unavailable")
 	}
@@ -59,14 +63,14 @@ func (a *API) mailCrypt(value string, decrypt bool) (string, error) {
 		if e != nil || len(data) < g.NonceSize() {
 			return "", errors.New("invalid mail ciphertext")
 		}
-		p, e := g.Open(nil, data[:g.NonceSize()], data[g.NonceSize():], []byte("tinynest-mail-v1"))
+		p, e := g.Open(nil, data[:g.NonceSize()], data[g.NonceSize():], []byte(purpose))
 		return string(p), e
 	}
 	n := make([]byte, g.NonceSize())
 	if _, e = rand.Read(n); e != nil {
 		return "", e
 	}
-	return base64.StdEncoding.EncodeToString(g.Seal(n, n, []byte(value), []byte("tinynest-mail-v1"))), nil
+	return base64.StdEncoding.EncodeToString(g.Seal(n, n, []byte(value), []byte(purpose))), nil
 }
 func (a *API) mailConfig(ctx context.Context) (MailConfig, string, int, error) {
 	c := defaultMailConfig()

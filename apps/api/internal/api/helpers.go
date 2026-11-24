@@ -26,9 +26,9 @@ type contextKey int
 
 const principalKey contextKey = 1
 
-// maxRoutes is the frozen route budget including authenticated household creation. The route-count
-// test asserts Register() never exceeds it.
-const maxRoutes = 62
+// maxRoutes includes the credit statement mailbox configuration and test.
+// The route-count test asserts Register never exceeds it.
+const maxRoutes = 66
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {
@@ -70,6 +70,8 @@ type Options struct {
 	MailKey []byte
 	// MailSender is a test/deployment hook; nil uses the real SMTP client.
 	MailSender func(context.Context, MailConfig, string, string, string, string) error
+	// StatementMailboxProbe is a test hook. Nil uses QQ IMAP over TLS.
+	StatementMailboxProbe func(context.Context, string, string) error
 }
 
 type API struct {

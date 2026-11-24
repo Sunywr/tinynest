@@ -60,6 +60,51 @@ func TestMigrateFromZeroAppliesEveryVersion(t *testing.T) {
 	}
 }
 
+func TestStatementMailboxMigratesExistingV2(t *testing.T) {
+	database := openTestDB(t)
+	ctx := context.Background()
+	files, err := database.migrationFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ensureMigrationLedger(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if file.version > 8 {
+			break
+		}
+		if err := database.applyMigration(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.recordBaseline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO households(id,name) VALUES('existing_household','原有家庭')`); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := database.Migrate(ctx)
+	if err != nil || len(applied) == 0 || applied[0] != 9 {
+		t.Fatalf("apply 009 to existing V2: applied=%v, err=%v", applied, err)
+	}
+	again, err := database.Migrate(ctx)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("repeat migration: applied=%v, err=%v", again, err)
+	}
+	var name, integrity string
+	if err := database.QueryRow(`SELECT name FROM households WHERE id='existing_household'`).Scan(&name); err != nil || name != "原有家庭" {
+		t.Fatalf("existing household = %q, err=%v", name, err)
+	}
+	if err := database.QueryRow(`PRAGMA quick_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("quick_check = %q, err=%v", integrity, err)
+	}
+	var violations int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil || violations != 0 {
+		t.Fatalf("foreign key violations = %d, err=%v", violations, err)
+	}
+}
+
 func TestInvestmentSnapshotTablesAreUsable(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()

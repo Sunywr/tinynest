@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from 'lucide-vue-next'
 import MailSettings from '../components/MailSettings.vue'
+import StatementMailboxSettings from '../components/StatementMailboxSettings.vue'
 import UserProfileDialog from '../components/UserProfileDialog.vue'
 import { useSession } from '../composables/useSession'
 import { useToast } from '../composables/useToast'
@@ -55,6 +56,7 @@ async function profileSaved(message: string) {
     </section>
 
     <MailSettings @identity-updated="session.refreshMe()" />
+    <StatementMailboxSettings v-if="session.canWrite.value" :key="me?.user_id + ':' + me?.household_id" />
 
     <button type="button" class="btn-quiet back-btn" @click="back">返回我的</button>
 

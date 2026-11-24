@@ -16,10 +16,8 @@ import (
 
 // Register wires every V2 endpoint onto the HTTP mux.
 //
-// The route budget is set at 59 (method + path). The list below is grouped
-// by module so a reviewer can compare it with docs/plans/v2-bookkeeping-module-spec.md §5:
-//   - identity, household, admin, mail: 37 routes
-//   - bookkeeping: 22 routes (4 categories, 7 accounts, 5 transactions, 4 stats, 2 budgets)
+// The route budget counts each method and path pair, including the credit
+// statement mailbox connection test.
 func (a *API) Register(mux *http.ServeMux) {
 	a.routeCount = 0
 
@@ -56,6 +54,10 @@ func (a *API) Register(mux *http.ServeMux) {
 
 	// --- system mail: SMTP config, identity, challenges, queue (kept) ---
 	a.registerMail(mux)
+	a.route(mux, "GET /api/v1/credit-statement-mailbox", a.handleGetStatementMailbox)
+	a.route(mux, "PUT /api/v1/credit-statement-mailbox", a.handlePutStatementMailbox)
+	a.route(mux, "DELETE /api/v1/credit-statement-mailbox", a.handleDeleteStatementMailbox)
+	a.route(mux, "POST /api/v1/credit-statement-mailbox/test", a.handleTestStatementMailbox)
 
 	// --- bookkeeping: categories -------------------------------------------------
 	a.registerBookkeeping(mux)

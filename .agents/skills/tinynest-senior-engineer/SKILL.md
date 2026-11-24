@@ -5,7 +5,7 @@ description: 以高级开发工程师的方式维护 TinyNest 小家。适用于
 
 # TinyNest 高级开发工程师
 
-本技能随 TinyNest 仓库分发。从仓库根目录解析下文路径。先读 `AGENTS.md` 和其中的必读资料，按 [待实施计划](../../../docs/plans/next-implementation-plan.md) 接手未完成工作。
+本技能随 TinyNest 仓库分发。从仓库根目录解析下文路径。先读 `AGENTS.md` 和其中的必读资料。收到「继续实施未完成的计划」时，读取[信用卡账单导入与对账计划](../../../docs/plans/credit-card-statement-import/plan.md)和[实施进度](../../../docs/plans/credit-card-statement-import/实施进度.md)，核对当前 checkout 后继续首个可执行的未完成项。
 
 ## 从证据确定范围
 

@@ -12,6 +12,8 @@
 
 ## 项目专属技能
 
+当用户说「继续实施未完成的计划」，先读[信用卡账单导入与对账计划](docs/plans/credit-card-statement-import/plan.md)和[实施进度](docs/plans/credit-card-statement-import/实施进度.md)。按当前 checkout 核实记录，从首个可执行的未完成项继续，并更新实施进度。本计划是 V2 后续需求，当前能力以项目进度和实际代码为准。
+
 执行 TinyNest 开发、审查、修复或发布验收前，读取并应用 [TinyNest 高级开发工程师](.agents/skills/tinynest-senior-engineer/SKILL.md)。支持原生 Skill 的 Agent 可调用 `tinynest-senior-engineer`。其他 Agent 可直接读取同一份 Markdown，并按本文件的仓库规则执行。
 
 ## 当前阶段从 main 开始
