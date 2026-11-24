@@ -4,6 +4,7 @@ START TRANSACTION;
 
 CREATE TEMPORARY TABLE pfm_family_candidates AS
 SELECT STRAIGHT_JOIN t.*, f.ledger_code AS cash_code,
+       c.name AS source_category, s.id AS source_id,
        CONVERT(s.description USING utf8mb4) COLLATE utf8mb4_0900_bin AS source_description,
        COALESCE(TRIM(s.description),'')='' AND COALESCE(TRIM(s.remark),'')='' AS no_memo,
        CASE owner.username
@@ -15,7 +16,7 @@ SELECT STRAIGHT_JOIN t.*, f.ledger_code AS cash_code,
        CONCAT('pfm-family-entry-',s.id) AS replacement_entry,
        CONCAT('pfm-family-reversal-',s.id) AS reversal_entry
 FROM pfm.account_account s
-JOIN pfm.account_category c ON c.id=s.account_type_id AND c.name='family'
+JOIN pfm.account_category c ON c.id=s.account_type_id
 JOIN pfm.auth_user source_owner ON source_owner.id=s.owner_id_id
 JOIN users owner ON owner.username=CASE source_owner.username
   WHEN '孙意蔚然' THEN 'sunywr' WHEN '刘洁' THEN 'liuj' END
@@ -30,6 +31,7 @@ JOIN accounts f ON f.id=t.account_id AND f.household_id=t.household_id AND f.kin
 JOIN journal_entries e ON e.id=t.entry_id AND e.household_id=t.household_id
   AND e.status='posted' AND e.reversal_of IS NULL
 WHERE s.transfer_id IS NULL AND s.refund_of_id IS NULL
+  AND (c.name='family' OR s.description IN ('老婆转账','老公转账','转账给老婆','转给老公'))
   AND t.occurred_on=DATE_FORMAT(s.account_date,'%Y-%m-%d')
   AND (
     (t.type='income' AND s.income>0 AND COALESCE(s.expenditure,0)=0
@@ -45,7 +47,7 @@ WHERE s.transfer_id IS NULL AND s.refund_of_id IS NULL
 CREATE TEMPORARY TABLE pfm_family_incoming AS
 SELECT id,household_id,member_id,occurred_on,amount_minor
 FROM pfm_family_candidates
-WHERE type='income' AND (no_memo OR source_description=spouse_description);
+WHERE source_category='family' AND type='income' AND (no_memo OR source_description=spouse_description);
 
 CREATE TEMPORARY TABLE pfm_family_pairs AS
 SELECT outgoing.id AS expense_id, incoming.id AS income_id,
@@ -56,14 +58,18 @@ JOIN pfm_family_incoming incoming ON incoming.household_id=outgoing.household_id
   AND incoming.member_id<>outgoing.member_id
   AND incoming.occurred_on=outgoing.occurred_on
   AND incoming.amount_minor=outgoing.amount_minor
-WHERE outgoing.type='expense'
+WHERE outgoing.source_category='family' AND outgoing.type='expense'
   AND (outgoing.no_memo OR outgoing.source_description=outgoing.spouse_description);
 
 CREATE TEMPORARY TABLE pfm_family_correction AS
 SELECT c.* FROM pfm_family_candidates c
 LEFT JOIN pfm_family_pairs p ON p.expense_matches=1 AND p.income_matches=1
   AND c.id IN (p.expense_id,p.income_id)
-WHERE c.source_description=c.spouse_description OR p.expense_id IS NOT NULL;
+WHERE c.source_description=c.spouse_description OR p.expense_id IS NOT NULL
+   -- 31048/31062 are the two legs of the rent funding transfer. The landlord
+   -- payment is separately recorded in PFM row 31063 under housing.
+   -- The user confirmed 35863 as an internal transfer.
+   OR (c.source_category='family' AND c.source_id IN (31048,31062,35863));
 
 -- One disabled clearing account per household preserves each known cash leg.
 -- Missing opposite source legs are never fabricated in real member accounts.
