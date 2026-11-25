@@ -2,11 +2,24 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatMinor, dateLabel } from '../services/format'
-import type { CreditDebtCard, CreditDebtPlan } from '../services/api'
+import type { CardStatement, CreditDebtCard, CreditDebtPlan } from '../services/api'
 
-const props = defineProps<{ plan: CreditDebtPlan; canWrite: boolean }>()
+const props = defineProps<{
+  plan: CreditDebtPlan
+  canWrite: boolean
+  statements?: CardStatement[]
+  statementsFailed?: boolean
+}>()
 const emit = defineEmits<{ configure: [accountId: string] }>()
 const router = useRouter()
+
+// Statements arrive newest period first, so the first row per card is the
+// latest bank report. A bank report never joins the ledger-derived plan below.
+const cardRows = computed(() => {
+  const latest = new Map<string, CardStatement>()
+  for (const item of props.statements ?? []) if (!latest.has(item.account_id)) latest.set(item.account_id, item)
+  return props.plan.cards.map(card => ({ card, bank: latest.get(card.account_id) ?? null }))
+})
 
 const hasConfigured = computed(() => props.plan.cards.some(card => card.configured))
 const paydayMissing = computed(() => props.plan.payday === null || props.plan.next_payday === null)
@@ -79,38 +92,57 @@ function goSettings() {
       另有 {{ plan.unconfigured_cards }} 张信用卡未设置账单日/还款日，未计入。
     </p>
 
+    <p v-if="statementsFailed" class="credit-debt-bank-failed" data-testid="bank-statement-error" role="status">
+      银行账单暂时无法读取，稍后重试。下方金额仍按已入账流水计算。
+    </p>
+
     <ul class="credit-debt-list">
-      <li v-for="card in plan.cards" :key="card.account_id" class="credit-debt-row">
+      <li v-for="row in cardRows" :key="row.card.account_id" class="credit-debt-row">
         <div class="credit-debt-row-head">
-          <strong class="credit-debt-name">{{ card.name }}</strong>
-          <span v-if="card.configured" class="credit-debt-config">账单日 {{ card.statement_day }} 日 · 还款日 {{ card.due_day }} 日</span>
+          <strong class="credit-debt-name">{{ row.card.name }}</strong>
+          <span v-if="row.card.configured" class="credit-debt-config">账单日 {{ row.card.statement_day }} 日 · 还款日 {{ row.card.due_day }} 日</span>
           <span v-else class="credit-debt-config missing">未设置账单日/还款日</span>
         </div>
 
-        <template v-if="card.configured">
+        <template v-if="row.card.configured">
           <p class="credit-debt-row-main">
-            <span v-if="!paydayMissing">发薪日前 {{ cardNeeded(card) }}</span>
-            <span v-if="card.next_due_on">下次还款 {{ dateLabel(card.next_due_on) }} · {{ formatMinor(card.next_due_minor) }}</span>
-            <span v-else-if="card.overdue_minor > 0">已逾期 {{ formatMinor(card.overdue_minor) }}</span>
+            <span v-if="!paydayMissing">发薪日前 {{ cardNeeded(row.card) }}</span>
+            <span v-if="row.card.next_due_on">下次还款 {{ dateLabel(row.card.next_due_on) }} · {{ formatMinor(row.card.next_due_minor) }}</span>
+            <span v-else-if="row.card.overdue_minor > 0">已逾期 {{ formatMinor(row.card.overdue_minor) }}</span>
             <span v-else>暂无应还</span>
           </p>
-          <p v-if="card.next_due_on && periodText(card)" class="credit-debt-period">
-            {{ periodText(card) }}
+          <p v-if="row.card.next_due_on && periodText(row.card)" class="credit-debt-period">
+            {{ periodText(row.card) }}
           </p>
-          <p v-if="card.current_cycle" class="credit-debt-period">
-            本期 {{ dateLabel(card.current_cycle.start_on) }}~{{ dateLabel(card.current_cycle.end_on) }} · 还款日 {{ dateLabel(card.current_cycle.due_on) }}
+          <p v-if="row.card.current_cycle" class="credit-debt-period">
+            本期 {{ dateLabel(row.card.current_cycle.start_on) }}~{{ dateLabel(row.card.current_cycle.end_on) }} · 还款日 {{ dateLabel(row.card.current_cycle.due_on) }}
           </p>
           <p class="credit-debt-tags">
-            <span v-if="card.overdue_minor > 0" class="credit-debt-overdue">逾期 {{ formatMinor(card.overdue_minor) }}</span>
-            <span v-if="card.unbilled_minor > 0">未出账 {{ formatMinor(card.unbilled_minor) }}</span>
-            <span v-if="card.credit_balance_minor > 0">溢缴款 {{ formatMinor(card.credit_balance_minor) }}</span>
-            <span v-if="card.total_debt_minor > 0">总欠款 {{ formatMinor(card.total_debt_minor) }}</span>
+            <span v-if="row.card.overdue_minor > 0" class="credit-debt-overdue">逾期 {{ formatMinor(row.card.overdue_minor) }}</span>
+            <span v-if="row.card.unbilled_minor > 0">未出账 {{ formatMinor(row.card.unbilled_minor) }}</span>
+            <span v-if="row.card.credit_balance_minor > 0">溢缴款 {{ formatMinor(row.card.credit_balance_minor) }}</span>
+            <span v-if="row.card.total_debt_minor > 0">总欠款 {{ formatMinor(row.card.total_debt_minor) }}</span>
           </p>
         </template>
         <p v-else class="credit-debt-row-main">设置账单日与还款日后可计算到期金额。</p>
 
-        <button v-if="canWrite" type="button" class="btn-quiet credit-debt-action" @click="emit('configure', card.account_id)">
-          {{ card.configured ? '调整' : '设置账单日' }}
+        <p v-if="row.bank" class="credit-debt-bank" data-testid="bank-statement">
+          银行账单 {{ dateLabel(row.bank.period_end_on) }} 期 ·
+          应还 {{ formatMinor(row.bank.amount_due_minor) }}
+          <template v-if="row.bank.ledger_charge_minor !== null">
+            · 同账期账本 {{ formatMinor(row.bank.ledger_charge_minor) }}
+            · 差额 {{ formatMinor(row.bank.difference_minor ?? 0) }}
+          </template>
+          <template v-else>· 未设置账单日，无法比对账本</template>
+          · 来源 {{ row.bank.source_count }} 条
+          <span class="credit-debt-bank-status">{{ row.bank.status === 'reconciled' ? '已对账' : '待对账' }}</span>
+        </p>
+        <p v-if="row.bank?.review_reason" class="credit-debt-review" role="status">
+          待核对：{{ row.bank.review_reason }}
+        </p>
+
+        <button v-if="canWrite" type="button" class="btn-quiet credit-debt-action" @click="emit('configure', row.card.account_id)">
+          {{ row.card.configured ? '调整' : '设置账单日' }}
         </button>
       </li>
     </ul>
@@ -146,6 +178,10 @@ function goSettings() {
 .credit-debt-period { margin: 0; color: var(--muted); font-size: 11px; }
 .credit-debt-tags { margin: 0; display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .credit-debt-overdue { color: #a04e43; font-weight: 700; }
+.credit-debt-bank { margin: 0; padding: 8px 10px; border-radius: 12px; background: var(--soft); color: var(--ink); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.credit-debt-bank-status { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--primary-pale); color: var(--primary-deep); font-weight: 650; }
+.credit-debt-review { margin: 0; color: #8a5a4c; font-size: 11px; overflow-wrap: anywhere; }
+.credit-debt-bank-failed { margin: 0; padding: 9px 11px; border-radius: 12px; background: var(--cat-1); color: #8a5a4c; font-size: 12px; }
 .credit-debt-action { justify-self: start; margin-top: 2px; }
 .credit-debt-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 @media (min-width: 560px) {

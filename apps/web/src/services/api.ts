@@ -178,6 +178,24 @@ export type CreditDebtPlan = {
   cards: CreditDebtCard[]
 }
 export type AccountsWithDebt = { items: Account[]; credit_debt: CreditDebtPlan }
+
+// What the bank reported for one closing period. Read-only reconciliation
+// material: it never feeds balances or the repayment plan.
+export type CardStatement = {
+  id: string
+  account_id: string
+  account_name: string
+  period_start_on: string | null
+  period_end_on: string
+  due_on: string | null
+  currency: string
+  amount_due_minor: number
+  status: string
+  review_reason: string
+  source_count: number
+  ledger_charge_minor: number | null
+  difference_minor: number | null
+}
 export type InvestmentHolding = {
   id: string
   symbol: string
@@ -410,6 +428,7 @@ export const api = {
   accounts: () => get<{ items: Account[] }>('/accounts'),
   accountsWithDebt: () => get<AccountsWithDebt>('/accounts?include=credit_debt'),
   accountsOverview: () => get<AccountsOverview>('/accounts?include=credit_debt,investments'),
+  cardStatements: () => get<{ items: CardStatement[] }>('/credit-statements'),
   investments: () => get<AccountsWithInvestments>('/accounts?include=investments'),
   account: (id: string) => get<Account & { items?: unknown[] }>(`/accounts/${encodeURIComponent(id)}`),
   createAccount: (body: {

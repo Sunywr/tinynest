@@ -927,6 +927,79 @@ test.describe('E 资产', () => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     expect(overflow).toBeLessThanOrEqual(1)
   })
+
+  test('E09 银行账单汇总与同账期账本并排展示，不计入还款计划', async ({ page }) => {
+    const csrf = await signIn(page)
+    const configured = await (await page.request.post('/api/v1/accounts', {
+      data: { kind: 'credit', name: `银行账单卡 ${uid('c')}`, statement_day: 1, due_day: 25 },
+      headers: writeHeaders(csrf),
+    })).json()
+    const plain = await (await page.request.post('/api/v1/accounts', {
+      data: { kind: 'credit', name: `无账单日卡 ${uid('c')}` },
+      headers: writeHeaders(csrf),
+    })).json()
+    await page.route('**/api/v1/credit-statements', route => route.fulfill({
+      json: {
+        items: [
+          {
+            id: 'stmt_configured', account_id: configured.id, account_name: configured.name,
+            period_start_on: '2026-10-02', period_end_on: '2026-11-01', due_on: '2026-11-25',
+            currency: 'CNY', amount_due_minor: 120000, status: 'pending_review',
+            review_reason: '同一账期出现不同应还金额', source_count: 2,
+            ledger_charge_minor: 60000, difference_minor: 60000,
+          },
+          {
+            id: 'stmt_plain', account_id: plain.id, account_name: plain.name,
+            period_start_on: null, period_end_on: '2026-11-01', due_on: '2026-11-25',
+            currency: 'CNY', amount_due_minor: 90000, status: 'pending_review',
+            review_reason: '', source_count: 1,
+            ledger_charge_minor: null, difference_minor: null,
+          },
+        ],
+      },
+    }))
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/assets')
+    const panel = page.getByRole('region', { name: '信用卡还款计划' })
+    await expect(panel).toBeVisible()
+
+    const bankRow = panel.locator('.credit-debt-row', { hasText: configured.name }).getByTestId('bank-statement')
+    await expect(bankRow).toContainText('银行账单')
+    await expect(bankRow).toContainText('应还 ¥1,200.00')
+    await expect(bankRow).toContainText('同账期账本 ¥600.00')
+    await expect(bankRow).toContainText('差额 ¥600.00')
+    await expect(bankRow).toContainText('来源 2 条')
+    await expect(bankRow).toContainText('待对账')
+    await expect(panel.locator('.credit-debt-row', { hasText: configured.name }))
+      .toContainText('同一账期出现不同应还金额')
+
+    const unknownCycle = panel.locator('.credit-debt-row', { hasText: plain.name }).getByTestId('bank-statement')
+    await expect(unknownCycle).toContainText('应还 ¥900.00')
+    await expect(unknownCycle).toContainText('未设置账单日，无法比对账本')
+    await expect(unknownCycle).not.toContainText('差额')
+
+    // 银行报告只是对账材料，不能变成账本债务。
+    await expect(panel.locator('.credit-debt-row', { hasText: configured.name }).locator('.credit-debt-row-main'))
+      .not.toContainText('¥1,200.00')
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+  })
+
+  test('E10 银行账单读取失败时如实提示且不显示旧数据', async ({ page }) => {
+    const csrf = await signIn(page)
+    const res = await page.request.post('/api/v1/accounts', {
+      data: { kind: 'credit', name: `账单读取卡 ${uid('c')}`, statement_day: 1, due_day: 25 },
+      headers: writeHeaders(csrf),
+    })
+    expect(res.ok()).toBeTruthy()
+    await page.route('**/api/v1/credit-statements', route => route.fulfill({
+      status: 500, json: { error: { code: 'internal_error', message: '服务暂时不可用' } },
+    }))
+    await page.goto('/assets')
+    const panel = page.getByRole('region', { name: '信用卡还款计划' })
+    await expect(panel.getByTestId('bank-statement-error')).toContainText('银行账单暂时无法读取')
+    await expect(panel.getByTestId('bank-statement')).toHaveCount(0)
+  })
 })
 
 // ------------------------------------------------------------ F 预算与导出
@@ -1281,6 +1354,62 @@ test.describe('G 成员 / 分类 / 管理', () => {
     expect(emailBox?.width).toBe(codeBox?.width)
     await card.getByRole('button', { name: '验证并保存' }).click()
     await expect(card.getByText('已启用 · ***@163.com')).toBeVisible()
+  })
+
+  test('信用卡账单同步入库并如实汇总计数', async ({ page }) => {
+    await signIn(page)
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.route('**/api/v1/credit-statement-mailbox', route => route.fulfill({
+      json: { version: 3, enabled: true, masked_email: '***@qq.com', key_ready: true },
+    }))
+    await page.route('**/api/v1/credit-statement-mailbox/cards', route => route.fulfill({
+      json: { items: [{ id: 'fixture-card', name: '测试信用卡', status: 'active', bound: true, taken: false }] },
+    }))
+    let syncCalls = 0
+    await page.route('**/api/v1/accounts/fixture-card/credit-statement-sync?*', async route => {
+      const req = route.request()
+      expect(req.method()).toBe('POST')
+      expect(req.headers()['x-csrf-token']).toBeTruthy()
+      expect(new URL(req.url()).searchParams.get('version')).toBe('3')
+      expect(new URL(req.url()).searchParams.get('provider')).toBe('qq')
+      syncCalls++
+      if (syncCalls > 1) {
+        await route.fulfill({ status: 409, json: { error: { code: 'conflict', message: '邮箱配置已变化，请刷新后重试' } } })
+        return
+      }
+      await route.fulfill({
+        json: {
+          since: '2026-10-11', created: 1, linked: 1, conflicts: 1, needs_review: 1,
+          items: [
+            { statement_on: '2026-11-01', due_on: '2026-11-25', result: 'created' },
+            { statement_on: '2026-10-01', due_on: '2026-10-25', result: 'linked' },
+            { statement_on: '2026-09-01', due_on: '2026-09-25', result: 'conflict' },
+            { statement_on: '', due_on: '', result: 'needs_review' },
+          ],
+        },
+      })
+    })
+    await page.goto('/me/settings')
+    const card = page.getByRole('region', { name: '信用卡账单邮箱' })
+    await card.getByRole('button', { name: '信用卡绑定' }).click()
+    const linked = card.getByRole('list', { name: '已绑定信用卡', exact: true })
+    await linked.getByRole('button', { name: '同步账单' }).click()
+
+    const result = card.getByRole('region', { name: '账单同步结果' })
+    await expect(result).toContainText('新增 1 期，重复 1 期，冲突 1 期，待核对 1 期')
+    await expect(result).toContainText('2026-11-01 期已入库，到期 2026-11-25')
+    await expect(result).toContainText('2026-10-01 期已存在，仅新增邮件来源')
+    await expect(result).toContainText('2026-09-01 期金额与已记录不一致，保留首次金额')
+    await expect(result).toContainText('有邮件未能识别，未入库')
+    await expect(card.getByRole('status')).toContainText('搜索自 2026-10-11')
+    await expect(card.getByRole('status')).toContainText('未新增流水')
+
+    // 同一控件 450ms 内的重复点击会被防重复提交拦截，等过窗口再点。
+    await page.waitForTimeout(500)
+    await linked.getByRole('button', { name: '同步账单' }).click()
+    await expect(card.getByRole('alert')).toContainText('邮箱配置已变化，请刷新后重试')
+    await expect(card.getByRole('region', { name: '账单同步结果' })).toHaveCount(0)
+    expect(syncCalls).toBe(2)
   })
 })
 

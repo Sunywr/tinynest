@@ -18,6 +18,16 @@ type MailPreview = {
   amount_due_minor?: number
   needs_review?: string
 }
+type SyncItem = { statement_on: string; due_on: string; result: string }
+type SyncResult = {
+  cardName: string
+  since: string
+  created: number
+  linked: number
+  conflicts: number
+  needs_review: number
+  items: SyncItem[]
+}
 
 const path = '/credit-statement-mailbox'
 const props = defineProps<{ provider: 'qq' | '163' }>()
@@ -26,6 +36,7 @@ const providerName = props.provider === '163' ? '163' : 'QQ'
 const config = ref<MailboxConfig | null>(null)
 const cards = ref<BindingCard[] | null>(null)
 const preview = ref<{ cardName: string; since: string; items: MailPreview[] } | null>(null)
+const sync = ref<SyncResult | null>(null)
 const cardGroups = computed(() => [
   { label: '已绑定信用卡', items: cards.value?.filter(card => card.bound) ?? [] },
   { label: '未绑定信用卡', items: cards.value?.filter(card => !card.bound) ?? [] },
@@ -59,6 +70,7 @@ async function run(action: () => Promise<void>) {
     if (cause instanceof ApiError && cause.status === 409) {
       cards.value = null
       preview.value = null
+      sync.value = null
       if (cause.code !== 'card_already_bound') config.value = null
     }
   } finally {
@@ -89,6 +101,7 @@ function save() {
     email.value = ''
     cards.value = null
     preview.value = null
+    sync.value = null
     message.value = providerName + ' 邮箱配置已保存。'
   })
 }
@@ -105,6 +118,7 @@ function disable() {
     email.value = ''
     cards.value = null
     preview.value = null
+    sync.value = null
     message.value = providerName + ' 邮箱已停用，授权码已清除。'
   })
 }
@@ -122,6 +136,7 @@ function updateBinding(card: BindingCard) {
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-binding?${query}`
     await request(endpoint, { method: card.bound ? 'DELETE' : 'PUT' })
     preview.value = null
+    sync.value = null
     message.value = card.bound ? '已解除信用卡绑定。' : '信用卡已绑定到当前邮箱。'
     cards.value = null
     await loadCards()
@@ -133,11 +148,37 @@ function previewStatements(card: BindingCard) {
   if (!current?.enabled || !card.bound || card.status !== 'active') return
   return run(async () => {
     preview.value = null
+    sync.value = null
     const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-preview?${query}`
     const result = await request<{ since: string; items: MailPreview[] }>(endpoint, { method: 'POST' })
     preview.value = { cardName: card.name, ...result }
   })
+}
+
+// Syncing stores what the bank reported. It writes no transactions and no
+// journal entries, so the repayment plan on the assets page stays untouched.
+function syncStatements(card: BindingCard) {
+  const current = config.value
+  if (!current?.enabled || !card.bound || card.status !== 'active') return
+  return run(async () => {
+    preview.value = null
+    sync.value = null
+    const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
+    const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-sync?${query}`
+    const result = await request<Omit<SyncResult, 'cardName'>>(endpoint, { method: 'POST' })
+    sync.value = { cardName: card.name, ...result }
+    message.value = providerName + ' 账单已同步（搜索自 ' + result.since + '），未新增流水。'
+  })
+}
+
+function syncLine(item: SyncItem): string {
+  if (item.result === 'needs_review') return '有邮件未能识别，未入库'
+  const period = item.statement_on ? item.statement_on + ' 期' : '该账单'
+  if (item.result === 'created') return item.due_on ? period + '已入库，到期 ' + item.due_on : period + '已入库'
+  if (item.result === 'conflict') return period + '金额与已记录不一致，保留首次金额'
+  if (item.result === 'linked' || item.result === 'unchanged') return period + '已存在，仅新增邮件来源'
+  return period + '未入库'
 }
 
 onMounted(refresh)
@@ -168,6 +209,8 @@ onMounted(refresh)
                 <small v-if="card.taken">已绑定其他邮箱</small>
                 <div v-else class="mailbox-actions card-actions">
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
+                    :disabled="busy" @click="syncStatements(card)">同步账单</button>
+                  <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
                     :disabled="busy" @click="previewStatements(card)">预览账单</button>
                   <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
                     :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
@@ -190,6 +233,15 @@ onMounted(refresh)
             <p v-if="item.needs_review" class="form-hint">{{ item.needs_review }}</p>
           </li>
         </ul>
+      </section>
+      <section v-if="sync" class="mailbox-preview" aria-label="账单同步结果">
+        <h3>{{ sync.cardName }} · 账单同步结果</h3>
+        <p class="sync-counts">新增 {{ sync.created }} 期，重复 {{ sync.linked }} 期，冲突 {{ sync.conflicts }} 期，待核对 {{ sync.needs_review }} 期</p>
+        <p v-if="!sync.items.length" class="form-hint">没有找到符合条件的账单邮件。</p>
+        <ul v-else>
+          <li v-for="(item, index) in sync.items" :key="index">{{ syncLine(item) }}</li>
+        </ul>
+        <p class="form-hint">同步只记录银行报送的账单汇总，不会新增流水或改变还款计划。</p>
       </section>
       <form :key="config.version" class="mailbox-form" @submit.prevent="save">
         <label><span>{{ providerName }} 邮箱</span><input v-model="email" type="email" maxlength="254" required :disabled="busy" @input="message = ''" /></label>
@@ -262,5 +314,10 @@ onMounted(refresh)
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow-wrap: anywhere;
+}
+.sync-counts {
+  margin: 0;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 </style>

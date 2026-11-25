@@ -9,7 +9,7 @@ import CreditDebtPanel from '../components/CreditDebtPanel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InvestmentPanel from '../components/InvestmentPanel.vue'
 import TransferForm from '../components/TransferForm.vue'
-import { api, type Account, type CreditDebtPlan, type InvestmentOverview } from '../services/api'
+import { api, type Account, type CardStatement, type CreditDebtPlan, type InvestmentOverview } from '../services/api'
 import { formatMinor } from '../services/format'
 import { useSession } from '../composables/useSession'
 
@@ -18,6 +18,8 @@ type JournalRow = { id: string; occurred_on: string; change_minor?: number; amou
 const session = useSession()
 const accounts = ref<Account[]>([])
 const plan = ref<CreditDebtPlan | null>(null)
+const statements = ref<CardStatement[]>([])
+const statementsFailed = ref(false)
 const investments = ref<InvestmentOverview | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -45,6 +47,21 @@ const cashShare = computed(() => assetsTotal.value > 0 ? Math.round((cashTotal.v
 const investmentShare = computed(() => assetsTotal.value > 0 ? Math.round((investmentTotal.value / assetsTotal.value) * 100) : 0)
 const memberName = (id?: string | null) => session.members.value.find(m => m.id === id)?.name
 
+async function loadStatements(hasCards: boolean) {
+  if (!hasCards) {
+    statements.value = []
+    statementsFailed.value = false
+    return
+  }
+  try {
+    statements.value = (await api.cardStatements()).items
+    statementsFailed.value = false
+  } catch {
+    statements.value = []
+    statementsFailed.value = true
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -53,6 +70,7 @@ async function load() {
     accounts.value = body.items
     plan.value = body.credit_debt
     investments.value = body.investments
+    await loadStatements(body.credit_debt.cards.length > 0)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '账户加载失败'
   } finally {
@@ -136,7 +154,7 @@ onMounted(() => void load())
     <InvestmentPanel v-if="investments && investments.account_count && !error" :overview="investments" />
 
     <CreditDebtPanel v-if="plan && plan.cards.length && !error" :plan="plan" :can-write="canWrite"
-      @configure="openConfigure" />
+      :statements="statements" :statements-failed="statementsFailed" @configure="openConfigure" />
 
     <p class="info-line" role="note">
       现金与信用卡仍按复式记账；信用卡是负债账户，支出增加欠款、还款按账户转账处理。可为信用卡设置账单日与还款日，
