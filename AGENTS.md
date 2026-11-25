@@ -1,10 +1,14 @@
 # TinyNest / 小家 · 任意 Coding Agent 规范
 
-> **状态说明（2026-11-22）**：本文件已从 V0.1 规范升级为 **V2 记账重置** 的运维手册。
-> V2 删除了信用账单、分期、负债、到期调度、投资交易、股票自选、账单导入、信用账单邮件、项目、仪表盘与退款模块，
+> **状态说明（2026-11-25 更新）**：本文件已从 V0.1 规范升级为 **V2 记账重置** 的运维手册。
+> V2 删除了分期、负债、到期调度、投资交易、股票自选、账单导入、仪表盘与退款模块，
 > 只保留身份/权限/家庭/邮件、复式记账内核、信用卡还款计划与 **只读的证券/理财估值快照**。该快照从 pfm 导入，
 > 使用独立的 `investment_accounts` / `investment_holdings` 表，不写分录、不参与转账，也不恢复 V1 投资交易/股票自选模块。
-> 当前新增的「信用卡还款计划」只是 `accounts` 上账单日/还款日配置 + 只读派生统计，不恢复 V1 的 `credit_statements` 账单表、分期或利息。生产数据库**不做 V1 原地升级**，
+> 当前新增的「信用卡还款计划」只是 `accounts` 上账单日/还款日配置 + 只读派生统计，不恢复 V1 的 `credit_statements` 账单表、分期或利息。
+> V2 之后按需重新引入的增量，均与 V1 同名模块**不同**，不得据此认为模块已恢复：
+> 迁移 007 的 `project_budgets` 只做「预算 − 关联流水」额度统计（无 V1 `projects` 表与项目路由）；
+> 迁移 009–011 的账单邮箱只读 IMAP 并只存 AES-GCM 密文授权码；迁移 012 的 `card_statements` / `card_statement_sources`
+> 只保存**银行报的**账期金额用于只读比对，不写分录、不参与还款计划，命名刻意避开 V1 的 `credit_statements` / `credit_statement_items`。生产数据库**不做 V1 原地升级**，
 > 清理与切换由用户按 [生产清理手册](docs/plans/v2-prod-purge-runbook.md) 与
 > [新库切换手册](docs/plans/v2-cutover-runbook.md) 执行；未执行前相关结论一律 `UNVERIFIED`。
 > Phase 0 与 V0.1 只作为历史归档，不再约束当前代码；历史交付见
@@ -27,7 +31,7 @@
 
 1. `README.md`（产品定位与当前状态）、`docs/project-status.md`（进度与实测数字）、`docs/DEVELOPMENT.md`（启动与验证）。
 2. `docs/plans/v2-bookkeeping-reset.md`（P0–P5 总计划）、`docs/plans/v2-bookkeeping-module-spec.md`（模块与 API 契约冻结稿）、`docs/plans/v2-platform-optimization.md`（三端优化计划）。
-3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（55 条业务路由契约）、`docs/er-v2.md`（27 张业务表与冲正不变量）。
+3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（**72 条**业务路由契约）、`docs/er-v2.md`（**37 张**表与冲正不变量）。
 4. `docs/plans/v2-prod-purge-runbook.md`（生产清理）、`docs/plans/v2-cutover-runbook.md`（新库切换）；执行前逐条核对。
 5. `docs/architecture.md`（双服务器边界）、`docs/security.md`（安全底线）、`docs/deployment.md`（部署与迁移）、`docs/acceptance.md`（验收清单）。
 6. 仍然有效：`docs/design-system.md`（**A · 奶油团子**，唯一主题，不得提供其他风格）、`assets/brand/README.md`（唯一批准原图 SHA-256，严禁改绘/重新生成图标）、`docs/reviews/v2-baseline.md`（V2 基线与 P5 结果）。
@@ -54,7 +58,7 @@
 - **所有财务查询必须在 SQL 层按 `household_id` 限定**，不得先全库聚合再在应用层过滤；`journal_lines` 通过 `journal_entries.household_id` 关联限定。
 - 业务日期统一 Asia/Shanghai，使用可注入时钟 `API.businessToday()` / `businessDate()`；审计、会话等时间戳仍以 UTC 存储。
 - 统计只认科目编码：收入 `4010:%`（贷−借）、支出 `5010:%`（借−贷），分类 id 由 `SUBSTR(account_code, 6)` 解析；转账与信用卡还款不计入收支（见 `internal/api/stats.go`）。
-- 信用卡还款计划是**只读派生**：从 `journal_lines` + 当前有效 `transactions` + `users.payday` 计算，不写分录、不改余额、不缓存；不新增账单表。查询同样必须按 `household_id` 限定。
+- 信用卡还款计划是**只读派生**：从 `journal_lines` + 当前有效 `transactions` + `users.payday` 计算，不写分录、不改余额、不缓存，也不读取 `card_statements`。查询同样必须按 `household_id` 限定。
 
 ### 安全配置（必须显式）
 
@@ -71,15 +75,17 @@
 
 - V2 是一次**基线重置**：不支持 V1 旧库原地升级。数据库必须由 V2 二进制在空库上建立 `schema_meta.baseline=v2`；旧库按切换手册新建库 + 导入身份数据，禁止把 V2 二进制指向旧库。
 - **不得绕过 baseline 守卫**：`internal/db/migrate.go` 在 `schema_meta.baseline` 缺失或不为 `v2`、出现不认识的迁移版本、校验和不一致时拒绝启动。不要通过改守卫、改 `schema_meta`、删迁移账本等方式强行启动。
-- 两个方言当前各有 **5 个迁移文件**：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张表）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）与 `005_investments.sql`（证券/理财估值快照 2 张表），嵌入在 `internal/db/migrations/`（SQLite）与 `internal/db/mysql/`（MySQL）。
-- 数据库只在后端 B 机；V2 运行时 28 张表（27 张业务表 + 迁移账本 `schema_migrations`）。
+- 两个方言当前各有 **12 个迁移文件**（`internal/db/migrations/` SQLite 与 `internal/db/mysql/` MySQL 同名）：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）、`005_investments.sql`（证券/理财估值快照 2 张）、`006_auth_login_locks.sql`（登录风控）、`007_project_budgets.sql`（项目预算 2 张）、`008_transaction_source_metadata.sql`、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`（按服务商隔离，含从 009/010 复制）、`012_card_statements.sql`（银行账单汇总 2 张）。
+- 数据库只在后端 B 机；V2 空库迁移后共 **37 张表**（含基线标记 `schema_meta`），加迁移账本 `schema_migrations` 后 MySQL 运行时 **38 张**，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **39 张**。009/010 的旧表 011 只复制不删除，因此新旧两组并存，新代码只读写 011 的两张表。
 - SQLite 迁移文件与账本行在同一事务执行；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重复执行**。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；确需 `ALTER TABLE` 时用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法），不能裸写会重复失败的 ALTER。
 - 默认分类来自 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()`，不要再加 SQL 种子文件或启动期 `UPDATE`。
 
 ### 生产清理 CLI（`tinynest-admin`）安全规则
 
 - `tinynest-admin` 是**只能在服务器本地、服务停止时由人工执行**的运维工具，**绝不能通过 HTTP 暴露**，也不得被 `cmd/server` 引用。
-- `purge` 只删数据行（DML），在**单事务**内按子表→父表顺序删除 45 张清理表；事务内断言「业务表全空 + 11 张身份表计数不变 + `users` 摘要不变」后才提交，任一失败整体回滚。
+- `purge` 只删数据行（DML），在**单事务**内按子表→父表顺序删除清理清单：`PurgeTableSet()` 与 `DeleteOrder()` 均为 **54 个表名**，其中在当前 V2 schema 中存在的只有 **22 张**，其余 32 个是 V1 遗留名（`projects`、`credit_*`、`installment_*`、`debt_*`、`investment_*`（快照除外）、`stock_*`、`schedule_*`、`statement_import_*`、`credit_mail*`），遇到按 `Missing` 跳过；事务内断言「业务表全空 + 11 张身份表 + 2 张保留的个人配置表计数不变 + `users` 摘要不变」后才提交，任一失败整体回滚。
+- 账单表（`card_statements` / `card_statement_sources`）、绑卡关系（`statement_mailbox_card_links` / `credit_statement_bindings`）与投资估值快照按**业务数据清空**；含加密授权码的 `statement_mailbox_configs` / `credit_statement_mailboxes` 属个人凭据，列在 `PreservedConfigTables` 随身份保留、但不进入身份导出/导入。`auth_login_locks` 是安全状态，同样不清空。
+- 任何新迁移加的表必须显式归类，否则 `Snapshot.Unclassified` 会在清点后列出它并让 `verify` 失败——「业务表全空」这句断言只覆盖已分类的表，正是这个守卫在防止漏清。
 - 身份表白名单（11 张）不得进入删除清单：`households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`。
 - `-confirm` 必须与数据库名完全一致（SQLite 为数据库文件路径）；`-execute` 必须同时提供 `-yes-service-stopped`；MySQL 口令只能从受保护文件读取，不得出现在命令行。
 - 执行前必须完成备份、SHA-256 校验、隔离恢复比对与 `baseline-capture`；执行后必须 `verify`，并把执行人、时间、前后计数写入证据文件；旧库与备份保留 ≥30 天。
@@ -99,10 +105,12 @@
 | 保留 | 初始化与认证、会话/CSRF、家庭成员与邀请审批、管理员与审计日志、托管邮箱 SMTP 与邮箱验证/找回、站点管理员 |
 | 保留 | 复式记账内核、`categories`、`accounts`（`cash` / `credit`，含可空账单日/还款日配置）、`transactions`（支出/收入/转账）、`stats`（summary / categories / daily / monthly）、`budgets`、信用卡还款计划（`GET /accounts?include=credit_debt` 只读派生） |
 | 保留 | 只读证券/理财估值快照：`investment_accounts` / `investment_holdings`，经 `GET /accounts?include=investments` 投影；不写分录、不参与转账 |
+| 保留 | 项目预算 `project-budgets`（`project_budgets` + `transaction_budget_links`，只做额度统计）、流水来源元数据 `transaction_source_metadata`、持久化登录风控 `auth_login_locks` |
+| 保留 | 信用卡账单邮箱与只读对账（`/api/v1/credit-statement-mailbox*`、`/api/v1/accounts/{id}/credit-statement-{preview,sync,binding}`、`GET /api/v1/credit-statements`）：只读 IMAP 取银行发的账单汇总，密文存授权码，落 `card_statements` / `card_statement_sources` 只做只读比对，不写分录、不参与还款计划 |
 | 保留 | 前端五界面：账单 / 记账面板 / 图表 / 资产 / 我的；账户行内转账；前端 xlsx 导出；PWA |
-| 退役 | 信用账单、分期、负债、到期调度、**V1 投资交易**、股票自选、账单导入、信用账单邮件（IMAP）、项目、仪表盘、退款、家庭公告 |
+| 退役 | V1 信用账单（`credit_statements` / `credit_statement_items` 及其还款、调整、计提）、分期、负债、到期调度、**V1 投资交易**、股票自选、V1 账单导入（`statement_import_*`）、V1 信用账单邮件（`credit_mailbox*` / IMAP 自动过账）、V1 项目（`projects` 表）、仪表盘、退款、家庭公告 |
 
-退役模块的路由、视图、测试与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。唯一例外是上述只读投资估值快照：它只是 pfm 导入的展示数据，不提供买卖、转账、估值重算或已实现收益账务。
+退役模块的路由、视图与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。两个例外都只是数据：只读投资估值快照是 pfm 导入的展示数据，不提供买卖、转账、估值重算或已实现收益账务；`card_statements` 是银行报的账期金额，只用于与账本派生值比对差异，不产生分录。009/010 留下的 `credit_statement_mailboxes` / `credit_statement_bindings` 是 011 拆分前的旧结构，011 复制数据但不删表，新代码不再读写。
 
 ## Phase 0（历史，仅存档，不再约束当前代码）
 

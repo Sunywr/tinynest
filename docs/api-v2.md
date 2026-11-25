@@ -1,9 +1,10 @@
 # TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
-> 契约范围：**57 条业务路由**（按「方法 + 路径」计）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 57。
-> 路由总数由 `TestRouteBudget` 冻结为 ≤57；包括注册及登录使用的图形验证码入口。
+> 契约范围：**72 条业务路由**（按「方法 + 路径」计，在 `91b47c9` 上以 `TestRouteBudget` 实测）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 72。
+> 路由总数由 `TestRouteBudget` 冻结为 ≤72；包括注册及登录使用的图形验证码入口。
 > 信用卡还款计划与投资估值不是新路由，而是 `GET /accounts?include=credit_debt,investments` 的可选投影；`include` 接受空值、`credit_debt`、`investments` 或逗号组合。
+> 账单邮箱、绑卡、预览、同步与只读对账共 10 条路由见 §11，全部只读账本、不写分录。
 
 ## 1. 通用约定
 
@@ -18,7 +19,7 @@
 | 角色 | `admin`（管理员）/ `member`（成员）/ `viewer`（只读）。`viewer` 的写请求除登出、改自己资料、改自己密码外一律 403 |
 | 错误结构 | `{"error":{"code":"...","message":"中文说明"}}`；不泄露 SQL、路径、堆栈或密钥 |
 | 分页 | 仅 `GET /transactions` 使用 cursor 分页（`limit` 1–200，默认 50，返回 `next_cursor`） |
-| 幂等 | 仅 `POST /transactions` 与 `POST /accounts/transfers` 读取 `Idempotency-Key`（详见 §12） |
+| 幂等 | 仅 `POST /transactions` 与 `POST /accounts/transfers` 读取 `Idempotency-Key`（详见 §13）；账单同步用唯一约束与配置版本去重 |
 | 家庭隔离 | 所有财务查询在 SQL 层按 `household_id` 限定；跨家庭 ID 等同于不存在（404 / 业务 400），不返回他人数据 |
 | 审计 | 记账、预算、账户、成员、邀请、审批、用户与邮件配置等写操作在业务事务内写 `audit_logs`；分类的新建/改名/排序不写审计，分类删除写审计；只读查询不写审计 |
 
@@ -26,19 +27,19 @@
 
 | HTTP | code | 含义 |
 | --- | --- | --- |
-| 400 | `invalid_request` / `invalid_amount` | 请求格式或业务校验失败（含金额非正整数分） |
+| 400 | `invalid_request` / `invalid_amount` / `unsupported_statement_card` | 请求格式或业务校验失败（含金额非正整数分、账单卡名缺少四位卡号尾号或银行不在支持范围） |
 | 401 | `unauthorized` | 未登录、会话过期或口令错误 |
 | 403 | `forbidden` / `setup_disabled` / `verification_required` | 角色不足、初始化入口关闭、需邮箱验证 |
 | 404 | `not_found` | 家庭内不存在（含不属于本家庭的 ID） |
-| 409 | `conflict` / `member_in_use` / `verification_failed` | 已初始化、已被引用、已冲正、重复验证失败等 |
+| 409 | `conflict` / `member_in_use` / `verification_failed` / `card_already_bound` | 已初始化、已被引用、已冲正、邮箱配置版本过期、重复验证失败、信用卡已绑定其他账单邮箱 |
 | 429 | `rate_limited` / `mail_quota` / `email_daily_limit` | 登录/注册/邮件限流；`Retry-After` 仅在登录限流时返回 |
 | 500 | `internal_error` | 未预期错误（通用中文文案） |
-| 502 | `mail_test_failed` | SMTP 测试发送失败，旧配置保持生效 |
-| 503 | `mail_unavailable` | 邮件未启用或加密密钥缺失 |
+| 502 | `mail_test_failed` / `mailbox_test_failed` / `statement_preview_failed` / `statement_sync_failed` | SMTP 测试发送失败（旧配置保持生效）；账单邮箱连接或 IMAP 读取失败 |
+| 503 | `mail_unavailable` | 邮件未启用、加密密钥缺失或账单邮箱授权码不可用 |
 
-业务路由的实际状态码在 §2–§11 逐条标注；成功响应的常见状态码为 200 / 201 / 202 / 204。
+业务路由的实际状态码在 §2–§12 逐条标注；成功响应的常见状态码为 200 / 201 / 202 / 204。
 
-## 2. 初始化与认证（8 条）
+## 2. 初始化与认证（9 条）
 
 | 方法 | 路径 | 鉴权 | 请求 | 响应 | 失败 |
 | --- | --- | --- | --- | --- | --- |
@@ -79,7 +80,7 @@
 - 站点管理员由 `site_administrators` 表决定，普通家庭管理员无权配置 SMTP。
 - 家庭公告发送能力在 V2 退役：不存在 `GET/POST /household/mail/announcements` 路由；保留的 `announcements` 字段只表示邮件订阅偏好。
 
-## 4. 家庭与成员（7 条）
+## 4. 家庭与成员（9 条）
 
 新账号登录后，`/auth/me` 返回空的 `household_id`。通过邮箱验证可启用密码找回，并可创建家庭或申请加入。审批通过后，会话下次请求即可获得家庭权限。
 
@@ -239,7 +240,37 @@
 
 支出可通过 `budget_id` 关联一个家庭内项目。更正时省略该字段保留关联，传空字符串清除关联。仅提交 `budget_id` 时只更新关联和审计记录。项目实际支出按关联的有效分录跨月累计，同时仍计入发生当月的月度预算。
 
-## 11. 健康检查（2 条，不计入 57）
+## 11. 信用卡账单邮箱与对账（10 条）
+
+鉴权：会话，且当前用户 `role` ∈ `admin` / `member`（`viewer` 与已被降级的账号在写路径上返回 403 `forbidden`「当前账号不能修改此邮箱配置」）。所有路径都接受查询参数 `provider`，取值 `qq`（默认，含空值）或 `163`，其他值 400 `invalid_request`「请选择 QQ 或 163 邮箱」。
+
+邮箱配置按 `(household_id, user_id, provider)` 隔离，`version` 是乐观锁：读取返回当前版本，写入必须回传同一版本，成功后自增。授权码以 AES-GCM 密文存 `auth_code_cipher`（密钥来自 `TINYNEST_MAIL_KEY_FILE`），响应只回显掩码邮箱，**任何接口都不返回明文邮箱或授权码**；IMAP 全程只读（不删信、不改旗标）。
+
+| 方法 | 路径 | 请求 | 响应 | 失败 |
+| --- | --- | --- | --- | --- |
+| GET | `/credit-statement-mailbox` | 查询 `provider?` | 200 `{provider,enabled,masked_email?,version,key_ready}`（未配置时 `enabled:false`、`version:0`、无 `masked_email`；`key_ready` 表示 32 字节密钥就绪） | 400、401 |
+| PUT | `/credit-statement-mailbox` | `email`、`auth_code`、`version`（必填，≥0；0 表示首次创建）；请求体上限 2 KiB | 200 同上，`version` 为 `旧值+1`；**先用凭据试连 IMAP 成功才落库**；邮箱地址变更时删除该邮箱在本服务商下的全部绑卡 | 400 `invalid_request`（地址与服务商域名不一致）、409 `conflict`（版本过期）、403、429 `rate_limited`、502 `mailbox_test_failed`、503 `mail_unavailable`（密钥未配置/不可用） |
+| DELETE | `/credit-statement-mailbox` | `version`（必填，≥0）；请求体上限 256 B | 200 同上，`enabled:false`、`version` 为 `旧值+1`（清空密文而非删除行，保留版本单调性） | 400、401、403、409、503 |
+| POST | `/credit-statement-mailbox/test` | 未保存测试：`email`、`auth_code`；已保存测试：仅 `version`（≥1，此时 `email`/`auth_code` 必须为空） | 200 `{status:"connected"}`（仅证明能列出 INBOX，不读取任何邮件正文） | 400、409、429（按用户 + IP 限流，失败计数会延长冷却）、502 `mailbox_test_failed`、503 `mail_unavailable` |
+| GET | `/credit-statement-mailbox/cards` | 查询 `provider?` | 200 `{items:[{id,name,status,bound,taken}]}`，本家庭 `kind=credit` 且（`active`，或 `disabled` 但仍绑定给当前用户与本服务商）；`bound` 属于当前用户+服务商，`taken` 属于他人 | 400、401 |
+| PUT | `/accounts/{id}/credit-statement-binding` | 查询 `provider?`、`version`（必填 ≥1，须等于当前邮箱配置版本）；无请求体 | 204 无响应体；写审计 `bind_statement_card` | 400 `invalid_request`（缺版本或卡非 `active`）、404 `not_found`、409 `card_already_bound` / `conflict`、403、503 |
+| DELETE | `/accounts/{id}/credit-statement-binding` | 同上 | 204 无响应体（重复解绑幂等）；写审计 `unbind_statement_card`；被他人绑定视为 404 | 400、404、409 `conflict`、403、503 |
+| POST | `/accounts/{id}/credit-statement-preview` | 查询 `provider?`、`version`（必填 ≥1） | 200 `{items:[{received_on?,statement_on?,due_on?,amount_due_minor?,needs_review?}],since:"YYYY-MM-DD"}`，`since` 为业务今天前 30 天；只读 IMAP 搜索并把解析结果**只回显、不落库** | 400 `unsupported_statement_card`、404（该卡未绑定给当前邮箱）、409、429 `rate_limited`、502 `statement_preview_failed`、503 |
+| POST | `/accounts/{id}/credit-statement-sync` | 同上，`since` 为业务今天前 45 天 | 200 `{since,created,linked,conflicts,needs_review,items:[{statement_on,due_on,result}]}`，`result` ∈ `created`/`linked`/`conflict`/`needs_review` | 同预览 |
+| GET | `/credit-statements` | 无 | 200 `{items:[{id,account_id,account_name,period_start_on,period_end_on,due_on,currency,amount_due_minor,status,review_reason,source_count,ledger_charge_minor,difference_minor}]}`，按 `period_end_on` 降序；`ledger_charge_minor`/`difference_minor` 在无账期起点时为 `null` | 401 |
+
+约束与口径：
+
+- 卡片识别：`credit` 账户名须同时命中支持的银行（浦发 `spdb`、中信 `citic`）且以 `（1234）`/`(1234)` 结尾，否则 400 `unsupported_statement_card`；命中多家用 `&&` 互斥判定，两家都提到即视为不支持。
+- 绑定的读取门槛：卡 `kind='credit' AND status='active'`，绑定行 `(household_id, account_id)` 唯一（一卡一邮箱一服务商），且绑定人的 `users.status='active'` 且 `role IN ('admin','member')`；不满足即 404，绝不跨家庭或跨用户读取。
+- 网络访问前的全部校验（绑定、卡名、配置版本、解密授权码）在 `prepareStatementRead` 内完成；预览、同步与连接测试共用容量为 4 的并发闸 `mailboxProbeSlots`，超出一律 429。
+- 读取之后、报告之前会**重新校验**邮箱版本与卡名（`readStatementMails`）：期间禁用邮箱（版本自增）或改名都会得到 409 `conflict`，不返回可能被错配的结果。
+- 落库只写 `card_statements` / `card_statement_sources`（见 [数据模型](er-v2.md) §6.4），不写 `transactions` / `journal_entries`，也不被还款计划读取。同一 `(household_id, account_id, period_end_on)` 已存在时**保留首次记录的金额**，只有金额不一致才在 `review_reason=''` 时写入「银行账单金额与已记录金额不一致，请核对」并计为 `conflict`。
+- 来源幂等：`digest = SHA-256("email", provider, user_id, IMAP UID, account_id, statement_on, due_on, 卡尾号, amount_due, "CNY")`，配合 `UNIQUE(household_id, digest)`；同一封邮件重放只增加不重复，且不新增审计。
+- 审计只在 `created + conflicts > 0` 时写一条 `sync_card_statement`（`entity="card_statement"`，`entity_id` 为卡账户 ID，payload 含三种计数）。
+- `ledger_charge_minor` 由同一账期内该卡的**有效**支出分录聚合（`e.status='posted' AND e.reversal_of IS NULL AND biz_type='expense'` 且 `t.status='posted' AND t.type='expense'`），`difference_minor = amount_due_minor − ledger_charge_minor`；两者仅作只读比对，任何非零差额都不触发自动过账。
+
+## 12. 健康检查（2 条，不计入 72）
 
 | 方法 | 路径 | 鉴权 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
@@ -248,17 +279,18 @@
 
 `readyz` 的数据库检查为组合根注入：SQLite 执行 `PRAGMA quick_check`，MySQL 执行 ping；两者都校验迁移版本完整。
 
-## 12. 幂等与家庭隔离规则
+## 13. 幂等与家庭隔离规则
 
-### 12.1 幂等
+### 13.1 幂等
 
 - 生效范围：`POST /transactions`、`POST /accounts/transfers`。其余写接口（PATCH/DELETE、分类/账户/预算、成员、邀请、管理员操作）**不**读取幂等键。
 - 请求头：`Idempotency-Key: <调用方生成的唯一字符串>`；省略即不做去重。
 - 存储：键写入 `transactions.idempotency_key`（唯一约束）与 `journal_entries.idempotency_key`（唯一约束）。
 - 重放：同一家庭内已提交过该键时，直接返回 200 `{id,status:"posted",replayed:true}`，不重复记账；事务失败后还会再查一次，覆盖并发请求已提交同键的情况。
 - 幂等键不跨家庭复用：回放查询按 `(idempotency_key, household_id)` 限定，其他家庭看不到该流水。
+- 账单同步不使用 `Idempotency-Key`：去重靠数据库唯一约束 `(household_id, account_id, period_end_on)` 与来源 `UNIQUE(household_id, digest)`，以及邮箱配置 `version` 的乐观锁，因此重复点击同步不会产生第二行账单或第二条来源。
 
-### 12.2 家庭隔离与只读角色
+### 13.2 家庭隔离与只读角色
 
 - 所有财务 SQL 都以 `WHERE household_id=?` 限定；`journal_lines` 通过 `JOIN journal_entries ON entry_id` 继承家庭范围，不存在「先全库聚合再过滤」的查询。
 - 跨家庭 ID 按不存在处理（404 或业务 400），不返回他人余额、流水或成员。

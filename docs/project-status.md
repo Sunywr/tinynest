@@ -27,33 +27,36 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 
 | 范围 | 内容 |
 | --- | --- |
-| 模块收敛 | 保留认证/权限、家庭/成员、托管邮箱、审计与复式记账内核；退役信用账单、分期、负债、到期调度、V1 投资交易、股票自选、账单导入、信用账单邮件、项目、仪表盘、退款、家庭公告；新增 pfm 导入的只读证券/理财估值快照 |
-| 信用卡还款计划 | 信用卡账户可设账单日/还款日；`GET /accounts?include=credit_debt` 按当前用户发薪日、有效流水与 FIFO 还款派生「发薪日前需准备 / 可用现金 / 缺口 / 逾期 / 未出账」；不建账单表、不写分录 |
+| 模块收敛 | 保留认证/权限、家庭/成员、托管邮箱、审计与复式记账内核；退役 V1 信用账单、分期、负债、到期调度、V1 投资交易、股票自选、V1 账单导入、V1 信用账单邮件（IMAP 自动过账）、V1 项目（`projects`）、仪表盘、退款、家庭公告；新增 pfm 导入的只读证券/理财估值快照、`project_budgets` 额度统计与只读的银行账单汇总对账 |
+| 信用卡还款计划 | 信用卡账户可设账单日/还款日；`GET /accounts?include=credit_debt` 按当前用户发薪日、有效流水与 FIFO 还款派生「发薪日前需准备 / 可用现金 / 缺口 / 逾期 / 未出账」；不写分录、不读取 `card_statements` |
 | 证券/理财估值快照 | `investment_accounts` / `investment_holdings` 保存 pfm 导入的账户、持仓、成本、市值、股息与最近交易快照；`GET /accounts?include=investments` 只读投影；资产页与图表展示投资收益；不写分录、不参与转账 |
-| 后端 | V2 记账 API（分类 / 账户 / 流水 / 统计 / 预算）、信用卡还款计划派生、投资估值投影与统一错误结构；`internal/credit`、`internal/invest` 已删除 |
-| 数据层 | 两个方言各 5 个迁移文件、单一通用迁移器、`schema_migrations` 校验和与版本连续性、`schema_meta.baseline=v2` 守卫、MySQL 可重跑 DDL、Go 常量默认分类 |
-| 运维工具 | `apps/api/cmd/tinynest-admin`：`baseline-capture` / `purge` / `verify` / `identity-export` / `identity-import`，单事务清理 45 张表并保留 11 张身份表 |
+| 银行账单汇总对账 | 只读 IMAP 读取浦发/中信账单汇总，授权码 AES-GCM 密文入库；`card_statements` / `card_statement_sources` 按账期与来源摘要幂等落库，`GET /credit-statements` 返回银行金额、同周期账本消费与差额；只读比对，不写分录、不参与还款计划 |
+| 后端 | V2 记账 API（分类 / 账户 / 流水 / 统计 / 预算 / 项目预算）、信用卡还款计划派生、投资估值投影、账单邮箱与同步、统一错误结构；`internal/credit`、`internal/invest` 已删除 |
+| 数据层 | 两个方言各 12 个迁移文件（001–012）、单一通用迁移器、`schema_migrations` 校验和与版本连续性、`schema_meta.baseline=v2` 守卫、MySQL 可重跑 DDL、Go 常量默认分类 |
+| 运维工具 | `apps/api/cmd/tinynest-admin`：`baseline-capture` / `purge` / `verify` / `identity-export` / `identity-import`，单事务清理 54 个表名（V2 中存在 22 张），保留 11 张身份表与 2 张含密文的个人配置表 |
 | 前端 | `App.vue` 拆为壳 + `router.ts` + `views/` + `components/` + `composables/` + `services/`；Vue Router 4；照鲨鱼记账的信息架构（底部 5 槽导航、中间凸起记账键、键盘式记账面板、4 列分类网格、按天账单 + 搜索 + 日历、环形图 + 分类排行、资产与转账、预算），配色仍是唯一的 A · 奶油团子；资产页新增投资面板，图表页新增投资收益视图 |
 | 文档 | 本文件与 `docs/plans/` 下五份 V2 计划/手册，以及 `docs/api-v2.md`、`docs/er-v2.md`、`docs/accounting-rules-v2.md` |
 
 ## 3. 度量（可在代码中逐项复核）
 
+> 本节在 2026-11-25 于候选 `91b47c9` + 本轮工作树重新逐项清点；此前的 2026-11-22 数字已被账单邮箱、绑卡、同步与银行汇总四项能力取代。
+
 | 维度 | 实测值 | 复核位置 |
 | --- | --- | --- |
-| HTTP 业务路由 | **55** 条（`Register` 内按「方法 + 路径」计；另有 `/api/v1/healthz`、`/api/v1/readyz` 2 条在 `internal/server`，不计入 55）；本次不新增路由，还款计划/投资快照分别为 `GET /accounts?include=credit_debt`、`?include=investments` 投影 | `apps/api/internal/api/setup.go`；`TestRouteBudget` 断言 `≤ 55` |
-| 数据库表 | **27** 张业务表 + 迁移账本 `schema_migrations`，运行时 **28** 张；SQLite 与 MySQL 表集一致 | `internal/db/migrations/001_core.sql`（21）+ `002_bookkeeping.sql`（4）+ `005_investments.sql`（2）；`003` / `004` 只增列/样式 |
-| 前端应用壳 | `App.vue` **98 行**（非空行 88；脚本与模板之外只剩样式） | `apps/web/src/App.vue` |
-| 前端结构 | 7 个视图、33 个 `.vue` 组件 + 2 个组件辅助 TS、6 个 composable、5 个 service；非样式单文件最大 **244 行**（`BillsView.vue`），`styles.css` 682 行作为全局 token 单独豁免 | `apps/web/src/` |
-| 前端源码规模 | 58 个 `.vue`/`.ts`/`.css` 文件、6,049 行 | `apps/web/src/` |
-| 后端 Go 代码 | 37 个非测试文件、8,044 行（目标 ≤7,000 行，**未达标**，如实记录） | `apps/api/`，排除 `_test.go` |
-| Go 测试 | **118** 个 `Test` 函数、**27** 个 `*_test.go` 文件（含投资投影、已有账号绑定与迁移表测试；2 个需真实 MySQL 的 drill 无 MySQL 时 skip；另有 2 个 Windows TCP 拨号 shim） | `apps/api/**/*_test.go` |
-| Playwright E2E | **82** 条用例（`financial-closure` 61 + `public-landing` 21），覆盖 390×844 与 1440×900；本轮 82/82 通过 | `apps/web/e2e/` |
-| MySQL 方言回归（本机隔离实例） | 既有 **24 条 API 测试 + 2 条 dbadmin drill + dump/restore 对账**通过；新增投资投影用例 1 条在 MySQL 定向通过（MySQL 8.0.46，TCP 127.0.0.1:3307，临时数据目录；生产 Unix socket 未验证） | `TINYNEST_TEST_MYSQL_TCP` + `mysql_windows_test.go`；`scripts/mysql-ci-drill.sh` 对应本机 TCP 版本 |
-| 迁移 | SQLite 与 MySQL 各 **5** 个版本文件（001–005），不再有 V1 的 21 / 14 个版本 | `internal/db/migrate.go` 的 `//go:embed` |
-| 生产清理白名单 | **45** 张表（42 张 v1 业务表 + `household_members` / `household_user_members` / `household_invites` 3 张），保留 11 张身份表 | `internal/dbadmin/tables.go` |
+| HTTP 业务路由 | **72** 条（`Register` 内按「方法 + 路径」计，含账单邮箱 5 + 绑卡 2 + 预览/同步 2 + 账单列表 1 共 10 条；另有 `/api/v1/healthz`、`/api/v1/readyz` 2 条在 `internal/server`，不计入 72）；还款计划/投资快照仍为 `GET /accounts?include=credit_debt`、`?include=investments` 投影而非新路由 | `apps/api/internal/api/setup.go`、`credit_statements.go`；`TestRouteBudget` 断言 `≤ 72` |
+| 数据库表 | 空库迁移后 **37** 张（含 `schema_meta`），加迁移账本 `schema_migrations` MySQL 运行时 **38** 张，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **39** 张；两方言业务表集一致 | `internal/db/migrations/`（001 计 21、002 计 4、005 计 2、006 计 1、007 计 2、008 计 1、009–012 计 6）；明细见 `docs/er-v2.md` §1 |
+| 迁移 | SQLite 与 MySQL 各 **12** 个版本文件（001–012），不再有 V1 的 21 / 14 个版本；011 复制 009/010 数据但保留旧表 | `internal/db/migrations/`、`internal/db/mysql/`；`internal/db/migrate.go` 的 `//go:embed` |
+| 前端应用壳 | `App.vue` **117 行**（非空行 107；脚本与模板之外只剩样式） | `apps/web/src/App.vue` |
+| 前端结构 | 9 个视图、36 个 `.vue` 组件 + 3 个组件辅助 TS、6 个 composable、6 个 service；非样式单文件最大 **485 行**（`services/api.ts`），其后 `MembersEditor.vue` 402、`ChartsView.vue` 343、`StatementMailboxSettings.vue` 323；`styles.css` 782 行作为全局 token 单独豁免 | `apps/web/src/` |
+| 前端源码规模 | 65 个 `.vue`/`.ts`/`.css` 文件、8,481 行 | `apps/web/src/` |
+| 后端 Go 代码 | 50 个非测试文件、11,408 行（目标 ≤7,000 行，**未达标**，如实记录） | `apps/api/`，排除 `_test.go` |
+| Go 测试 | **148** 个 `Test` 函数、**35** 个 `*_test.go` 文件（含投资投影、账号绑定、迁移表、账单同步/绑定/邮箱与清理归类测试；2 条需真实 MySQL 的 drill 无 MySQL 时 skip；另有 2 个 Windows TCP 拨号 shim） | `apps/api/**/*_test.go`，以 `^func Test` 清点 |
+| Playwright E2E | **96** 条用例（`financial-closure` + `public-landing`，2 个 spec 文件），覆盖 390×844 与 1440×900；本轮 96/96 通过 | `apps/web/e2e/`，`npx playwright test --list` |
+| MySQL 方言回归（本机隔离实例） | 既有 API 测试 + 2 条 dbadmin drill + dump/restore 对账通过；账单相关 11 条（迁移幂等、012 DDL 重跑、8 条同步、绑定/邮箱/预览各 1 条）在隔离实例逐库单跑全绿（MySQL Community 8.4.7，TCP `127.0.0.1:3307`，临时数据目录；生产 Unix socket 未验证） | `TINYNEST_TEST_MYSQL_TCP` + `mysql_windows_test.go`；证据见 `docs/plans/credit-card-statement-import/实施进度.md` |
+| 生产清理清单 | **54** 个表名，其中当前 V2 schema 中存在 **22** 张（其余 32 个为 `projects`、`credit_*`、`installment_*`、`debt_*`、`stock_*`、`schedule_*`、`statement_import_*`、`credit_mail*` 等 V1 遗留名，按 `Missing` 跳过）；保留 **11** 张身份表 + **2** 张含加密授权码的个人配置表 `statement_mailbox_configs` / `credit_statement_mailboxes` | `internal/dbadmin/tables.go`（`PurgeGroups` / `IdentityTables` / `PreservedConfigTables` / `DeleteOrder`） |
 
-口径说明：以上为 2026-11-22 当前工作树的静态清点结果。本轮已执行 `go test ./...`、`npm.cmd run typecheck`、`npm.cmd run build`、Playwright **82/82**，并在本机隔离 MySQL 8.0.46（TCP 3307）上执行既有 24 条 API 测试、2 条 dbadmin drill、dump/restore 对账与新增投资投影定向用例；生产 Unix socket、race 与生产投资导入仍未执行，见 §6。
-`App.vue` 的 98 行 = 非空行 88 + 空行 10；Go 测试数量以 `^func Test` 清点，本轮新增信用卡周期/还款计划/账户配置/迁移/投资估值用例。
+口径说明：以上为 2026-11-25 当前工作树的静态清点结果。本轮已执行 `go test ./... -count=1`、`go vet ./...`、`go mod tidy`、`go build ./...`、`npm.cmd run typecheck`、`npm.cmd run build`、Playwright **96/96**，并在本机隔离 MySQL 8.4.7（TCP 3307）上重跑 `TestMySQLPurgeDrill` 与 `TestMySQLIdentityCutoverDrill`；生产 Unix socket、race 与生产投资导入仍未执行，见 §6。
+`App.vue` 的 117 行 = 非空行 107 + 空行 10；Go 测试数量以 `^func Test` 清点，含本轮新增的账单表清理归类测试。
 
 ## 4. 已退役
 
