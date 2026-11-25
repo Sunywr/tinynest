@@ -1,0 +1,71 @@
+#!/bin/sh
+# TinyNest 生产 MySQL 一致性备份（B 机，systemd timer/service 调用）。
+#
+# 为什么需要这份脚本里的每一道断言：2026-11-25 核对发现定时备份连续三天导出的是
+# 已退役的 V1 库。库名写死在运维脚本里、与运行时库不是同一个时，mysqldump 仍然
+# 退出 0、systemd 记 SUCCESS，只表现为转储体积小一个数量级，没有任何地方报错。
+# 所以这里既取运行时库名，也断言转储里必须出现 V2 基线行。
+#
+# 安装：复制到 B 机运维目录（如 <ops 目录>/backup-mysql.sh），chmod 0750，
+# 由备份 service 的 EnvironmentFile 注入下面三个变量，凭据走 CREDENTIALS_DIRECTORY。
+# 口令不出现在命令行、日志或本文件中。
+#
+# 保留期与异地副本是运维策略，不在本脚本里删除历史文件（见 docs/deployment.md §6）。
+set -eu
+umask 077
+
+: "${TINYNEST_MYSQL_DATABASE:?必须与服务运行时 TINYNEST_MYSQL_DATABASE 完全一致}"
+: "${TINYNEST_MYSQL_USER:?运行账号，只需 DML 权限}"
+: "${TINYNEST_MYSQL_SOCKET:?MySQL Unix socket 路径}"
+: "${BACKUP_DIR:?备份输出目录，需与数据目录分开}"
+: "${SERVICE_NAME:=tinynest-api}"
+
+# 口令只从受保护文件读取：优先 systemd Credentials=，其次显式文件路径。
+if [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -f "$CREDENTIALS_DIRECTORY/mysql-password" ]; then
+	MYSQL_PWD="$(cat "$CREDENTIALS_DIRECTORY/mysql-password")"
+else
+	: "${TINYNEST_MYSQL_PASSWORD_FILE:?未提供 CREDENTIALS_DIRECTORY 时必须给出口令文件}"
+	MYSQL_PWD="$(cat "$TINYNEST_MYSQL_PASSWORD_FILE")"
+fi
+export MYSQL_PWD
+
+# 库名必须等于运行时库。systemctl 可用时直接读服务环境比对，避免两份配置各说各话。
+if command -v systemctl >/dev/null 2>&1; then
+	runtime_db=$(systemctl show -p Environment --value "$SERVICE_NAME" 2>/dev/null \
+		| tr ' ' '\n' | sed -n 's/^TINYNEST_MYSQL_DATABASE=//p' | head -n 1)
+	if [ -n "$runtime_db" ] && [ "$runtime_db" != "$TINYNEST_MYSQL_DATABASE" ]; then
+		echo "备份中止：TINYNEST_MYSQL_DATABASE=$TINYNEST_MYSQL_DATABASE 但 $SERVICE_NAME 运行时用 $runtime_db" >&2
+		exit 1
+	fi
+fi
+
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+temp=$(mktemp "$BACKUP_DIR/.dump-XXXXXX")
+trap 'rm -f "$temp"' EXIT INT TERM
+
+# tinynest_app 没有 LOCK TABLES 权限（error 1044），--single-transaction 是必需的。
+mysqldump --protocol=SOCKET --socket="$TINYNEST_MYSQL_SOCKET" \
+	--user="$TINYNEST_MYSQL_USER" \
+	--default-character-set=utf8mb4 \
+	--single-transaction \
+	--no-tablespaces \
+	--set-gtid-purged=OFF \
+	--skip-add-drop-table \
+	"$TINYNEST_MYSQL_DATABASE" > "$temp"
+
+test -s "$temp"
+# V1 库没有 schema_meta 基线行，空库也不会写这一行：指向错库时这里必须炸。
+grep -q "INSERT INTO \`schema_meta\` VALUES ('baseline','v2');" "$temp"
+
+out="$BACKUP_DIR/$TINYNEST_MYSQL_DATABASE-$stamp.sql"
+mv "$temp" "$out"
+chmod 600 "$out"
+(
+	cd "$BACKUP_DIR"
+	sha256sum "$(basename "$out")" > "$(basename "$out").sha256"
+	chmod 600 "$(basename "$out").sha256"
+	sha256sum -c "$(basename "$out").sha256" >/dev/null
+)
+echo "backup=$out sha256=$(sed 's/ .*//' "$out.sha256")"

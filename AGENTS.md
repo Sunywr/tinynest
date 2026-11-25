@@ -88,6 +88,8 @@
 - 任何新迁移加的表必须显式归类，否则 `Snapshot.Unclassified` 会在清点后列出它并让 `verify` 失败——「业务表全空」这句断言只覆盖已分类的表，正是这个守卫在防止漏清。
 - 身份表白名单（11 张）不得进入删除清单：`households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`。
 - `-confirm` 必须与数据库名完全一致（SQLite 为数据库文件路径）；`-execute` 必须同时提供 `-yes-service-stopped`；MySQL 口令只能从受保护文件读取，不得出现在命令行。
+- `-household=<id>` **不缩小删除范围**：`purge` 的每条 `DELETE FROM <表>` 都不带家庭条件，该开关只在检测到多家庭时确认继续并选择 `-reseed-categories` 的目标。库里有多个家庭时执行会清空全部家庭的业务行；2026-11-25 只读核对生产 `tinynest_v2` 有 **3 个家庭**，与「单家庭」设计前提不符，执行前必须由用户逐条授权并记入证据。
+- 日常备份的库名必须等于服务运行时的 `TINYNEST_MYSQL_DATABASE`，并断言转储含 `schema_meta` 的 baseline 行；模板见 `deploy/backend/backup-mysql.sh.example`。库名写死成旧库时 `mysqldump` 仍退出 0，只表现为转储小一个数量级。
 - 执行前必须完成备份、SHA-256 校验、隔离恢复比对与 `baseline-capture`；执行后必须 `verify`，并把执行人、时间、前后计数写入证据文件；旧库与备份保留 ≥30 天。
 - 具体命令、判据与回滚以 [生产清理手册](docs/plans/v2-prod-purge-runbook.md) 与 [新库切换手册](docs/plans/v2-cutover-runbook.md) 为准，本文不复述。
 

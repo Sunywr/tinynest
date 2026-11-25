@@ -42,7 +42,8 @@ const usage = `tinynest-admin - TinyNest 运维命令（危险操作需显式确
   seed-categories    [-household=<id>]                 重播默认分类并补齐图标与颜色
 
 purge 额外开关:
-  -household=<id>        多家庭库时指定清理范围
+  -household=<id>        多家庭库必须显式给出以确认执行；注意删除不按家庭过滤，
+                         所有家庭的业务行都会被清空（该 ID 只决定重播种哪个家庭）
   -keep-audit            保留 audit_logs 与 schedule_runs
   -reseed-categories     清理后重新播种默认分类（默认关闭）
   -allow-unbalanced      分录已不平衡时仍继续（默认拒绝）
@@ -151,7 +152,7 @@ func runPurge(args []string) error {
 	execute := fs.Bool("execute", false, "实际执行删除")
 	confirm := fs.String("confirm", "", "必须与数据库名完全一致")
 	serviceStopped := fs.Bool("yes-service-stopped", false, "确认 API 服务已停止")
-	household := fs.String("household", "", "多家庭库时指定家庭 ID")
+	household := fs.String("household", "", "多家庭库必须显式给出以确认执行；删除不按家庭过滤，该 ID 只决定重播种哪个家庭")
 	keepAudit := fs.Bool("keep-audit", false, "保留 audit_logs 与 schedule_runs")
 	reseed := fs.Bool("reseed-categories", false, "清理后重新播种默认分类（会削弱「全部业务表为空」的校验，仅在你需要继续使用旧界面时开启）")
 	allowUnbalanced := fs.Bool("allow-unbalanced", false, "分录不平衡时仍继续")

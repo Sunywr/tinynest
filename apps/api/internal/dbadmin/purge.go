@@ -110,9 +110,10 @@ type Snapshot struct {
 
 // PurgeOptions controls a purge run.
 type PurgeOptions struct {
-	// HouseholdID scopes the run when more than one household exists. The
-	// production invariant is exactly one household; a multi-household database
-	// must name the one it means.
+	// HouseholdID acknowledges a database that holds more than one household and
+	// selects which surviving household gets reseeded categories. It does NOT
+	// filter the deletions: every DELETE in this run is unconditional, so a
+	// multi-household database loses every household's business rows.
 	HouseholdID string
 	// DryRun reports what would be deleted without changing anything.
 	DryRun bool
@@ -158,8 +159,12 @@ func (a *Admin) Purge(ctx context.Context, opts PurgeOptions) (PurgeResult, erro
 		result.Deleted = append(result.Deleted, TableCount{Table: table, Group: GroupOf(table), Rows: count.Rows, Missing: count.Missing})
 	}
 
-	if households := before.Households; households != 1 && opts.HouseholdID == "" {
-		return result, fmt.Errorf("dbadmin: refusing to purge %d households; the production invariant is 1. Pass --household=<id> to select one", households)
+	if households := before.Households; households != 1 {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("检测到 %d 个家庭：purge 的 DELETE 不按家庭过滤，-household 只用于确认多家庭和选择重播种目标，执行会清空这 %d 个家庭的全部业务行", households, households))
+		if opts.HouseholdID == "" {
+			return result, fmt.Errorf("dbadmin: refusing to purge %d households; the production invariant is 1 household. Pass --household=<id> only to acknowledge this: the deletes are not household-scoped, so every one of the %d households would be emptied", households, households)
+		}
 	}
 	if opts.HouseholdID != "" {
 		exists, err := a.householdExists(ctx, opts.HouseholdID)

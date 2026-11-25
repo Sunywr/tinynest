@@ -110,7 +110,8 @@ SQL
 ## 6. 备份、清理与切换
 
 - 日常备份：SQLite 使用在线一致性备份（含 WAL 中已提交数据），不要直接复制运行中的数据库文件；MySQL 使用一致性导出。备份加密并保留至少一份异地离线副本，恢复密钥独立保管。
-- 备份脚本的库名必须与运行时库（当前 `tinynest_v2`，取自服务的 `TINYNEST_MYSQL_DATABASE`）一致，并断言转储里含 `schema_meta` 的 baseline 行、每次写 `.sha256` sidecar。库名写死成旧库时，`mysqldump` 仍会成功退出、任务记 `SUCCESS`，只表现为转储体积小一个数量级——2026-11-25 核对到定时备份就这样连续三天导出空的 V1 库而不报错。
+- 备份脚本的库名必须与运行时库（当前 `tinynest_v2`，取自服务的 `TINYNEST_MYSQL_DATABASE`）一致，并断言转储里含 `schema_meta` 的 baseline 行、每次写 `.sha256` sidecar。库名写死成旧库时，`mysqldump` 仍会成功退出、任务记 `SUCCESS`，只表现为转储体积小一个数量级——2026-11-25 核对到定时备份就这样连续三天导出空的 V1 库而不报错。修好的脚本已随仓库发布为 [deploy/backend/backup-mysql.sh.example](../deploy/backend/backup-mysql.sh.example)：库名、账号与 socket 全部来自环境变量，`systemctl` 可用时还会比对服务运行时的 `TINYNEST_MYSQL_DATABASE`，不一致就中止，避免服务器上的运维文件再次与代码库悄悄分叉。
+- 备份不等于可恢复：转储必须按 §5 在隔离实例恢复并逐项比对（含 `users` 摘要与借贷具体数字，不只是「借贷平衡」），并保留第二份异地副本。2026-11-25 的转储尚未做这两步，记为 `UNVERIFIED`。
 - 生产清理（清空业务数据、保留 11 张身份表）：先备份 → 隔离恢复比对 → `tinynest-admin baseline-capture` → `purge --dry-run` 人工核对 → 停服后 `purge --execute --confirm=<DBNAME> --yes-service-stopped` → `verify` → 启动服务冒烟。完整判据、边缘情况与回滚见 [生产清理手册](plans/v2-prod-purge-runbook.md)。
 - 新库切换（迁移 11 张身份表到 V2 新库）：旧库备份 → 新库建基线 → 停旧服务 → `identity-export` → `identity-import` → 计数与 `users` 摘要比对 → 切换 `TINYNEST_MYSQL_DATABASE` 与账号 → `readyz` 与冒烟 → 旧库保留 ≥30 天。见 [新库切换手册](plans/v2-cutover-runbook.md)。
 - `tinynest-admin` 只能以服务账号在服务器本地执行；**绝不能通过 HTTP 暴露，也不能被挂在 Nginx location 下**。MySQL 口令只从受保护文件读取，不出现在命令行与日志。

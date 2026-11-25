@@ -286,10 +286,54 @@ func TestPurgeRefusesMultipleHouseholds(t *testing.T) {
 	}
 	result, err := admin.Purge(ctx, PurgeOptions{HouseholdID: "hh1"})
 	if err != nil {
-		t.Fatalf("scoped purge: %v", err)
+		t.Fatalf("acknowledged purge: %v", err)
 	}
 	if !result.Committed {
-		t.Fatal("scoped purge did not commit")
+		t.Fatal("acknowledged purge did not commit")
+	}
+}
+
+// TestPurgeHouseholdFlagDoesNotScopeDeletes pins what -household really does: it
+// acknowledges a multi-household database and selects the reseed target, it does
+// not filter the deletes. An operator pointing this at one of several production
+// households must be told every household loses its rows.
+func TestPurgeHouseholdFlagDoesNotScopeDeletes(t *testing.T) {
+	admin := newTestAdmin(t)
+	ctx := context.Background()
+	seedAll(t, admin)
+	mustExec(t, admin, `INSERT INTO households (id, name) VALUES (?, ?)`, "hh2", "另一个家")
+	mustExec(t, admin, `INSERT INTO accounts (id, household_id, kind, name, ledger_code) VALUES (?,?,?,?,?)`,
+		"acct2", "hh2", "cash", "另一个家的钱包", "1010:acct2")
+
+	_, err := admin.Purge(ctx, PurgeOptions{})
+	if err == nil || !strings.Contains(err.Error(), "not household-scoped") {
+		t.Fatalf("expected the refusal to state the deletes are not household-scoped, got %v", err)
+	}
+
+	dry, err := admin.Purge(ctx, PurgeOptions{HouseholdID: "hh1", DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	if !strings.Contains(strings.Join(dry.Warnings, " "), "按家庭过滤") {
+		t.Fatalf("expected a multi-household warning in the dry-run, got %v", dry.Warnings)
+	}
+	var beforeOther int64
+	if err := admin.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE household_id='hh2'`).Scan(&beforeOther); err != nil {
+		t.Fatalf("count hh2 accounts: %v", err)
+	}
+	if beforeOther != 1 {
+		t.Fatalf("dry-run changed rows: %d", beforeOther)
+	}
+
+	if _, err := admin.Purge(ctx, PurgeOptions{HouseholdID: "hh1"}); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	var afterOther int64
+	if err := admin.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE household_id='hh2'`).Scan(&afterOther); err != nil {
+		t.Fatalf("count hh2 accounts after purge: %v", err)
+	}
+	if afterOther != 0 {
+		t.Fatalf("expected every household purged, hh2 still has %d accounts", afterOther)
 	}
 }
 
