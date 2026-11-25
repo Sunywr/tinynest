@@ -160,6 +160,8 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json -json
 
 备份对象必须是**服务运行时正在用的那个库**，不是历史库名。2026-11-25 核对到生产定时备份连续三天导出已退役的 V1 库而不报错，原因就是把库名写死在运维脚本里。因此优先直接使用随仓库发布的 [deploy/backend/backup-mysql.sh.example](../../deploy/backend/backup-mysql.sh.example)（它会比对服务的 `TINYNEST_MYSQL_DATABASE`、断言转储里含 `schema_meta` 的 baseline 行、写 `.sha256` sidecar 并自检）。
 
+**2026-11-25 起生产已在跑这份模板**：B 机运维脚本已替换为该文件（`sh -n` 通过，`0750 root:root`，原脚本留有 `.bak`），备份 service 的 drop-in 补上了 `BACKUP_DIR` 与三个 `TINYNEST_MYSQL_*` 变量，并把手柄描述从「SQLite backup」改为 MySQL；`Description=` 必须写在 `[Unit]` 段，写在 `[Service]` 段会被 systemd 静默忽略。替换后现场 `systemctl start` 三次均 `Result=success`、`ExecMainStatus=0`，产出 12,859,119 字节的 `tinynest_v2-*.sql` + sidecar，`sha256sum -c` 为 OK。库名不一致的负例也在现场验证过：脚本在 `mysqldump` 之前退出 1 且不写出任何转储。下面这段手工命令只作为模板不可用时的兜底口径保留。
+
 ```bash
 # 口令由受限凭据文件提供，不出现在命令行
 mysqldump \
@@ -263,7 +265,8 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json
 ### 步骤 8：启动 API 并检查就绪
 
 - 启动 API 服务。
-- `GET /readyz` 返回 200；`GET /healthz` 返回 200。
+- `GET /api/v1/readyz` 返回 200；`GET /api/v1/healthz` 返回 200。两条健康路由注册在 `/api/v1` 前缀下（`internal/server/server.go`），2026-11-25 在生产实测裸 `/readyz` 与 `/healthz` 均为 **404**，把它们当作就绪信号会误判。
+- 只启动 API 还不够：B 机的 loopback 反代是 `Requires=<API 单元>` 的独立单元，必须一并启动，再用 A 机 HTTPS 侧复核 `/api/v1/readyz`。
 - 检查启动日志无迁移错误、无解密错误。
 
 ### 步骤 9：管理员登录与家庭成员冒烟
@@ -326,7 +329,7 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json
 | verify | 完整输出、`-json-out` 落盘的 JSON、退出码 |
 | 前后计数 | 11 张身份表 + 2 张保留配置表清理前后 `COUNT(*)` 对照，`users` 摘要（`users_digest`）前后一致 |
 | 家庭数 | 清理前后 `households` 计数与本次确认的删除范围（S9：全部家庭） |
-| 冒烟 | `/readyz`、登录、`/auth/me`、成员切换结果 |
+| 冒烟 | `/api/v1/readyz`、登录、`/api/v1/auth/me`、成员切换结果 |
 | 回滚点 | 旧库与备份位置、保留到期时间 |
 | 结论 | 通过 / 失败、遗留问题与 UNVERIFIED 项 |
 
@@ -337,7 +340,7 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json
 - [ ] `purge -dry-run` 人工核对通过，身份表与保留配置表不在清单中，多家庭警告已被确认。
 - [ ] `purge -execute` 退出码为 0。
 - [ ] `verify` 退出码为 0，身份计数与迁移版本前后一致。
-- [ ] `GET /readyz` 返回 200。
+- [ ] `GET /api/v1/readyz` 返回 200（裸 `/readyz` 返回 404，不算通过）。
 - [ ] 管理员登录、`/auth/me` 与 `POST /household/members/current` 通过。
 - [ ] 备份与旧库保留 ≥30 天并登记。
 - [ ] 证据文件完整。
@@ -346,7 +349,8 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json
 
 - 表名与分组口径已在 2026-11-25 用只读方式核对：代码 `PurgeGroups`/`DeleteOrder` 共 54 个表名，与 V2 基线 37 张表求交得 22 张存在、32 个 V1 遗留名，生产 `tinynest_v2` 的两次只读 dry-run 输出与此逐值一致（见[发布证据](../reviews/v2-statement-ui-deployment-evidence.md)）。**手册正文仍未在生产现场逐条执行**。
 - 生产 `purge -execute`、`verify`、`baseline-capture` 的实际输出与耗时 UNVERIFIED（属破坏性操作，未获授权执行）。
-- 步骤 2 的备份已在 2026-11-25 修复并产出真实转储（导出运行时库 + 基线行断言 + SHA-256 sidecar），但步骤 3 的**隔离恢复逐项比对** UNVERIFIED；转储尚无第二份异地副本。
+- 步骤 2 的备份已在 2026-11-25 修复并产出真实转储（导出运行时库 + 基线行断言 + SHA-256 sidecar）。**步骤 3 的隔离恢复逐项比对已在 2026-11-25 生产执行通过**：把 `tinynest_v2-20261125T085500Z.sql`（12,859,119 字节，`sha256sum -c` OK）导入同实例上明确命名的隔离库，导入耗时 10.661s，隔离库 38 张表、`baseline=v2`、迁移 `[1..12]`，用 `tinynest-admin baseline-capture` 与生产基线逐字段比对得 **0 项差异**（身份 51 行、保留配置 3 行、业务 95,176 行、`journal_entries` 12,391 / `journal_lines` 24,782 / 借=贷=1,311,336,623、`users_digest` 相同、迁移版本与家庭数相同），核对后已 `DROP` 隔离库。同一份模板随后作为生产运维脚本接管定时备份，并实测到「库名与运行时不一致即中止、不写出转储」这条守卫（退出码 1）。仍 UNVERIFIED 的是：转储尚无第二份**异地**副本。
+- `purge` 的三道负面守卫在生产只读实测均为退出码 1：`-confirm` 与运行时库名不符（`-confirm 必须与数据库名完全一致（"tinynest_v2"），收到 "tinynest"`）、`-execute` 缺 `-yes-service-stopped`、多家庭库未加 `-household`（新文案明确 `the deletes are not household-scoped`）。三次运行前后 `transactions` 12,330 / `journal_entries` 12,391 / `journal_lines` 24,782 逐值未变。
 - 密钥备份文件的实际保管方式与责任 UNVERIFIED，需用户确认。
 - 旧库与备份保留 ≥30 天的执行情况 UNVERIFIED。
 - 生产库现有 3 个家庭（2026-11-25 只读核对），与本工具「单家庭」设计前提不符：`-household` 只确认不缩范围，见 S9。是否只清其中一个家庭需用户决定，UNVERIFIED。

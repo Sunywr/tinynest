@@ -111,8 +111,8 @@ SQL
 
 - 日常备份：SQLite 使用在线一致性备份（含 WAL 中已提交数据），不要直接复制运行中的数据库文件；MySQL 使用一致性导出。备份加密并保留至少一份异地离线副本，恢复密钥独立保管。
 - 备份脚本的库名必须与运行时库（当前 `tinynest_v2`，取自服务的 `TINYNEST_MYSQL_DATABASE`）一致，并断言转储里含 `schema_meta` 的 baseline 行、每次写 `.sha256` sidecar。库名写死成旧库时，`mysqldump` 仍会成功退出、任务记 `SUCCESS`，只表现为转储体积小一个数量级——2026-11-25 核对到定时备份就这样连续三天导出空的 V1 库而不报错。修好的脚本已随仓库发布为 [deploy/backend/backup-mysql.sh.example](../deploy/backend/backup-mysql.sh.example)：库名、账号与 socket 全部来自环境变量，`systemctl` 可用时还会比对服务运行时的 `TINYNEST_MYSQL_DATABASE`，不一致就中止，避免服务器上的运维文件再次与代码库悄悄分叉。
-- 备份不等于可恢复：转储必须按 §5 在隔离实例恢复并逐项比对（含 `users` 摘要与借贷具体数字，不只是「借贷平衡」），并保留第二份异地副本。2026-11-25 的转储尚未做这两步，记为 `UNVERIFIED`。
-- 生产清理（清空业务数据、保留 11 张身份表）：先备份 → 隔离恢复比对 → `tinynest-admin baseline-capture` → `purge --dry-run` 人工核对 → 停服后 `purge --execute --confirm=<DBNAME> --yes-service-stopped` → `verify` → 启动服务冒烟。完整判据、边缘情况与回滚见 [生产清理手册](plans/v2-prod-purge-runbook.md)。
+- 备份不等于可恢复：转储必须按 §5 在隔离实例恢复并逐项比对（含 `users` 摘要与借贷具体数字，不只是「借贷平衡」），并保留第二份异地副本。**2026-11-25 已按这条做完一次演练**：`tinynest_v2-20261125T085500Z.sql` 在 B 机同实例的隔离库里恢复，`sha256sum -c` 通过、导入 10.661s、38 张表、`baseline=v2`、迁移 `[1..12]`，与清理前基线比对 0 项差异（身份 51 行、保留配置 3 行、待清理业务 95,176 行、`journal_entries` 12,391／`journal_lines` 24,782／借=贷=1,311,336,623、`users_digest` 相同），核对后删除隔离库。**只差第二份异地副本**，该项仍 `UNVERIFIED`。
+- 生产清理（清空业务数据、保留 11 张身份表）：先备份 → 隔离恢复比对 → `tinynest-admin baseline-capture` → `purge -dry-run` 人工核对 → 停服后 `purge -execute -confirm=<DBNAME> -yes-service-stopped` → `verify` → 启动服务冒烟。命令用的是 Go `flag` 的单连字符写法，与 `tinynest-admin -h` 输出一致。注意 `-household=<id>` **不缩小删除范围**：所有 `DELETE` 都不带家庭条件，库里现有 3 个家庭时会全部清空（见清理手册 S9）。完整判据、边缘情况与回滚见 [生产清理手册](plans/v2-prod-purge-runbook.md)。
 - 新库切换（迁移 11 张身份表到 V2 新库）：旧库备份 → 新库建基线 → 停旧服务 → `identity-export` → `identity-import` → 计数与 `users` 摘要比对 → 切换 `TINYNEST_MYSQL_DATABASE` 与账号 → `readyz` 与冒烟 → 旧库保留 ≥30 天。见 [新库切换手册](plans/v2-cutover-runbook.md)。
 - `tinynest-admin` 只能以服务账号在服务器本地执行；**绝不能通过 HTTP 暴露，也不能被挂在 Nginx location 下**。MySQL 口令只从受保护文件读取，不出现在命令行与日志。
 
@@ -142,4 +142,4 @@ SQL
 - 本文命令未在本次文档编写环境逐条执行；双服务器的转发与证书链已在 2026-11-25 的发布中实测（公网 `healthz`/`readyz` 经 A→B 加密转发返回 200），iPhone 实机安装仍未验证。
 - 生产 MySQL 运行时链路：2026-11-25 公网 `/api/v1/readyz` 实测 `check=mysql_ping_and_migrations`、`status=ready`，B 机 Unix socket + 受限账号在运行时已证实；仍未执行的是在 B 机现场跑 `go test ./...`（本机发布产物用 Go 1.25.2 交叉编译，CI 固定在 1.23.6）。
 - 生产清理与新库切换未执行；2026-11-25 只在 `tinynest_v2` 上跑过只读的 `purge -dry-run` 取证。实际表数、耗时与断言输出以生产执行结果为准，且[生产清理手册](plans/v2-prod-purge-runbook.md)的表数口径尚未修订到当前 schema。
-- 生产备份：定时任务的导出库名已于 2026-11-25 由 V1 旧库修正为运行时库 `tinynest_v2`，并加了 baseline 行断言与 SHA-256 sidecar；但新转储**未按 §5 做隔离恢复逐项比对**，B 机之外也没有第二份副本可供异地校验。
+- 生产备份：定时任务的导出库名已于 2026-11-25 由 V1 旧库修正为运行时库 `tinynest_v2`，并加了 baseline 行断言与 SHA-256 sidecar；同日运维脚本已替换为仓库里的 `deploy/backend/backup-mysql.sh.example`（模板会读取 `tinynest-api` 服务环境比对库名，不一致就在 `mysqldump` 之前退出 1，现场负例实测零转储），新转储也已按 §5 在隔离库恢复并逐项比对通过。**仍缺的是第二份异地副本**，B 机之外没有可比校验和的拷贝，该项 `UNVERIFIED`。

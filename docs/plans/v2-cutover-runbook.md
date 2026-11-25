@@ -138,7 +138,7 @@ tinynest-admin --driver mysql identity-import --in=<导出目录>/identity-<时�
 
 ```bash
 # 就绪检查
-curl -sS -o /dev/null -w '%{http_code}\n' <站点地址>/readyz          # 期望 200
+curl -sS -o /dev/null -w '%{http_code}\n' <站点地址>/api/v1/readyz    # 期望 200（裸 /readyz 是 404）
 
 # 登录：请求体放 600 权限文件，避免口令进入命令行历史
 curl -sS -c <临时 Cookie 文件> -H 'Content-Type: application/json' \
@@ -162,7 +162,7 @@ curl -sS -b <临时 Cookie 文件> '<站点地址>/api/v1/stats/summary?month=<Y
 
 | 冒烟项 | 期望结果 |
 | --- | --- |
-| `GET /readyz` | 200 |
+| `GET /api/v1/readyz` | 200 |
 | 登录 `POST /auth/session` | 200，Set-Cookie 正常 |
 | `GET /auth/me` | 返回导入的用户与家庭 |
 | `POST /household/members/current` | 200，当前成员切换成功 |
@@ -248,7 +248,7 @@ SELECT COUNT(*) AS versions FROM schema_migrations;        -- 由新二进制重
 1. 停止 V2 服务。
 2. 部署配置改回旧库：`TINYNEST_MYSQL_DATABASE=<旧库名>`、`TINYNEST_MYSQL_USER=<旧账号>`，凭据文件恢复为旧账号口令，密钥文件保持原路径。
 3. 启动旧二进制。
-4. `GET /readyz` 返回 200；管理员登录、`/auth/me`、家庭成员与统计冒烟通过。
+4. `GET /api/v1/readyz` 返回 200；管理员登录、`/auth/me`、家庭成员与统计冒烟通过。
 5. 记录回滚原因、时间、操作人与验证结果；新库保留备查，暂不删除。
 
 回滚风险：
@@ -270,7 +270,7 @@ SELECT COUNT(*) AS versions FROM schema_migrations;        -- 由新二进制重
 - [ ] identity JSONL 已导出并校验 SHA-256。
 - [ ] identity JSONL 已导入新库，身份表计数与 `users` 摘要一致。
 - [ ] 配置已切换到 `TINYNEST_MYSQL_DATABASE` 与 `TINYNEST_MYSQL_USER`。
-- [ ] `GET /readyz` 200；登录、`/auth/me`、`/household/members/current`、记一笔、统计冒烟通过。
+- [ ] `GET /api/v1/readyz` 200；登录、`/auth/me`、`/household/members/current`、记一笔、统计冒烟通过。
 - [ ] 冒烟测试流水已冲正并记录。
 - [ ] 旧库保留 ≥30 天并登记回滚点。
 - [ ] 证据文件完整，UNVERIFIED 项已标注。

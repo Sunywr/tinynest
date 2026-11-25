@@ -22,8 +22,8 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 | 生产清理（P5） | **已执行**：删除 3,975 行业务数据、身份 29 行保留，见 [清理证据](reviews/v2-purge-evidence.md) |
 | 生产新库切换与身份导入（P5） | **已执行**：`tinynest_v2` + 身份导入（users 摘要一致），见 [切换证据](reviews/v2-cutover-evidence.md) |
 | 银行账单汇总对账 | **已完成并发布**：只读 IMAP 读取浦发/中信账单汇总，授权码 AES-GCM 密文入库；`card_statements` / `card_statement_sources` 按账期与来源摘要幂等落库，`GET /credit-statements` 返回银行金额、同周期账本消费与差额；只读比对，不写分录、不参与还款计划。生产前端已切 `v2-332a69b`（界面来自 `91b47c9`），登录后真实邮箱同步待用户验收。见 [发布证据](reviews/v2-statement-ui-deployment-evidence.md) |
-| 清理工具归类修复（2026-11-25） | **已完成并在生产取证**：账单/绑卡/投资快照进清理清单，两张含密文邮箱配置表进 `PreservedConfigTables`；B 机装 `v2-332a69b/tinynest-admin`，`purge -dry-run` 实测迁移 `[1..12]`、22 张存在 / 32 个 V1 名跳过、身份 51 行 + 保留 3 行、无未分类告警。`purge --execute` 未执行 |
-| 生产定时备份修复（2026-11-25） | **已完成**：备份脚本原写死 V1 库 `tinynest`，11-23 起每日转储仅 83,850 字节、不含生产账本；现导出 `tinynest_v2` 并强制校验 baseline 行 + 写 SHA-256 sidecar，实测新转储 12,859,119 字节、`transactions`/`journal_lines` 齐全。隔离恢复比对与异地副本仍 `UNVERIFIED` |
+| 清理工具归类修复（2026-11-25） | **已完成并在生产取证**：账单/绑卡/投资快照进清理清单，两张含密文邮箱配置表进 `PreservedConfigTables`；B 机先装 `v2-332a69b/tinynest-admin`，再用 `1a143e2` 重建的 CLI 装到 `releases/v2-1a143e2/`（SHA-256 `2e9cf99f…`，`current` 未指向它），`purge -dry-run` 实测迁移 `[1..12]`、22 张存在 / 32 个 V1 名跳过、身份 51 行 + 保留 3 行、待清理业务 95,176 行、无未分类告警。多家庭库现在会被明确拒绝并说明删除**不按家庭过滤**（生产实测 3 个家庭，退出码 1），`-confirm` 与库名不符、缺 `-yes-service-stopped` 也都实测退出 1。`purge -execute` 未执行 |
+| 生产定时备份修复（2026-11-25） | **已完成并证明可恢复**：备份脚本原写死 V1 库 `tinynest`，11-23 起每日转储仅 83,850 字节、不含生产账本；现导出 `tinynest_v2` 并强制校验 baseline 行 + 写 SHA-256 sidecar，实测新转储 12,859,119 字节、`transactions`/`journal_lines` 齐全。B 机运维脚本已在同日替换为仓库模板 [deploy/backend/backup-mysql.sh.example](../deploy/backend/backup-mysql.sh.example)（模板会比对 `tinynest-api` 运行时库名，不一致即退出 1；本身不删历史文件），备份 drop-in 补齐 `BACKUP_DIR` 与三个 `TINYNEST_MYSQL_*` 变量并把 `Description=` 移到 `[Unit]` 段。**隔离恢复逐项比对已执行通过**：导入 10.661s、隔离库 38 张表、`baseline=v2`、迁移 `[1..12]`，与生产基线 0 项差异（身份 51、保留配置 3、业务 95,176、借=贷=1,311,336,623、`users_digest` 相同），核对后删除隔离库。仍缺**第二份异地副本**，该项 `UNVERIFIED` |
 | 生产链路补证（2026-11-25） | **已验证**：公网 `/api/v1/readyz` 实测 `check=mysql_ping_and_migrations`、`status=ready`（B 机 Unix socket + 受限账号真实生效）；`/api/v1/healthz` 与 `/api/v1/accounts` 匿名 401 走通 Nginx → SSH 隧道 → B 机 TLS 的转发链路，此前的「A↔B 只有部署模板」不再成立 |
 | iPhone 实机、生产性能 | `UNVERIFIED`（公网 HTTP 冒烟、发布健康检查与 A→B 转发链路已通过） |
 
@@ -87,7 +87,7 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 - **工资导入后的完整资产**：只导入了工资收入，未导入 pfm 支出/转账；工资账户已停用，资产页净资产不包含这批仅收入余额。
 - **go test -race**：本机未找到 gcc/CGO 工具链，未执行；CI 的 Go API job 已在 `332a69b` 跑通 `-race`，结论是「CI 已执行、本机未执行」。
 - **生产清理执行**：`purge -dry-run` 已在 B 机 `tinynest_v2` 只读取证（见发布证据），`baseline-capture` / `purge --execute` / `verify` 未执行，输出与耗时未知；[清理手册](plans/v2-prod-purge-runbook.md) 正文的「45 张清理表 / 11 张身份表」尚未按 54/22 + 11 + 2 改写，照做前必须先修订。
-- **生产备份可恢复性**：定时备份已改为导出运行时库 `tinynest_v2` 并写 SHA-256 sidecar，摘要校验通过；但新转储尚未按[部署指南](deployment.md) §5 做隔离恢复逐项比对，B 机之外也没有第二份副本可校验。
+- **生产备份可恢复性**：定时备份已改为导出运行时库 `tinynest_v2` 并写 SHA-256 sidecar，摘要校验通过；2026-11-25 已在 B 机同实例的隔离库里恢复该转储并按[部署指南](deployment.md) §5 逐项比对通过（迁移版本、表数、`baseline`、11 张身份计数、2 张保留配置、`users` 摘要、账本与业务行数全部一致）。仍 `UNVERIFIED` 的是 **B 机之外的第二份异地副本**：没有第二份拷贝就无法做异地摘要校验，磁盘当前 `/dev/vda2` 40G、**96% 已用、1.7G 可用**，保留期与水位策略需用户定口径（模板刻意不删历史转储）。
 - **生产新库切换**：`identity-export` / `identity-import`、表数与 `baseline=v2` 的实际输出未在生产数据上核对。
 - **iPhone 实机**：主屏 PWA、安全区、返回手势未在真机验证。
 - **登录后冒烟（信用卡还款计划与银行汇总）**：未使用真实账号口令登录，按 [部署指南](deployment.md) §9 不向 Agent 索取口令；需用户登录后在「资产」页确认汇总并排展示、在「我的 → 账单邮箱」执行一次真实同步。
@@ -97,7 +97,7 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 ## 7. 下一步
 
 1. 用户登录生产站点做一次实机验收：资产页银行汇总并排展示与差额、「我的 → 账单邮箱」同步一条真实邮件、信用卡账单日/还款日面板；同时确认剩余两个账号（`admin` 与妈妈）的归属。
-2. 补齐备份可恢复性证据：把新转储 `tinynest_v2-*.sql` 恢复到隔离 MySQL 实例，逐项比对迁移版本、11 张身份计数、`users` 摘要与借贷合计，并建立第二份异地副本后校验摘要。
+2. 补齐备份可恢复性证据的**剩余一半**：隔离恢复逐项比对已于 2026-11-25 通过，还差**第二份异地副本**——把某个 `tinynest_v2-*.sql` 传到 B 机之外的位置，取回后比对 SHA-256，并确定保留期与磁盘水位策略（`/dev/vda2` 已用 96%，模板本身不删历史文件）。
 3. 修订[生产清理手册](plans/v2-prod-purge-runbook.md)的表数口径（54 个表名 / 22 张存在 + 11 身份 + 2 保留配置），再由用户按 `baseline-capture` → 备份 → `purge --execute` → `verify` 逐条授权执行。
 4. 处置本轮记在[发布证据](reviews/v2-statement-ui-deployment-evidence.md) §8 的凭据暴露：按其中步骤轮换 B 机 MySQL 运行账号口令，并更新受保护凭据文件。
 5. 补齐 iPhone 实机与生产性能证据后，再把对应条目标为已验证。
