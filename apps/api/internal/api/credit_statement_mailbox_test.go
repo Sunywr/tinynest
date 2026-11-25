@@ -39,6 +39,20 @@ func TestStatementMailboxReadOnlyProbe(t *testing.T) {
 	}
 }
 
+func TestStatementMailbox163IdentifiesClientBeforeExamine(t *testing.T) {
+	wire := struct {
+		*strings.Reader
+		strings.Builder
+	}{Reader: strings.NewReader("* OK ready\r\nA1 OK logged in\r\n* ID NIL\r\nA2 OK identified\r\nA3 OK [READ-ONLY] opened\r\n")}
+	if err := examineStatementInbox(&wire, "fixture@163.com", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	want := "A1 LOGIN \"fixture@163.com\" \"fixture\"\r\nA2 ID (\"name\" \"TinyNest\" \"version\" \"2\" \"vendor\" \"TinyNest\")\r\nA3 EXAMINE INBOX\r\n"
+	if wire.String() != want {
+		t.Fatalf("unexpected wire commands: %q", wire.String())
+	}
+}
+
 func TestStatementMailboxConfigurationLifecycle(t *testing.T) {
 	const path = "/api/v1/credit-statement-mailbox"
 	const address = "123456@qq.com"
@@ -92,7 +106,7 @@ func TestStatementMailboxConfigurationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cipher string
-	if err := database.QueryRow(`SELECT auth_code_cipher FROM credit_statement_mailboxes`).Scan(&cipher); err != nil || cipher == "" || strings.Contains(cipher, firstCode) {
+	if err := database.QueryRow(`SELECT auth_code_cipher FROM statement_mailbox_configs`).Scan(&cipher); err != nil || cipher == "" || strings.Contains(cipher, firstCode) {
 		t.Fatalf("expected ciphertext, query error: %v", err)
 	}
 	if _, err := client.mailAPI.mailCrypt(cipher, true); err == nil {
@@ -129,7 +143,7 @@ func TestStatementMailboxConfigurationLifecycle(t *testing.T) {
 		t.Fatal("disabled mailbox was probed")
 	}
 	var savedEmail string
-	if err := database.QueryRow(`SELECT email,auth_code_cipher FROM credit_statement_mailboxes`).Scan(&savedEmail, &cipher); err != nil || savedEmail != "" || cipher != "" {
+	if err := database.QueryRow(`SELECT email,auth_code_cipher FROM statement_mailbox_configs`).Scan(&savedEmail, &cipher); err != nil || savedEmail != "" || cipher != "" {
 		t.Fatalf("disable should clear saved credentials, query error: %v", err)
 	}
 	if _, err := database.Exec(`UPDATE users SET role='viewer' WHERE id=?`, user["user_id"]); err != nil {

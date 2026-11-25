@@ -13,11 +13,31 @@ import (
 	"time"
 )
 
-const qqIMAPHost = "imap.qq.com"
+const (
+	statementProviderQQ  = "qq"
+	statementProvider163 = "163"
+)
+
+func statementMailboxProvider(w http.ResponseWriter, r *http.Request) string {
+	provider := r.URL.Query().Get("provider")
+	switch provider {
+	case "", statementProviderQQ:
+		return statementProviderQQ
+	case statementProvider163:
+		return statementProvider163
+	default:
+		writeErr(w, 400, "invalid_request", "请选择 QQ 或 163 邮箱")
+		return ""
+	}
+}
 
 var mailboxProbeSlots = make(chan struct{}, 4)
 
 func (a *API) handleTestStatementMailbox(w http.ResponseWriter, r *http.Request) {
+	provider := statementMailboxProvider(w, r)
+	if provider == "" {
+		return
+	}
 	var input struct {
 		Email    string `json:"email"`
 		AuthCode string `json:"auth_code"`
@@ -25,7 +45,7 @@ func (a *API) handleTestStatementMailbox(w http.ResponseWriter, r *http.Request)
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2048)
 	if decode(r, &input) != nil {
-		writeErr(w, 400, "invalid_request", "请填写 QQ 邮箱和授权码")
+		writeErr(w, 400, "invalid_request", "请填写邮箱地址和授权码")
 		return
 	}
 	if input.Version != nil {
@@ -33,12 +53,12 @@ func (a *API) handleTestStatementMailbox(w http.ResponseWriter, r *http.Request)
 			writeErr(w, 400, "invalid_request", "请提供有效的配置版本")
 			return
 		}
-		a.testSavedStatementMailbox(w, r, *input.Version)
+		a.testSavedStatementMailbox(w, r, provider, *input.Version)
 		return
 	}
 	email := strings.TrimSpace(input.Email)
-	if !validQQMailboxCredentials(email, input.AuthCode) {
-		writeErr(w, 400, "invalid_request", "请填写有效的 QQ 邮箱和授权码")
+	if !validStatementMailboxCredentials(provider, email, input.AuthCode) {
+		writeErr(w, 400, "invalid_request", "邮箱地址须与所选服务商一致，请检查地址和授权码")
 		return
 	}
 
@@ -47,9 +67,9 @@ func (a *API) handleTestStatementMailbox(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (a *API) testSavedStatementMailbox(w http.ResponseWriter, r *http.Request, version int64) {
+func (a *API) testSavedStatementMailbox(w http.ResponseWriter, r *http.Request, provider string, version int64) {
 	p, _ := principal(r)
-	config, err := loadStatementMailbox(r.Context(), a.DB, p)
+	config, err := loadStatementMailbox(r.Context(), a.DB, p, provider)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -59,14 +79,14 @@ func (a *API) testSavedStatementMailbox(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	code, err := a.mailCryptWithPurpose(config.cipher, true, statementMailboxPurpose(p, config))
-	if err != nil || !validQQMailboxCredentials(config.email, code) {
+	if err != nil || !validStatementMailboxCredentials(provider, config.email, code) {
 		writeErr(w, 503, "mail_unavailable", "账单邮箱授权码不可用，请重新配置")
 		return
 	}
 	if !a.probeStatementMailbox(w, r, config.email, code) {
 		return
 	}
-	current, err := loadStatementMailbox(r.Context(), a.DB, p)
+	current, err := loadStatementMailbox(r.Context(), a.DB, p, provider)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -78,9 +98,10 @@ func (a *API) testSavedStatementMailbox(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, 200, map[string]string{"status": "connected"})
 }
 
-func validQQMailboxCredentials(email, authCode string) bool {
+func validStatementMailboxCredentials(provider, email, authCode string) bool {
+	domain := "@" + provider + ".com"
 	return validIMAPCredential(email, 254) && validEmail(email) &&
-		strings.HasSuffix(strings.ToLower(email), "@qq.com") && validIMAPCredential(authCode, 128)
+		strings.HasSuffix(strings.ToLower(email), domain) && validIMAPCredential(authCode, 128)
 }
 
 func (a *API) probeStatementMailbox(w http.ResponseWriter, r *http.Request, email, authCode string) bool {
@@ -100,11 +121,11 @@ func (a *API) probeStatementMailbox(w http.ResponseWriter, r *http.Request, emai
 	}
 	probe := a.opts.StatementMailboxProbe
 	if probe == nil {
-		probe = testQQStatementMailbox
+		probe = testStatementMailbox
 	}
 	if err := probe(r.Context(), email, authCode); err != nil {
 		a.limiter.failure(limitKey, ip)
-		writeErr(w, 502, "mailbox_test_failed", "QQ 邮箱连接失败，请检查 IMAP 服务和授权码后重试")
+		writeErr(w, 502, "mailbox_test_failed", "邮箱连接失败，请检查 IMAP 服务和授权码后重试")
 		return false
 	}
 	return true
@@ -122,14 +143,18 @@ func validIMAPCredential(value string, maxBytes int) bool {
 	return true
 }
 
-func testQQStatementMailbox(ctx context.Context, email, authCode string) error {
+func testStatementMailbox(ctx context.Context, email, authCode string) error {
+	host := "imap.qq.com"
+	if strings.HasSuffix(strings.ToLower(email), "@163.com") {
+		host = "imap.163.com"
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	dialer := tls.Dialer{Config: &tls.Config{
-		ServerName: qqIMAPHost,
+		ServerName: host,
 		MinVersion: tls.VersionTLS12,
 	}}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(qqIMAPHost, "993"))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "993"))
 	if err != nil {
 		return err
 	}
@@ -159,6 +184,13 @@ func examineStatementInbox(conn io.ReadWriter, email, authCode string) error {
 	login := `LOGIN "` + quote.Replace(email) + `" "` + quote.Replace(authCode) + `"`
 	if err := mailboxProbeCommand(conn, reader, "A1", login); err != nil {
 		return err
+	}
+	if strings.HasSuffix(strings.ToLower(email), "@163.com") {
+		// NetEase uses IMAP ID to recognize the client before mailbox access.
+		if err := mailboxProbeCommand(conn, reader, "A2", `ID ("name" "TinyNest" "version" "2" "vendor" "TinyNest")`); err != nil {
+			return err
+		}
+		return mailboxProbeCommand(conn, reader, "A3", "EXAMINE INBOX")
 	}
 	return mailboxProbeCommand(conn, reader, "A2", "EXAMINE INBOX")
 }

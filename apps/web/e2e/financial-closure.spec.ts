@@ -1202,6 +1202,17 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await page.setViewportSize({ width: 390, height: 844 })
     let version = 0
     let enabled = false
+    let bound = false
+    await page.route('**/api/v1/credit-statement-mailbox/cards', route => route.fulfill({
+      json: { items: [{ id: 'fixture-card', name: '测试信用卡', status: 'active', bound, taken: false }] },
+    }))
+    await page.route('**/api/v1/accounts/fixture-card/credit-statement-binding?*', async route => {
+      const req = route.request()
+      expect(new URL(req.url()).searchParams.get('version')).toBe(String(version))
+      expect(req.headers()['x-csrf-token']).toBeTruthy()
+      bound = req.method() === 'PUT'
+      await route.fulfill({ status: 204 })
+    })
     await page.route('**/api/v1/credit-statement-mailbox', async route => {
       const req = route.request()
       if (req.method() !== 'GET') {
@@ -1227,6 +1238,13 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await card.getByRole('button', { name: '验证并保存' }).click()
     await expect(card.getByText('已启用 · ***@qq.com')).toBeVisible()
     await expect(card.getByLabel('邮箱授权码')).toHaveValue('')
+    await card.getByRole('button', { name: '信用卡绑定' }).click()
+    const bindings = card.getByRole('list', { name: '信用卡绑定' })
+    await expect(bindings.getByText('测试信用卡')).toBeVisible()
+    await bindings.getByRole('button', { name: '绑定', exact: true }).click()
+    await expect(bindings.getByRole('button', { name: '解绑' })).toBeVisible()
+    await bindings.getByRole('button', { name: '解绑' }).click()
+    await expect(bindings.getByRole('button', { name: '绑定', exact: true })).toBeVisible()
     await card.getByLabel('QQ 邮箱').fill('123@qq.com')
     await card.getByLabel('邮箱授权码').fill('new-code')
     await card.getByRole('button', { name: '保存新授权码' }).click()
@@ -1235,6 +1253,21 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(card.getByText('尚未启用')).toBeVisible()
     await expect(card.getByRole('status')).toHaveText('QQ 邮箱已停用，授权码已清除。')
     expect(version).toBe(3)
+    await page.route('**/api/v1/credit-statement-mailbox?provider=163', async route => {
+      const req = route.request()
+      if (req.method() === 'GET') {
+        await route.fulfill({ json: { version: 0, enabled: false, key_ready: true } })
+        return
+      }
+      expect(req.method()).toBe('PUT')
+      expect(req.postDataJSON()).toEqual({ email: 'fixture@163.com', auth_code: 'fixture-code', version: 0 })
+      await route.fulfill({ json: { version: 1, enabled: true, key_ready: true, masked_email: '***@163.com' } })
+    })
+    await page.getByLabel('账单邮箱服务商').selectOption('163')
+    await card.getByLabel('163 邮箱').fill('fixture@163.com')
+    await card.getByLabel('邮箱授权码').fill('fixture-code')
+    await card.getByRole('button', { name: '验证并保存' }).click()
+    await expect(card.getByText('已启用 · ***@163.com')).toBeVisible()
   })
 })
 

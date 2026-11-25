@@ -394,6 +394,10 @@ func (a *API) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 			return tx.QueryRowContext(r.Context(),
 				`SELECT id FROM accounts WHERE id=? AND household_id=? AND status='deleted'`, id, p.HouseholdID).Scan(&existing)
 		}
+		if _, err := tx.ExecContext(r.Context(), `DELETE FROM statement_mailbox_card_links WHERE household_id=? AND account_id=?`,
+			p.HouseholdID, id); err != nil {
+			return err
+		}
 		return audit(r.Context(), tx, p, "delete_account", "account", id, "{}")
 	})
 	switch {

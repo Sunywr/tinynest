@@ -60,7 +60,7 @@ func TestMigrateFromZeroAppliesEveryVersion(t *testing.T) {
 	}
 }
 
-func TestStatementMailboxMigratesExistingV2(t *testing.T) {
+func TestStatementProvidersMigrateExistingQQMailboxAndBinding(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()
 	files, err := database.migrationFiles()
@@ -71,7 +71,7 @@ func TestStatementMailboxMigratesExistingV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, file := range files {
-		if file.version > 8 {
+		if file.version > 10 {
 			break
 		}
 		if err := database.applyMigration(ctx, file); err != nil {
@@ -84,9 +84,25 @@ func TestStatementMailboxMigratesExistingV2(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO households(id,name) VALUES('existing_household','原有家庭')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.Exec(`INSERT INTO users(id,household_id,username,password_hash)
+		VALUES('existing_user','existing_household','existing_user','fixture')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO credit_statement_mailboxes(household_id,user_id,email,auth_code_cipher,version,updated_at)
+		VALUES('existing_household','existing_user','123@qq.com','fixture_ciphertext',3,'fixture')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO accounts(id,household_id,kind,name,ledger_code)
+		VALUES('existing_card','existing_household','credit','原有卡','2010:existing_card')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO credit_statement_bindings(household_id,account_id,user_id)
+		VALUES('existing_household','existing_card','existing_user')`); err != nil {
+		t.Fatal(err)
+	}
 	applied, err := database.Migrate(ctx)
-	if err != nil || len(applied) == 0 || applied[0] != 9 {
-		t.Fatalf("apply 009 to existing V2: applied=%v, err=%v", applied, err)
+	if err != nil || len(applied) != 1 || applied[0] != 11 {
+		t.Fatalf("apply 011 to existing V2: applied=%v, err=%v", applied, err)
 	}
 	again, err := database.Migrate(ctx)
 	if err != nil || len(again) != 0 {
@@ -95,6 +111,14 @@ func TestStatementMailboxMigratesExistingV2(t *testing.T) {
 	var name, integrity string
 	if err := database.QueryRow(`SELECT name FROM households WHERE id='existing_household'`).Scan(&name); err != nil || name != "原有家庭" {
 		t.Fatalf("existing household = %q, err=%v", name, err)
+	}
+	var version int
+	var cipher string
+	if err := database.QueryRow(`SELECT m.version,m.auth_code_cipher FROM statement_mailbox_configs m
+		JOIN statement_mailbox_card_links b ON b.household_id=m.household_id AND b.user_id=m.user_id AND b.provider=m.provider
+		WHERE m.household_id='existing_household' AND m.user_id='existing_user' AND m.provider='qq' AND b.account_id='existing_card'`).
+		Scan(&version, &cipher); err != nil || version != 3 || cipher != "fixture_ciphertext" {
+		t.Fatalf("existing mailbox migration: version=%d err=%v", version, err)
 	}
 	if err := database.QueryRow(`PRAGMA quick_check`).Scan(&integrity); err != nil || integrity != "ok" {
 		t.Fatalf("quick_check = %q, err=%v", integrity, err)

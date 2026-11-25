@@ -12,6 +12,7 @@ const router = useRouter()
 const session = useSession()
 const { toast } = useToast()
 const profileOpen = ref(false)
+const statementProvider = ref<'qq' | '163'>('qq')
 
 const me = computed(() => session.me.value)
 const profile = computed(() => ({
@@ -56,7 +57,15 @@ async function profileSaved(message: string) {
     </section>
 
     <MailSettings @identity-updated="session.refreshMe()" />
-    <StatementMailboxSettings v-if="session.canWrite.value" :key="me?.user_id + ':' + me?.household_id" />
+    <template v-if="session.canWrite.value">
+      <label class="card settings-card">账单邮箱服务商
+        <select v-model="statementProvider">
+          <option value="qq">QQ 邮箱</option>
+          <option value="163">163 邮箱</option>
+        </select>
+      </label>
+      <StatementMailboxSettings :key="me?.user_id + ':' + me?.household_id + ':' + statementProvider" :provider="statementProvider" />
+    </template>
 
     <button type="button" class="btn-quiet back-btn" @click="back">返回我的</button>
 
