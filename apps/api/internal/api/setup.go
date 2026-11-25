@@ -59,7 +59,9 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "DELETE /api/v1/credit-statement-mailbox", a.handleDeleteStatementMailbox)
 	a.route(mux, "POST /api/v1/credit-statement-mailbox/test", a.handleTestStatementMailbox)
 	a.route(mux, "GET /api/v1/credit-statement-mailbox/cards", a.handleStatementBindingCards)
+	a.route(mux, "GET /api/v1/credit-statements", a.handleListCardStatements)
 	a.route(mux, "POST /api/v1/accounts/{id}/credit-statement-preview", a.handleStatementPreview)
+	a.route(mux, "POST /api/v1/accounts/{id}/credit-statement-sync", a.handleStatementSync)
 	a.route(mux, "PUT /api/v1/accounts/{id}/credit-statement-binding", a.handleStatementBinding)
 	a.route(mux, "DELETE /api/v1/accounts/{id}/credit-statement-binding", a.handleStatementBinding)
 

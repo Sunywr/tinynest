@@ -20,6 +20,9 @@ import (
 )
 
 type statementMailPreview struct {
+	// UID is the IMAP UID of the message the fields were parsed from. It is
+	// carried to the sync path for source traceability and never serialised.
+	UID         uint32       `json:"-"`
 	ReceivedOn  string       `json:"received_on,omitempty"`
 	StatementOn string       `json:"statement_on,omitempty"`
 	DueOn       string       `json:"due_on,omitempty"`

@@ -17,7 +17,10 @@ const maxStatementMailBytes = 512 << 10
 
 var statementFetchLiteral = regexp.MustCompile(`(?i)^\* [0-9]+ FETCH \((?:UID ([0-9]+) )?BODY\[\](?:<0>)? \{([0-9]+)\}\r\n$`)
 
-func previewStatementInbox(ctx context.Context, email, code, sender, bank, tail string, since time.Time) ([]statementMailPreview, error) {
+// readStatementInbox searches the bound card's bank mail read-only and returns
+// every message the parser recognised. The preview endpoint reports the result
+// and the sync endpoint stores it; neither may write to the mailbox.
+func readStatementInbox(ctx context.Context, email, code, sender, bank, tail string, since time.Time) ([]statementMailPreview, error) {
 	items := []statementMailPreview{}
 	err := withStatementInbox(ctx, email, code, 15*time.Second, func(conn io.Writer, reader *bufio.Reader) error {
 		uids, err := searchStatementMail(conn, reader, sender, since)
@@ -30,6 +33,7 @@ func previewStatementInbox(ctx context.Context, email, code, sender, bank, tail 
 				return err
 			}
 			if item, ok := parseStatementMail(raw, bank, tail); ok {
+				item.UID = uid
 				items = append(items, item)
 			}
 		}

@@ -26,9 +26,10 @@ type contextKey int
 
 const principalKey contextKey = 1
 
-// maxRoutes includes the credit statement mailbox configuration and test.
+// maxRoutes includes the credit statement mailbox configuration and test, the
+// statement preview and the read-only statement sync plus its list.
 // The route-count test asserts Register never exceeds it.
-const maxRoutes = 70
+const maxRoutes = 72
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {
@@ -72,6 +73,9 @@ type Options struct {
 	MailSender func(context.Context, MailConfig, string, string, string, string) error
 	// StatementMailboxProbe is a test hook. Nil uses the selected provider over IMAP TLS.
 	StatementMailboxProbe func(context.Context, string, string) error
+	// StatementMailboxFetch is the test hook for the read-only search+fetch used
+	// by statement preview and sync. Nil uses the IMAP TLS reader.
+	StatementMailboxFetch func(context.Context, string, string, string, string, string, time.Time) ([]statementMailPreview, error)
 }
 
 type API struct {
