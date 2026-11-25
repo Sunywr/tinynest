@@ -125,6 +125,7 @@ func seedAll(t *testing.T, admin *Admin) fixture {
 	// Audit trail.
 	mustExec(t, admin, `INSERT INTO audit_logs (household_id, actor, action, entity, entity_id) VALUES (?,?,?,?,?)`,
 		f.household, f.user, "create_transaction", "transaction", "tx1")
+	seedStatementRows(t, admin, f)
 	return f
 }
 

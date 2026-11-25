@@ -41,6 +41,11 @@ var PurgeGroups = []Group{
 		Tables: []string{"credit_instruments", "credit_statements", "credit_statement_items", "credit_payments", "credit_instrument_changes", "credit_statement_adjustments", "credit_statement_provisions"},
 	},
 	{
+		Name:   "银行账单与绑卡",
+		Note:   "迁移 010-012 的只读对账数据：银行汇总、邮件来源与绑卡关系；加密授权码在保留组",
+		Tables: []string{"card_statement_sources", "card_statements", "statement_mailbox_card_links", "credit_statement_bindings"},
+	},
+	{
 		Name:   "分期",
 		Note:   "分期合同、期次、付款与调整",
 		Tables: []string{"installment_contracts", "installment_schedule_items", "installment_payments", "installment_adjustments"},
@@ -59,6 +64,11 @@ var PurgeGroups = []Group{
 		Name:   "投资",
 		Note:   "资产、费率、成交、分红、估值与持仓投影",
 		Tables: []string{"investment_assets", "investment_fee_rules", "investment_trades", "investment_dividends", "investment_valuations", "investment_positions"},
+	},
+	{
+		Name:   "投资估值快照",
+		Note:   "迁移 005 从 pfm 导入的只读市值，不写分录",
+		Tables: []string{"investment_holdings", "investment_accounts"},
 	},
 	{
 		Name:   "信用卡账单邮件",
@@ -108,6 +118,15 @@ var IdentityTables = []string{
 	"mail_recipient_daily_usage",
 }
 
+// PreservedConfigTables survive a purge like identity rows but are not part of
+// the identity export/import, so an operator decides separately whether the
+// encrypted mailbox credentials move into a fresh baseline. The card links that
+// reference accounts are purged; only the mailbox credential itself is kept.
+var PreservedConfigTables = []string{
+	"statement_mailbox_configs",
+	"credit_statement_mailboxes",
+}
+
 // OptionalTables are cleared only when the operator does not ask to keep them.
 // Today no table is optional by default; the slice exists so the flag has a
 // single definition rather than scattered conditionals.
@@ -137,6 +156,13 @@ var deleteOrder = []string{
 	"credit_mail_bindings",
 	"credit_mail_previews",
 	"credit_mailboxes",
+	// Bank-reported statements and the card bindings that point at accounts.
+	"card_statement_sources",
+	"card_statements",
+	"statement_mailbox_card_links",
+	"credit_statement_bindings",
+	"investment_holdings",
+	"investment_accounts",
 	"statement_import_rows",
 	"statement_import_bindings",
 	"stock_watch",

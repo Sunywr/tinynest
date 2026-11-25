@@ -59,6 +59,18 @@ func TestMySQLPurgeDrill(t *testing.T) {
 	if before.purgeCount("transactions").Rows == 0 || before.purgeCount("budgets").Rows == 0 {
 		t.Fatal("fixture did not populate the MySQL bookkeeping tables")
 	}
+	// The bank-reported statements and the card links reference accounts, so they
+	// are what proves the delete order holds on the production dialect.
+	for _, table := range []string{"card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts"} {
+		if before.purgeCount(table).Rows == 0 {
+			t.Fatalf("fixture did not populate %s", table)
+		}
+	}
+	for _, table := range PreservedConfigTables {
+		if count := before.preservedCount(table); count.Rows != 1 {
+			t.Fatalf("%s before purge = %d, want 1", table, count.Rows)
+		}
+	}
 
 	result, err := admin.Purge(ctx, PurgeOptions{})
 	if err != nil {
@@ -77,6 +89,11 @@ func TestMySQLPurgeDrill(t *testing.T) {
 	}
 	if result.After.UsersDigest != before.UsersDigest {
 		t.Fatal("users table changed during the MySQL purge")
+	}
+	for _, table := range PreservedConfigTables {
+		if count := result.After.preservedCount(table); count.Rows != 1 {
+			t.Fatalf("%s survived the MySQL purge with %d rows, want 1", table, count.Rows)
+		}
 	}
 	if _, err := admin.Verify(ctx, &before, false); err != nil {
 		t.Fatalf("verify after MySQL purge: %v", err)

@@ -104,6 +104,7 @@ type Snapshot struct {
 	UsersDigest    string       `json:"users_digest"`
 	PurgeTables    []TableCount `json:"purge_tables"`
 	IdentityTables []TableCount `json:"identity_tables"`
+	ConfigTables   []TableCount `json:"config_tables,omitempty"`
 	Ledger         Ledger       `json:"ledger"`
 }
 
@@ -377,6 +378,17 @@ func (a *Admin) snapshot(ctx context.Context, q db.Queryer, schema SchemaInfo) (
 		}
 		snap.IdentityTables = append(snap.IdentityTables, count)
 	}
+	for _, table := range PreservedConfigTables {
+		count := TableCount{Table: table, Group: "保留的个人配置"}
+		if schema.Has(table) {
+			if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count.Rows); err != nil { // #nosec G201 -- allow-listed table
+				return snap, fmt.Errorf("dbadmin: count %s: %w", table, err)
+			}
+		} else {
+			count.Missing = true
+		}
+		snap.ConfigTables = append(snap.ConfigTables, count)
+	}
 	ledger, err := a.ledger(ctx, q)
 	if err != nil {
 		return snap, err
@@ -396,6 +408,18 @@ func (snap Snapshot) purgeCount(table string) TableCount {
 
 func (snap Snapshot) identityCount(table string) TableCount {
 	for _, c := range snap.IdentityTables {
+		if c.Table == table {
+			return c
+		}
+	}
+	return TableCount{Table: table, Missing: true}
+}
+
+func (snap Snapshot) preservedCount(table string) TableCount {
+	if count := snap.identityCount(table); !count.Missing {
+		return count
+	}
+	for _, c := range snap.ConfigTables {
 		if c.Table == table {
 			return c
 		}
@@ -546,12 +570,16 @@ func assertPurgedExcept(snap Snapshot, allow map[string]bool) error {
 
 func assertIdentityKept(before, after Snapshot) error {
 	var broken []string
-	for _, want := range before.IdentityTables {
-		got := after.identityCount(want.Table)
-		if got.Missing != want.Missing || got.Rows != want.Rows {
-			broken = append(broken, fmt.Sprintf("%s: before=%d after=%d", want.Table, want.Rows, got.Rows))
+	kept := func(wants []TableCount) {
+		for _, want := range wants {
+			got := after.preservedCount(want.Table)
+			if got.Missing != want.Missing || got.Rows != want.Rows {
+				broken = append(broken, fmt.Sprintf("%s: before=%d after=%d", want.Table, want.Rows, got.Rows))
+			}
 		}
 	}
+	kept(before.IdentityTables)
+	kept(before.ConfigTables)
 	if len(broken) > 0 {
 		return fmt.Errorf("dbadmin: identity rows changed: %s", strings.Join(broken, " "))
 	}
@@ -566,6 +594,8 @@ func assertIdentityKept(before, after Snapshot) error {
 func (snap Snapshot) Unclassified(all []string) []string {
 	known := map[string]bool{
 		"schema_migrations": true,
+		// The V2 baseline marker the startup guard reads; it must outlive a purge.
+		"schema_meta": true,
 		// Login cooldowns are security state. Preserve them during bookkeeping purge.
 		"auth_login_locks": true,
 		// SQLite's own bookkeeping table for AUTOINCREMENT; it holds no
@@ -576,6 +606,9 @@ func (snap Snapshot) Unclassified(all []string) []string {
 		known[table] = true
 	}
 	for _, table := range IdentityTables {
+		known[table] = true
+	}
+	for _, table := range PreservedConfigTables {
 		known[table] = true
 	}
 	var out []string

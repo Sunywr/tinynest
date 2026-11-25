@@ -430,6 +430,9 @@ func printSnapshot(title string, snap dbadmin.Snapshot) {
 		snap.Ledger.Entries, snap.Ledger.Lines, snap.Ledger.DebitMinor, snap.Ledger.CreditMinor, snap.Ledger.DebitEqualsCredit)
 	fmt.Printf("身份摘要(users sha256): %s\n", snap.UsersDigest)
 	printCounts("身份与权限", snap.IdentityTables)
+	if len(snap.ConfigTables) > 0 {
+		printCounts("保留的个人配置", snap.ConfigTables)
+	}
 }
 
 func printCounts(title string, counts []dbadmin.TableCount) {
