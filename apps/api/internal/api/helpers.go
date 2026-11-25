@@ -28,7 +28,7 @@ const principalKey contextKey = 1
 
 // maxRoutes includes the credit statement mailbox configuration and test.
 // The route-count test asserts Register never exceeds it.
-const maxRoutes = 69
+const maxRoutes = 70
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {

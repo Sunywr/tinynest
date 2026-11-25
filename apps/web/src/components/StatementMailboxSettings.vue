@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ApiError, request } from '../services/api'
+import { formatMinor } from '../services/format'
 
 type MailboxConfig = {
   enabled: boolean
@@ -10,6 +11,13 @@ type MailboxConfig = {
 }
 
 type BindingCard = { id: string; name: string; status: string; bound: boolean; taken: boolean }
+type MailPreview = {
+  received_on?: string
+  statement_on?: string
+  due_on?: string
+  amount_due_minor?: number
+  needs_review?: string
+}
 
 const path = '/credit-statement-mailbox'
 const props = defineProps<{ provider: 'qq' | '163' }>()
@@ -17,6 +25,11 @@ const providerQuery = props.provider === '163' ? '?provider=163' : ''
 const providerName = props.provider === '163' ? '163' : 'QQ'
 const config = ref<MailboxConfig | null>(null)
 const cards = ref<BindingCard[] | null>(null)
+const preview = ref<{ cardName: string; since: string; items: MailPreview[] } | null>(null)
+const cardGroups = computed(() => [
+  { label: '已绑定信用卡', items: cards.value?.filter(card => card.bound) ?? [] },
+  { label: '未绑定信用卡', items: cards.value?.filter(card => !card.bound) ?? [] },
+])
 
 const email = ref('')
 const authCode = ref('')
@@ -45,6 +58,7 @@ async function run(action: () => Promise<void>) {
     error.value = cause instanceof Error ? cause.message : '邮箱操作失败'
     if (cause instanceof ApiError && cause.status === 409) {
       cards.value = null
+      preview.value = null
       if (cause.code !== 'card_already_bound') config.value = null
     }
   } finally {
@@ -74,6 +88,7 @@ function save() {
     })
     email.value = ''
     cards.value = null
+    preview.value = null
     message.value = providerName + ' 邮箱配置已保存。'
   })
 }
@@ -89,6 +104,7 @@ function disable() {
     authCode.value = ''
     email.value = ''
     cards.value = null
+    preview.value = null
     message.value = providerName + ' 邮箱已停用，授权码已清除。'
   })
 }
@@ -105,9 +121,22 @@ function updateBinding(card: BindingCard) {
     const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-binding?${query}`
     await request(endpoint, { method: card.bound ? 'DELETE' : 'PUT' })
+    preview.value = null
     message.value = card.bound ? '已解除信用卡绑定。' : '信用卡已绑定到当前邮箱。'
     cards.value = null
     await loadCards()
+  })
+}
+
+function previewStatements(card: BindingCard) {
+  const current = config.value
+  if (!current?.enabled || !card.bound || card.status !== 'active') return
+  return run(async () => {
+    preview.value = null
+    const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
+    const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-preview?${query}`
+    const result = await request<{ since: string; items: MailPreview[] }>(endpoint, { method: 'POST' })
+    preview.value = { cardName: card.name, ...result }
   })
 }
 
@@ -117,7 +146,7 @@ onMounted(refresh)
 <template>
   <section class="card settings-card" aria-label="信用卡账单邮箱">
     <h2>信用卡账单邮箱</h2>
-    <p class="form-hint">账单拉取和导入尚未开放。</p>
+    <p class="form-hint">浦发和中信账单支持只读预览。</p>
     <template v-if="config">
       <p v-if="config.enabled">已启用 · {{ config.masked_email }}</p>
       <p v-else>尚未启用</p>
@@ -129,19 +158,42 @@ onMounted(refresh)
       </div>
       <div v-if="cards" class="binding-cards">
         <p v-if="!cards.length" class="form-hint">暂无可绑定的信用卡。</p>
-        <ul v-else aria-label="信用卡绑定">
-          <li v-for="card in cards" :key="card.id">
-            <span>{{ card.name }}<small v-if="card.status === 'disabled'"> · 已停用</small></span>
-            <small v-if="card.taken">已绑定其他邮箱</small>
-            <button v-else class="btn-quiet" type="button" :disabled="busy" @click="updateBinding(card)">
-              {{ card.bound ? '解绑' : '绑定' }}
-            </button>
+        <template v-else>
+          <section v-for="group in cardGroups" :key="group.label" class="binding-group">
+            <h3>{{ group.label }}</h3>
+            <p v-if="!group.items.length" class="form-hint">暂无{{ group.label }}。</p>
+            <ul v-else :aria-label="group.label">
+              <li v-for="card in group.items" :key="card.id">
+                <span>{{ card.name }}<small v-if="card.status === 'disabled'"> · 已停用</small></span>
+                <small v-if="card.taken">已绑定其他邮箱</small>
+                <div v-else class="mailbox-actions card-actions">
+                  <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
+                    :disabled="busy" @click="previewStatements(card)">预览账单</button>
+                  <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
+                    :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </template>
+      </div>
+      <section v-if="preview" class="mailbox-preview" aria-label="账单预览" aria-live="polite">
+        <h3>{{ preview.cardName }} · 账单预览</h3>
+        <p class="form-hint">搜索范围从 {{ preview.since }} 开始。预览不会新增流水。</p>
+        <p v-if="!preview.items.length">没有找到符合条件的邮件。</p>
+        <ul v-else>
+          <li v-for="(item, index) in preview.items" :key="index">
+            <span v-if="item.statement_on">账单日 {{ item.statement_on }}　</span>
+            <span v-else-if="item.received_on">邮件日期 {{ item.received_on }}　</span>
+            <span v-if="item.due_on">到期日 {{ item.due_on }}　</span>
+            <strong v-if="item.amount_due_minor !== undefined">应还 {{ formatMinor(item.amount_due_minor) }}</strong>
+            <p v-if="item.needs_review" class="form-hint">{{ item.needs_review }}</p>
           </li>
         </ul>
-      </div>
+      </section>
       <form :key="config.version" class="mailbox-form" @submit.prevent="save">
-        <label>{{ providerName }} 邮箱<input v-model="email" type="email" maxlength="254" required :disabled="busy" @input="message = ''" /></label>
-        <label>邮箱授权码<input v-model="authCode" type="password" autocomplete="off" maxlength="128" required :disabled="busy" /></label>
+        <label><span>{{ providerName }} 邮箱</span><input v-model="email" type="email" maxlength="254" required :disabled="busy" @input="message = ''" /></label>
+        <label><span>邮箱授权码</span><input v-model="authCode" type="password" autocomplete="off" maxlength="128" required :disabled="busy" /></label>
         <div class="mailbox-actions">
           <button class="btn-quiet" type="button" :disabled="busy || !email.trim() || !authCode" @click="testConnection()">测试连接</button>
           <button class="btn-primary" type="submit" :disabled="busy || !config.key_ready">{{ config.enabled ? '保存新授权码' : '验证并保存' }}</button>
@@ -158,6 +210,17 @@ onMounted(refresh)
 .mailbox-form {
   display: grid;
   gap: 12px;
+  width: min(100%, 30rem);
+}
+.mailbox-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.mailbox-form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
 }
 .mailbox-actions {
   display: flex;
@@ -173,6 +236,14 @@ onMounted(refresh)
   margin: 0 0 12px;
   padding: 0;
 }
+.binding-group + .binding-group {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.binding-group h3 {
+  font-size: 1rem;
+  margin: 0 0 6px;
+}
 .binding-cards li {
   display: flex;
   justify-content: space-between;
@@ -181,6 +252,15 @@ onMounted(refresh)
   padding-block: 4px;
 }
 .binding-cards li span {
+  overflow-wrap: anywhere;
+}
+.card-actions {
+  justify-content: flex-end;
+}
+.mailbox-preview {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   overflow-wrap: anywhere;
 }
 </style>

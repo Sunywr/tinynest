@@ -144,11 +144,15 @@ func validIMAPCredential(value string, maxBytes int) bool {
 }
 
 func testStatementMailbox(ctx context.Context, email, authCode string) error {
+	return withStatementInbox(ctx, email, authCode, 10*time.Second, nil)
+}
+
+func withStatementInbox(ctx context.Context, email, authCode string, timeout time.Duration, use func(io.Writer, *bufio.Reader) error) error {
 	host := "imap.qq.com"
 	if strings.HasSuffix(strings.ToLower(email), "@163.com") {
 		host = "imap.163.com"
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	dialer := tls.Dialer{Config: &tls.Config{
 		ServerName: host,
@@ -165,16 +169,26 @@ func testStatementMailbox(ctx context.Context, email, authCode string) error {
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	return examineStatementInbox(conn, email, authCode)
+	reader := bufio.NewReaderSize(conn, 8192)
+	if err := authenticateStatementInbox(conn, reader, email, authCode); err != nil {
+		return err
+	}
+	if use != nil {
+		return use(conn, reader)
+	}
+	return nil
 }
 
 // The connection test only authenticates and opens INBOX read-only. It does
 // not use the mailbox search or message-fetch protocol.
 func examineStatementInbox(conn io.ReadWriter, email, authCode string) error {
+	return authenticateStatementInbox(conn, bufio.NewReaderSize(conn, 8192), email, authCode)
+}
+
+func authenticateStatementInbox(conn io.Writer, reader *bufio.Reader, email, authCode string) error {
 	if !validIMAPCredential(email, 254) || !validIMAPCredential(authCode, 128) {
 		return errors.New("invalid mailbox credentials")
 	}
-	reader := bufio.NewReaderSize(conn, 8192)
 	line, err := reader.ReadSlice('\n')
 	if err != nil || !imapStatus(string(line), "*", "OK") {
 		return errors.New("IMAP greeting rejected")
