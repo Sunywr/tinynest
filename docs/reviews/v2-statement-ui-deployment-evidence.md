@@ -150,7 +150,7 @@
 | └ `dist/assets/index-CQnA64uY.js` | 861,937 | `9125ef32249c554fc79181855dd6aaade963527cf0e11f4482235a220bc47261` |
 | └ `dist/assets/index-CPo9BSta.css` | 76,169 | `03fee67d5276fb49065aaf66fc6fdd4b9d87f6b473711ccf6e0ce8e01793c33c` |
 
-- **可复现基线**：上表由 `git archive 22ea7d1` 的树构建；推送后的 HEAD `34dc132` 只改文档，用 `git archive 34dc132` 重建后 `tinynest-api` 与 `tinynest-admin` 的 SHA-256 与上表**逐字节相同**，`dist` 内容也相同。所以下文把发布目录写作 `v2-34dc132`，产物无需重编。
+- **可复现基线**：上表由 `git archive 22ea7d1`（代码提交）的树构建；推送后的 HEAD 只改文档，用 `git archive 34dc132` 重建后 `tinynest-api` 与 `tinynest-admin` 的 SHA-256 与上表**逐字节相同**，`dist` 内容也相同。所以下文把发布目录写作 `v2-22ea7d1`，产物无需按后续文档提交重编。
 - **`tinynest-admin` 必须与 API 同批升级**：生产在用的 `v2-9376f47/tinynest-admin` 不认识迁移版本 14，切换到 014 之后任何 `baseline-capture` / `purge` / `verify` 都会因「出现不认识的迁移版本」拒绝打开库。
 - `tinynest-api-rollback-compatible-014` 是**回滚点**：源码取 `400571c`（014 之前的实现）但把两套 `014_statement_details.sql` 放进 embed，因此它在已应用迁移 14 的库上仍能启动（实测二进制含 014 DDL、含 `credit-statement-placeholder` 路由、不含 `statement-detail-import` 路由）。旧 `v2-9376f47/tinynest-api` 在迁移 14 之后**无法启动**，基线守卫会拒绝未知版本；真回滚 = 切这份兼容二进制，或按备份恢复。安装后不要把 `current` 指向它，除非确实要回滚。
 
@@ -160,11 +160,11 @@
 
 1. **只读基线**：`tinynest-admin baseline-capture --out=/var/backups/tinynest/baseline-<UTC>-pre014.json`（用**生产在用**的 admin 即可，此时库里最高只有 13）。记下 `journal_entries` / `journal_lines` / 借贷合计 / `users_digest` / 家庭数。
 2. **备份**：`systemctl start tinynest-backup.service` → 等 `Result=success` → 对最新 `tinynest_v2-*.sql` 跑 `sha256sum -c`，并确认转储里有 `schema_meta` 的 `baseline` 行。**备份失败不得继续**。
-3. **安装**：新建 `api/releases/v2-34dc132/`，放入 `tinynest-api` 与 `tinynest-admin`，`chmod 755`，逐个 `sha256sum` 与 §11.2 表一致；先把 `current` 软链切过去再 `systemctl restart tinynest-api`。迁移在启动期自动执行，**不要手工建表、不要改 `schema_meta` 或守卫**。
+3. **安装**：新建 `api/releases/v2-22ea7d1/`，放入 `tinynest-api` 与 `tinynest-admin`，`chmod 755`，逐个 `sha256sum` 与 §11.2 表一致；先把 `current` 软链切过去再 `systemctl restart tinynest-api`。迁移在启动期自动执行，**不要手工建表、不要改 `schema_meta` 或守卫**。
 4. **启动判据**：`journalctl -u tinynest-api -n 50 --no-pager` 出现 `applied_migrations=[14]` 与 `database ready`、`TinyNest API started`，且没有 baseline/校验和类中文报错。
 5. **数据库判据**：运行时 **40** 张表（含 `schema_migrations`）、`statement_details` 存在且 **0 行**、`schema_migrations` 14 行 `MAX(version)=14`、`schema_meta` 用 `meta_key` 读出 `baseline=v2`；`journal_entries` 12,391 / `journal_lines` 24,782 / 借贷各 1,311,336,623 / households 3 / users 3 与步骤 1 逐值相同，`users_digest` 相同。任一不符 → 按 §11.2 的兼容二进制回滚并保留现场。
 6. **服务判据**：B 机 loopback 与公网 HTTPS 各自 `curl -fsS .../api/v1/healthz`（200）、`.../api/v1/readyz`（`status=ready`、`check=mysql_ping_and_migrations`）、匿名 `.../api/v1/accounts`（401）。**裸 `/healthz`、`/readyz` 返回 404 属正常，不算失败**（见 §2 的路径纠正）。
-7. **A 机前端**：解包到 `web/releases/v2-34dc132/`，核对 `index.html` / JS / CSS 三个 SHA-256，再切 `current`；nginx root 指向软链，无需 reload。随后经 HTTPS 取回同名文件比对逐字节一致，并确认 bundle 内含「上传账单明细」与 `statement-detail-preview` 字符串。
+7. **A 机前端**：解包到 `web/releases/v2-22ea7d1/`，核对 `index.html` / JS / CSS 三个 SHA-256，再切 `current`；nginx root 指向软链，无需 reload。随后经 HTTPS 取回同名文件比对逐字节一致，并确认 bundle 内含「上传账单明细」与 `statement-detail-preview` 字符串。
 8. **登录后实机冒烟（只有用户能做）**：见 §11.4。
 9. **旧产物保留** ≥30 天（`v2-9376f47` 发布目录与本轮之前的备份）。
 
