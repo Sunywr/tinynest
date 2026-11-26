@@ -947,6 +947,7 @@ test.describe('E 资产', () => {
             currency: 'CNY', amount_due_minor: 120000, status: 'pending_review',
             review_reason: '同一账期出现不同应还金额', source_count: 2,
             ledger_charge_minor: 60000, difference_minor: 60000,
+            placeholder_transaction_id: null, placeholder_state: '',
           },
           {
             id: 'stmt_plain', account_id: plain.id, account_name: plain.name,
@@ -954,6 +955,7 @@ test.describe('E 资产', () => {
             currency: 'CNY', amount_due_minor: 90000, status: 'pending_review',
             review_reason: '', source_count: 1,
             ledger_charge_minor: null, difference_minor: null,
+            placeholder_transaction_id: 'tx_plain', placeholder_state: 'awaiting_detail',
           },
         ],
       },
@@ -999,6 +1001,92 @@ test.describe('E 资产', () => {
     const panel = page.getByRole('region', { name: '信用卡还款计划' })
     await expect(panel.getByTestId('bank-statement-error')).toContainText('银行账单暂时无法读取')
     await expect(panel.getByTestId('bank-statement')).toHaveCount(0)
+  })
+
+  // The 待补明细 placeholder is a real ledger write, so the UI must confirm first,
+  // echo the server's own amount/date, and never claim success on a refusal.
+  const placeholderStatement = (cardName: string, cardId: string, state: string) => ({
+    id: 'stmt_ph', account_id: cardId, account_name: cardName,
+    period_start_on: '2026-10-02', period_end_on: '2026-11-01', due_on: '2026-11-25',
+    currency: 'CNY', amount_due_minor: 120000, status: 'reconciled', review_reason: '',
+    source_count: 1, ledger_charge_minor: 0, difference_minor: 120000,
+    placeholder_transaction_id: state === 'awaiting_detail' ? 'tx_ph' : null, placeholder_state: state,
+  })
+
+  async function openPlaceholderCard(page: Page) {
+    const csrf = await signIn(page)
+    const card = await (await page.request.post('/api/v1/accounts', {
+      data: { kind: 'credit', name: `占位卡 ${uid('c')}`, statement_day: 1, due_day: 25 },
+      headers: writeHeaders(csrf),
+    })).json()
+    return { csrf, card }
+  }
+
+  test('E11 生成待补流水需确认，成功后回显占位状态', async ({ page }) => {
+    const { card } = await openPlaceholderCard(page)
+    let listed = 0
+    let posted = 0
+    await page.route('**/api/v1/credit-statements', route => {
+      listed += 1
+      return route.fulfill({ json: { items: [placeholderStatement(card.name, card.id, listed > 1 ? 'awaiting_detail' : '')] } })
+    })
+    await page.route('**/api/v1/accounts/*/credit-statement-placeholder', route => {
+      posted += 1
+      return route.fulfill({
+        status: 201,
+        json: {
+          transaction_id: 'tx_ph', statement_id: 'stmt_ph', account_id: card.id, account_name: card.name,
+          amount_minor: 120000, currency: 'CNY', occurred_on: '2026-11-25', due_on: '2026-11-25',
+          period_start_on: '2026-10-02', period_end_on: '2026-11-01',
+          category_id: 'cat_ph', category_name: '待补明细',
+        },
+      })
+    })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/assets')
+    const panel = page.getByRole('region', { name: '信用卡还款计划' })
+    const row = panel.locator('.credit-debt-row', { hasText: card.name })
+    await expect(row.getByTestId('placeholder-create')).toBeVisible()
+
+    await row.getByTestId('placeholder-create').click()
+    const sheet = page.getByRole('dialog')
+    await expect(sheet).toContainText('生成待补明细流水？')
+    await expect(sheet).toContainText('占位卡')
+    await expect(sheet).toContainText('¥1,200.00')
+    await expect(sheet).toContainText('还款截止 11月25日')
+    // 确认之前绝不能写账本。
+    expect(posted).toBe(0)
+
+    await sheet.getByRole('button', { name: '生成占位流水' }).click()
+    await expect(page.locator('.toast.ok')).toContainText('已生成待补明细流水 ¥1,200.00 · 2026-11-25')
+    await expect(sheet).toHaveCount(0)
+    expect(posted).toBe(1)
+    await expect(row.getByTestId('placeholder-awaiting')).toContainText('已按银行应还挂起 ¥1,200.00 的待补明细流水')
+    await expect(row.getByTestId('placeholder-create')).toHaveCount(0)
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+  })
+
+  test('E12 服务器拒绝占位时如实报错，不伪造成功', async ({ page }) => {
+    const { card } = await openPlaceholderCard(page)
+    await page.route('**/api/v1/credit-statements', route => route.fulfill({
+      json: { items: [placeholderStatement(card.name, card.id, '')] },
+    }))
+    const reason = '该账期已入账 ¥600.00，重复占位会双计；请补录明细或只核对差额'
+    await page.route('**/api/v1/accounts/*/credit-statement-placeholder', route => route.fulfill({
+      status: 409, json: { error: { code: 'cycle_already_recorded', message: reason } },
+    }))
+    await page.goto('/assets')
+    const row = page.getByRole('region', { name: '信用卡还款计划' }).locator('.credit-debt-row', { hasText: card.name })
+    await row.getByTestId('placeholder-create').click()
+    const sheet = page.getByRole('dialog')
+    await sheet.getByRole('button', { name: '生成占位流水' }).click()
+    await expect(page.getByRole('alert')).toContainText(reason)
+    await expect(page.locator('.toast.ok')).toHaveCount(0)
+    // 被拒绝后确认层仍留着可读原因，取消后仍可再次尝试。
+    await expect(sheet).toBeVisible()
+    await sheet.getByRole('button', { name: '取消' }).click()
+    await expect(row.getByTestId('placeholder-create')).toBeVisible()
   })
 })
 

@@ -38,7 +38,7 @@ npm.cmd run test:e2e
 先阅读 `apps/api/.env.example`（示例配置，勿提交真实值）。本地用 SQLite 时不需要 MySQL 与邮件密钥；`TINYNEST_COOKIE_SECURE` **必须显式**设置。
 
 ```bash
-# 终端 1：Go API（启动时自动应用 V2 迁移 001–005）
+# 终端 1：Go API（启动时自动应用 V2 迁移 001–013）
 cd apps/api
 mkdir -p data
 export TINYNEST_DATA_DIR=./data
@@ -212,7 +212,7 @@ export TINYNEST_DB_PATH="$PWD/data/tinynest.sqlite3"
 - 先停止 API（`purge -execute` 还要求 `-yes-service-stopped` 显式确认），否则调度/邮件 worker 会边清边写。
 - `-confirm` 必须与目标数据库名完全一致；SQLite 模式下 `Database.Name()` 就是数据库文件路径，必须逐字匹配。
 - MySQL 口令只通过 `TINYNEST_MYSQL_PASSWORD_FILE` 或 `CREDENTIALS_DIRECTORY/mysql-password` 提供，不接受命令行密码。
-- `purge` 在单事务内清理 45 张表并保留 11 张身份表；事务内断言业务表全空、身份计数与 `users` 摘要不变后才提交。
+- `purge` 在单事务内清理 **55 个表名（16 组）**：当前 V2 基线中 23 张存在、32 个是 V1 遗留名（按 `Missing` 跳过并在输出里列出）；保留 11 张身份表与 2 张含加密授权码的个人配置表（`statement_mailbox_configs`、`credit_statement_mailboxes`，后者不进入身份导出）。事务内断言已分类的业务表全空、身份与保留配置计数、`users` 摘要不变后才提交；未归类的新表会让 `verify` 失败而不是静默漏清。
 - 执行前先备份并做隔离恢复比对；执行后立即 `verify`；旧库与备份保留 ≥30 天。完整命令、判据与回滚见 [生产清理手册](plans/v2-prod-purge-runbook.md) 与 [新库切换手册](plans/v2-cutover-runbook.md)。
 - `identity-export` 输出含用户名与邮箱（及口令哈希），权限 0600，按机密保管并限期删除，不得进入仓库。
 

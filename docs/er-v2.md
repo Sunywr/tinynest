@@ -1,11 +1,12 @@
 # TinyNest V2 · 数据模型与 ER
 
-> 依据：`apps/api/internal/db/migrations/`（SQLite）与 `apps/api/internal/db/mysql/`（MySQL）下同名 `001`–`012` 共 **12 个迁移文件**：
+> 依据：`apps/api/internal/db/migrations/`（SQLite）与 `apps/api/internal/db/mysql/`（MySQL）下同名 `001`–`013` 共 **13 个迁移文件**：
 > `001_core.sql`（身份、审计与内核）、`002_bookkeeping.sql`（记账 4 张表）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）、
 > `005_investments.sql`（证券/理财估值快照 2 张表）、`006_auth_login_locks.sql`、`007_project_budgets.sql`、`008_transaction_source_metadata.sql`、
-> `009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`、`012_card_statements.sql`，
+> `009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`、`012_card_statements.sql`、
+> `013_statement_placeholders.sql`（待补明细占位 1 张表），
 > 以及 `internal/db/migrate.go` 创建的 `schema_migrations`。
-> 数量口径（在 `91b47c9` 上实测）：**37 张表**（含基线元数据 `schema_meta`），加迁移账本 `schema_migrations` 后 MySQL 运行时 **38 张**；SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence`，空库迁移后为 **39 张**。两方言业务表集一致。
+> 数量口径（2026-11-26 在含 `013` 的工作树上实测：SQLite 空库迁移 13 个版本后逐张清点，MySQL 8.4.7 隔离实例同口径）：**38 张表**（含基线元数据 `schema_meta`），加迁移账本 `schema_migrations` 后 MySQL 运行时 **39 张**；SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence`，空库迁移后为 **40 张**。`91b47c9` 记录的 37/38/39 是加入 `013` 之前的口径。两方言业务表集一致。
 > 金额一律整数分（`*_minor`），业务日期为 Asia/Shanghai 的 `YYYY-MM-DD`，其余时间戳为 RFC3339 UTC 文本。投资持仓的份额/价格缩放 1e6，收益率为基点（10000 = 100%）。
 
 ## 1. 分组与表清单
@@ -21,15 +22,16 @@
 | 流水来源元数据 | 1 | `transaction_source_metadata`（迁移 008） |
 | 账单邮箱与绑卡 | 4 | `credit_statement_mailboxes`（009）、`credit_statement_bindings`（010）、`statement_mailbox_configs`（011）、`statement_mailbox_card_links`（011） |
 | 银行账单汇总 | 2 | `card_statements`、`card_statement_sources`（012，只读对账） |
+| 待补明细占位 | 1 | `statement_placeholders`（013，银行账单 ↔ 占位流水的一对一关联） |
 | 投资估值快照 | 2 | `investment_accounts`、`investment_holdings`（只读 pfm 导入，不写分录） |
 | 基线元数据 | 1 | `schema_meta`（`baseline=v2`） |
-| **合计** | **37** | 上表逐组相加；不含 `schema_migrations` 与 SQLite 的 `sqlite_sequence` |
+| **合计** | **38** | 上表逐组相加；不含 `schema_migrations` 与 SQLite 的 `sqlite_sequence` |
 
-另：`schema_migrations` 由 Go 代码创建（不嵌入 DDL），记录 `version`、`description`、`applied_at`、`checksum`，是迁移器的账本，不计入 37 张表。
+另：`schema_migrations` 由 Go 代码创建（不嵌入 DDL），记录 `version`、`description`、`applied_at`、`checksum`，是迁移器的账本，不计入 38 张表。
 
 `009`/`010` 建的 `credit_statement_mailboxes`、`credit_statement_bindings` 是 163 拆分前的旧结构：`011_statement_mailbox_providers.sql` 把其中的 QQ 配置与绑卡复制进 `statement_mailbox_configs` / `statement_mailbox_card_links`（按服务商隔离），**不删除旧表**，因此两方言的 V2 schema 同时存在新旧两组。新代码只读写 `011` 的两张表。
 
-生产清理工具（`internal/dbadmin/tables.go`）的口径：保留 **11 张身份表** `households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`；另有 **2 张保留的个人配置表** `statement_mailbox_configs`、`credit_statement_mailboxes`（加密授权码，随身份保留但不参与身份导出/导入）；`auth_login_locks` 与 `schema_meta`、`schema_migrations`、`sqlite_sequence` 列为已知元数据/安全状态，不算未分类。`mail_queue`、成员档案/邀请 3 张表，以及账单绑卡与银行汇总（`statement_mailbox_card_links`、`credit_statement_bindings`、`card_statements`、`card_statement_sources`）和投资估值快照 2 张表按业务数据清空（成员档案清后由用户登录与 `/household/members/current` 重建）。清理清单共 54 个表名，其中 22 个在当前 V2 schema 中存在，其余为 V1 遗留表名，遇到时按 `Missing` 跳过。
+生产清理工具（`internal/dbadmin/tables.go`）的口径：保留 **11 张身份表** `households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`；另有 **2 张保留的个人配置表** `statement_mailbox_configs`、`credit_statement_mailboxes`（加密授权码，随身份保留但不参与身份导出/导入）；`auth_login_locks` 与 `schema_meta`、`schema_migrations`、`sqlite_sequence` 列为已知元数据/安全状态，不算未分类。`mail_queue`、成员档案/邀请 3 张表，账单绑卡与银行汇总（`statement_mailbox_card_links`、`credit_statement_bindings`、`card_statements`、`card_statement_sources`）、待补明细占位关联（`statement_placeholders`）和投资估值快照 2 张表按业务数据清空（成员档案清后由用户登录与 `/household/members/current` 重建）。清理清单共 55 个表名，其中 23 个在当前 V2 schema 中存在，其余为 V1 遗留表名，遇到时按 `Missing` 跳过。
 
 ## 2. ER 关系
 
@@ -56,6 +58,8 @@ erDiagram
     accounts ||--o{ statement_mailbox_card_links : "account_id"
     accounts ||--o{ card_statements : "account_id + period_end_on"
     card_statements ||--o{ card_statement_sources : "household_id + statement_id"
+    card_statements ||--o| statement_placeholders : "household_id + statement_id"
+    transactions ||--o| statement_placeholders : "household_id + transaction_id"
 
     users ||--o{ sessions : "user_id"
     journal_entries ||--|{ journal_lines : "entry_id"
@@ -76,7 +80,8 @@ erDiagram
 - `journal_lines` 不保存 `household_id`，家庭范围通过 `journal_entries.household_id` 继承；所有查询必须 `JOIN journal_entries` 后在 SQL 层限定家庭。
 - `ledger_accounts.code` 与 `journal_lines.account_code` 是逻辑对应（科目编码字符串），不是数据库外键；具体编码规则见 [账务规则](accounting-rules-v2.md) §2。
 - `household_invites`、`household_user_members`、`pending_registrations`、`site_administrators`、`email_*`、`mail_*`、`audit_logs`、`schema_meta` 在 DDL 中**没有**外键约束，由应用层维护关系（v1 起即如此，V2 未新增级联）。
-- 所有表之间**不新增 `ON DELETE` 级联**：删除顺序显式处理（例如清理工具的 `internal/dbadmin/tables.go` 子表→父表顺序），避免隐式误删。
+- `statement_placeholders`（013）同时以 `(household_id, statement_id)` → `card_statements`（带 `ON DELETE CASCADE`）和 `transaction_id` → `transactions`（**不带**级联）为父表。占位流水本身走冲正而非物理删除，因此应用层从不依赖级联清掉关联；清理工具仍显式先删本表（见 §6.5）。
+- `ON DELETE CASCADE` 只出现在 006/009/010/011/012/013 追加的附属外键上（`auth_login_locks.user_id`、账单邮箱的用户列与绑定复合键、`card_statement_sources` 与 `statement_placeholders` → `card_statements`）；001/002 的内核表之间不依赖级联，删除顺序由应用层与清理工具的子表→父表顺序显式处理（`internal/dbadmin/tables.go`），避免隐式误删。
 
 ## 3. 身份与权限（15 张）
 
@@ -198,6 +203,19 @@ erDiagram
 - `digest` 为来源内容摘要（邮件 `UID`/正文指纹或文件哈希），配合 `UNIQUE(household_id, digest)` 实现幂等落地；`status` 只由人工或对账流程从 `pending_review` 改为 `reconciled`。
 - 命名刻意避开已退役的 V1 `credit_statements` / `credit_statement_items`，让清理清单里这两个名字保持 V1 含义（见 `internal/dbadmin/tables.go` 注释）。
 
+## 6.5 待补明细占位（1 张，迁移 013）
+
+| 表 | 关键列 | 约束与说明 |
+| --- | --- | --- |
+| `statement_placeholders` | `household_id`、`statement_id`、`transaction_id`、`period_start_on`（可空）、`period_end_on`、`due_on`、`created_at` | `PRIMARY KEY(household_id, statement_id)`：一笔银行账单最多挂一个占位，**占位创建因此天然幂等**（重复请求 409 `placeholder_exists`）；`UNIQUE(household_id, transaction_id)`：一笔占位流水只能服务一份账单；复合外键 `(household_id, statement_id)` → `card_statements(household_id, id)` 且 `ON DELETE CASCADE`；`household_id` → `households`、`transaction_id` → `transactions` 均无级联；索引 `idx_statement_placeholders_due(household_id, due_on)` |
+
+约定：
+
+- **账务事实在别处**：占位本身就是一条普通 `transactions` 支出行（类别「待补明细」）配平 `journal_entries` / `journal_lines`；本表只保存「银行账单 ↔ 占位流水」的关联与**银行自己报的**日期，不存金额、不改余额。
+- 为什么要单独存日期：占位流水的 `occurred_on` 记在还款截止日，而账单覆盖的是截止日之前那个已结束的账期。若只按 `occurred_on` 用 `cycleFor()` 归期，这笔钱会被算进**下一个**账期的未出账，还款计划就漏占了现金。`internal/api/credit_debt.go` 因此对关联到占位的事件优先使用 `statement_placeholders.period_start_on / period_end_on / due_on`。
+- 冲正不留关联残骸：删除占位流水走标准冲正（`reversal_of` + 同一 `occurred_on`），`transactions.status` 变 `reversed`，本表关联行**保留**，接口据此回报 `placeholder_state=reversed`，还款计划只统计 `e.reversal_of IS NULL AND t.status='posted'` 的行，因此被冲正的占位不再占现金，也不会被重新占位（409 `placeholder_reversed`）。
+- 清理顺序：本表同时是 `card_statements` 与 `transactions` 的子表，`tinynest-admin purge` 必须在两者之前删除它（`internal/dbadmin/tables.go` 的 `deleteOrder` 已把 `statement_placeholders` 排在该组首位，`TestPurgeClearsCardStatementTables` 断言子表先于父表）。
+
 ## 7. 基线元数据（1 张）
 
 | 表 | 关键列 | 说明 |
@@ -227,14 +245,15 @@ erDiagram
 6. 统计只对 `journal_lines` 求和，因此冲正后收入/支出/预算已用自动净额归零，无需额外回写。
 7. 账户余额 = `SUM(debit_minor - credit_minor)` 按 `account_code` + 家庭范围聚合；信用卡账户余额为负表示欠款。
 8. 信用卡还款计划不是账务事实：`accounts.statement_day` / `due_day` 只是配置；计划由 `journal_lines` + 当前有效 `transactions` + `users.payday` 即时派生，不写分录、不缓存。`card_statements`（迁移 012）保存的是**银行报的**账单金额，只读比对、不产生分录，因此仍不属于账务事实（见 §6.4）。
+9. 「待补明细」占位是**真实分录**，不是 `card_statements` 的投影：金额与日期在创建那一刻由用户确认的银行应还值写入 `transactions` / `journal_*`，之后银行重新同步账单不会改动这条分录。`statement_placeholders`（013）只提供归期所需的银行账期日期，让还款计划把这笔占位归到它**实际覆盖的账期**而不是 `occurred_on` 所在的下一期（见 §6.5）；删除占位走标准冲正，同一账期净额归零。
 
-对应实现：`internal/ledger/entry.go`（`Validate` / `Reverse`）、`internal/api/transactions.go`（`reversePosted`、更正与删除）、`internal/api/stats.go`（派生统计）、`internal/api/credit_debt.go`（还款计划）、`internal/api/credit_statements.go`（账单同步与只读比对）。
+对应实现：`internal/ledger/entry.go`（`Validate` / `Reverse`）、`internal/api/transactions.go`（`reversePosted`、更正与删除）、`internal/api/stats.go`（派生统计）、`internal/api/credit_debt.go`（还款计划）、`internal/api/credit_statements.go`（账单同步与只读比对）、`internal/api/credit_statement_placeholder.go`（待补明细占位的创建与守卫）。
 
 ## 10. 迁移策略
 
-- 每个方言当前有版本 1–12：`001_core.sql`（身份、审计与内核 21 张表）、`002_bookkeeping.sql`（记账 4 张表）、`003_category_style.sql`（分类颜色列）、`004_credit_cycle.sql`（`accounts.statement_day` / `due_day`）、`005_investments.sql`（投资估值快照 2 张表）、`006_auth_login_locks.sql`（登录风控）、`007_project_budgets.sql`（项目预算 2 张表）、`008_transaction_source_metadata.sql`（来源元数据）、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`（按服务商隔离的邮箱配置与绑卡，含从 009/010 的 `INSERT ... IGNORE` 复制）、`012_card_statements.sql`（银行账单汇总 2 张表）。
+- 每个方言当前有版本 1–13：`001_core.sql`（身份、审计与内核 21 张表）、`002_bookkeeping.sql`（记账 4 张表）、`003_category_style.sql`（分类颜色列）、`004_credit_cycle.sql`（`accounts.statement_day` / `due_day`）、`005_investments.sql`（投资估值快照 2 张表）、`006_auth_login_locks.sql`（登录风控）、`007_project_budgets.sql`（项目预算 2 张表）、`008_transaction_source_metadata.sql`（来源元数据）、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`（按服务商隔离的邮箱配置与绑卡，含从 009/010 的 `INSERT ... IGNORE` 复制）、`012_card_statements.sql`（银行账单汇总 2 张表）、`013_statement_placeholders.sql`（待补明细占位关联 1 张表）。
 - 迁移器按文件名前 3 位版本升序应用，记录 SHA-256 校验和并校验连续性；SQLite 整文件单事务，MySQL 逐条执行且文件必须可重跑。
-- 加列（003/004）在 MySQL 侧用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护；建表统一 `CREATE TABLE IF NOT EXISTS` + 内联索引，因此重复执行同一文件为 no-op。`011`/`012` 已在隔离 MySQL 8.4.7 上空库跑两遍全链（001→012）并在已建库上重跑 012 三次，列/索引/外键摘要一致（见 [实施进度](plans/credit-card-statement-import/实施进度.md)）。
+- 加列（003/004）在 MySQL 侧用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护；建表统一 `CREATE TABLE IF NOT EXISTS` + 内联索引，因此重复执行同一文件为 no-op。`011`/`012` 已在隔离 MySQL 8.4.7 上空库跑两遍全链（001→012）并在已建库上重跑 012 三次，列/索引/外键摘要一致；`013` 同口径在 8.4.7 隔离实例上验证（空库全链含 13 个版本 + 已建库重复 `SOURCE` 两次退出码 0 0，`SHOW CREATE TABLE` 摘要见 [实施进度](plans/credit-card-statement-import/实施进度.md)）。
 - 新库由 V2 二进制从零建立 `schema_meta.baseline=v2`；V1 旧库不升级，按 [新库切换手册](plans/v2-cutover-runbook.md) 处理。不得通过改守卫、改 `schema_meta` 或删除迁移账本强行启动。
 - 默认分类由 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()` 幂等写入，不使用 SQL 种子文件。
 
@@ -253,6 +272,7 @@ erDiagram
 | `card_statements(household_id, account_id, period_end_on)` | 按卡按账期取银行汇总 |
 | `card_statement_sources(household_id, statement_id)` + `UNIQUE(household_id, digest)` | 账单来源回溯与幂等落地 |
 | `statement_mailbox_card_links(household_id, user_id, provider)` | 同步时按邮箱取绑定的卡 |
+| `statement_placeholders(household_id, due_on)` + `UNIQUE(household_id, transaction_id)` | 还款计划按账期取占位日期、流水反查关联账单 |
 | `sessions(user_id)`、`audit_logs(household_id, created_at)`、`mail_queue(status, due_at)`、`email_challenges(owner, purpose, created_at)` | 会话吊销、审计查询、邮件 worker、验证码校验 |
 
 统计与余额查询都保留 `household_id` 条件，避免跨家庭扫描；V2 未新增物化视图或缓存表，统计每次从分录聚合。

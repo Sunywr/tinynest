@@ -9,8 +9,9 @@ const props = defineProps<{
   canWrite: boolean
   statements?: CardStatement[]
   statementsFailed?: boolean
+  placeholderBusy?: boolean
 }>()
-const emit = defineEmits<{ configure: [accountId: string] }>()
+const emit = defineEmits<{ configure: [accountId: string]; placeholder: [accountId: string, statementId: string] }>()
 const router = useRouter()
 
 // Statements arrive newest period first, so the first row per card is the
@@ -52,12 +53,26 @@ const statusText = computed(() => {
 function cardNeeded(card: CreditDebtCard): string {
   return card.cash_needed_minor === null ? '—' : formatMinor(card.cash_needed_minor)
 }
+// Only a closed period with a bank-reported amount can become a placeholder, and
+// a statement carries at most one live row, so the panel mirrors those three
+// facts instead of offering a button the server has to refuse.
+function bankAction(row: CardStatement): 'awaiting' | 'reversed' | 'offer' | 'open' | 'unknown' {
+  if (row.placeholder_state === 'awaiting_detail') return 'awaiting'
+  if (row.placeholder_state === 'reversed') return 'reversed'
+  if (row.period_end_on > props.plan.today) return 'open'
+  if (!(row.amount_due_minor > 0)) return 'unknown'
+  return 'offer'
+}
 function periodText(card: CreditDebtCard): string {
   if (!card.next_due_period_start_on || !card.next_due_period_end_on) return ''
   return `账单 ${dateLabel(card.next_due_period_start_on)}~${dateLabel(card.next_due_period_end_on)}`
 }
 function goSettings() {
   void router.push('/me/settings')
+}
+function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
+  if (!bank || bankAction(bank) !== 'offer' || props.placeholderBusy) return
+  emit('placeholder', card.account_id, bank.id)
 }
 </script>
 
@@ -141,6 +156,24 @@ function goSettings() {
           待核对：{{ row.bank.review_reason }}
         </p>
 
+        <div v-if="row.bank" class="credit-debt-placeholder-block" data-testid="placeholder-block">
+          <p v-if="bankAction(row.bank) === 'awaiting'" class="credit-debt-placeholder" data-testid="placeholder-awaiting">
+            已按银行应还挂起 {{ formatMinor(row.bank.amount_due_minor) }} 的待补明细流水，记在还款截止日；补录明细后可删除这笔占位。
+          </p>
+          <p v-else-if="bankAction(row.bank) === 'reversed'" class="credit-debt-placeholder" data-testid="placeholder-reversed">
+            这笔账单的待补明细流水已冲正，不再占用现金，请补录真实明细。
+          </p>
+          <button v-else-if="bankAction(row.bank) === 'offer'" type="button"
+            class="btn-quiet credit-debt-placeholder-action" data-testid="placeholder-create"
+            :disabled="!canWrite || placeholderBusy" @click="requestPlaceholder(row.card, row.bank)">
+            {{ placeholderBusy ? '正在生成待补流水…' : '按银行应还生成待补流水' }}
+          </button>
+          <p v-else-if="bankAction(row.bank) === 'open'" class="credit-debt-placeholder">
+            账期到 {{ dateLabel(row.bank.period_end_on) }} 才出账，尚未结束的账期不能生成待补流水。
+          </p>
+          <p v-else class="credit-debt-placeholder">银行未报出应还金额，无法生成待补流水。</p>
+        </div>
+
         <button v-if="canWrite" type="button" class="btn-quiet credit-debt-action" @click="emit('configure', row.card.account_id)">
           {{ row.card.configured ? '调整' : '设置账单日' }}
         </button>
@@ -181,6 +214,9 @@ function goSettings() {
 .credit-debt-bank { margin: 0; padding: 8px 10px; border-radius: 12px; background: var(--soft); color: var(--ink); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .credit-debt-bank-status { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--primary-pale); color: var(--primary-deep); font-weight: 650; }
 .credit-debt-review { margin: 0; color: #8a5a4c; font-size: 11px; overflow-wrap: anywhere; }
+.credit-debt-placeholder-block { display: grid; gap: 6px; justify-items: start; }
+.credit-debt-placeholder { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.credit-debt-placeholder-action { margin: 0; }
 .credit-debt-bank-failed { margin: 0; padding: 9px 11px; border-radius: 12px; background: var(--cat-1); color: #8a5a4c; font-size: 12px; }
 .credit-debt-action { justify-self: start; margin-top: 2px; }
 .credit-debt-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }

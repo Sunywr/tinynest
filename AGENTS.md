@@ -8,7 +8,8 @@
 > V2 之后按需重新引入的增量，均与 V1 同名模块**不同**，不得据此认为模块已恢复：
 > 迁移 007 的 `project_budgets` 只做「预算 − 关联流水」额度统计（无 V1 `projects` 表与项目路由）；
 > 迁移 009–011 的账单邮箱只读 IMAP 并只存 AES-GCM 密文授权码；迁移 012 的 `card_statements` / `card_statement_sources`
-> 只保存**银行报的**账期金额用于只读比对，不写分录、不参与还款计划，命名刻意避开 V1 的 `credit_statements` / `credit_statement_items`。生产数据库**不做 V1 原地升级**，
+> 只保存**银行报的**账期金额用于只读比对，不写分录、不参与还款计划，命名刻意避开 V1 的 `credit_statements` / `credit_statement_items`。
+> 迁移 013 的 `statement_placeholders` 只是「银行账单 ↔ 待补明细占位流水」的一对一关联 + 银行自己报的账期日期：占位本身是一条**真实的信用卡支出分录**（分类「待补明细」、`occurred_on`=还款截止日），由用户点按钮确认后生成，不是 V1 的自动过账/分期/利息，明细补录后冲正即归零。生产数据库**不做 V1 原地升级**，
 > 清理与切换由用户按 [生产清理手册](docs/plans/v2-prod-purge-runbook.md) 与
 > [新库切换手册](docs/plans/v2-cutover-runbook.md) 执行；未执行前相关结论一律 `UNVERIFIED`。
 > Phase 0 与 V0.1 只作为历史归档，不再约束当前代码；历史交付见
@@ -31,7 +32,7 @@
 
 1. `README.md`（产品定位与当前状态）、`docs/project-status.md`（进度与实测数字）、`docs/DEVELOPMENT.md`（启动与验证）。
 2. `docs/plans/v2-bookkeeping-reset.md`（P0–P5 总计划）、`docs/plans/v2-bookkeeping-module-spec.md`（模块与 API 契约冻结稿）、`docs/plans/v2-platform-optimization.md`（三端优化计划）。
-3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（**72 条**业务路由契约）、`docs/er-v2.md`（**37 张**表与冲正不变量）。
+3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（**73 条**业务路由契约）、`docs/er-v2.md`（**38 张**表与冲正不变量）。
 4. `docs/plans/v2-prod-purge-runbook.md`（生产清理）、`docs/plans/v2-cutover-runbook.md`（新库切换）；执行前逐条核对。
 5. `docs/architecture.md`（双服务器边界）、`docs/security.md`（安全底线）、`docs/deployment.md`（部署与迁移）、`docs/acceptance.md`（验收清单）。
 6. 仍然有效：`docs/design-system.md`（**A · 奶油团子**，唯一主题，不得提供其他风格）、`assets/brand/README.md`（唯一批准原图 SHA-256，严禁改绘/重新生成图标）、`docs/reviews/v2-baseline.md`（V2 基线与 P5 结果）。
@@ -59,6 +60,7 @@
 - 业务日期统一 Asia/Shanghai，使用可注入时钟 `API.businessToday()` / `businessDate()`；审计、会话等时间戳仍以 UTC 存储。
 - 统计只认科目编码：收入 `4010:%`（贷−借）、支出 `5010:%`（借−贷），分类 id 由 `SUBSTR(account_code, 6)` 解析；转账与信用卡还款不计入收支（见 `internal/api/stats.go`）。
 - 信用卡还款计划是**只读派生**：从 `journal_lines` + 当前有效 `transactions` + `users.payday` 计算，不写分录、不改余额、不缓存，也不读取 `card_statements`。查询同样必须按 `household_id` 限定。
+  **唯一例外（迁移 013 起）**：关联到 `statement_placeholders` 的「待补明细」占位流水不受「截至今天」过滤约束，且按银行自己的 `period_start_on` / `period_end_on` / `due_on` 归期而不是卡的周期网格——占位的意义就是让未来的还款截止日提前占住现金。除日期之外仍不读 `card_statements` 的任何金额。
 
 ### 安全配置（必须显式）
 
@@ -75,16 +77,16 @@
 
 - V2 是一次**基线重置**：不支持 V1 旧库原地升级。数据库必须由 V2 二进制在空库上建立 `schema_meta.baseline=v2`；旧库按切换手册新建库 + 导入身份数据，禁止把 V2 二进制指向旧库。
 - **不得绕过 baseline 守卫**：`internal/db/migrate.go` 在 `schema_meta.baseline` 缺失或不为 `v2`、出现不认识的迁移版本、校验和不一致时拒绝启动。不要通过改守卫、改 `schema_meta`、删迁移账本等方式强行启动。
-- 两个方言当前各有 **12 个迁移文件**（`internal/db/migrations/` SQLite 与 `internal/db/mysql/` MySQL 同名）：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）、`005_investments.sql`（证券/理财估值快照 2 张）、`006_auth_login_locks.sql`（登录风控）、`007_project_budgets.sql`（项目预算 2 张）、`008_transaction_source_metadata.sql`、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`（按服务商隔离，含从 009/010 复制）、`012_card_statements.sql`（银行账单汇总 2 张）。
-- 数据库只在后端 B 机；V2 空库迁移后共 **37 张表**（含基线标记 `schema_meta`），加迁移账本 `schema_migrations` 后 MySQL 运行时 **38 张**，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **39 张**。009/010 的旧表 011 只复制不删除，因此新旧两组并存，新代码只读写 011 的两张表。
+- 两个方言当前各有 **13 个迁移文件**（`internal/db/migrations/` SQLite 与 `internal/db/mysql/` MySQL 同名）：`001_core.sql`（21 张表）、`002_bookkeeping.sql`（4 张）、`003_category_style.sql`（分类颜色）、`004_credit_cycle.sql`（信用卡账单日/还款日）、`005_investments.sql`（证券/理财估值快照 2 张）、`006_auth_login_locks.sql`（登录风控）、`007_project_budgets.sql`（项目预算 2 张）、`008_transaction_source_metadata.sql`、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`（按服务商隔离，含从 009/010 复制）、`012_card_statements.sql`（银行账单汇总 2 张）、`013_statement_placeholders.sql`（待补明细占位关联 1 张）。
+- 数据库只在后端 B 机；V2 空库迁移后共 **38 张表**（含基线标记 `schema_meta`），加迁移账本 `schema_migrations` 后 MySQL 运行时 **39 张**，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **40 张**。009/010 的旧表 011 只复制不删除，因此新旧两组并存，新代码只读写 011 的两张表。
 - SQLite 迁移文件与账本行在同一事务执行；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重复执行**。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；确需 `ALTER TABLE` 时用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法），不能裸写会重复失败的 ALTER。
-- 默认分类来自 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()`，不要再加 SQL 种子文件或启动期 `UPDATE`。
+- 默认分类来自 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()`，不要再加 SQL 种子文件或启动期 `UPDATE`。「待补明细」不在默认分类里：由 `internal/api/credit_statement_placeholder.go` 的 `placeholderCategory()` 在写事务内按需 ensure（缺失则插入，被软删除则重新激活），不得改成种子文件或启动期 `UPDATE`。
 
 ### 生产清理 CLI（`tinynest-admin`）安全规则
 
 - `tinynest-admin` 是**只能在服务器本地、服务停止时由人工执行**的运维工具，**绝不能通过 HTTP 暴露**，也不得被 `cmd/server` 引用。
-- `purge` 只删数据行（DML），在**单事务**内按子表→父表顺序删除清理清单：`PurgeTableSet()` 与 `DeleteOrder()` 均为 **54 个表名**，其中在当前 V2 schema 中存在的只有 **22 张**，其余 32 个是 V1 遗留名（`projects`、`credit_*`、`installment_*`、`debt_*`、`investment_*`（快照除外）、`stock_*`、`schedule_*`、`statement_import_*`、`credit_mail*`），遇到按 `Missing` 跳过；事务内断言「业务表全空 + 11 张身份表 + 2 张保留的个人配置表计数不变 + `users` 摘要不变」后才提交，任一失败整体回滚。
-- 账单表（`card_statements` / `card_statement_sources`）、绑卡关系（`statement_mailbox_card_links` / `credit_statement_bindings`）与投资估值快照按**业务数据清空**；含加密授权码的 `statement_mailbox_configs` / `credit_statement_mailboxes` 属个人凭据，列在 `PreservedConfigTables` 随身份保留、但不进入身份导出/导入。`auth_login_locks` 是安全状态，同样不清空。
+- `purge` 只删数据行（DML），在**单事务**内按子表→父表顺序删除清理清单：`PurgeTableSet()` 与 `DeleteOrder()` 均为 **55 个表名**，其中在当前 V2 schema 中存在的只有 **23 张**，其余 32 个是 V1 遗留名（`projects`、`credit_*`、`installment_*`、`debt_*`、`investment_*`（快照除外）、`stock_*`、`schedule_*`、`statement_import_*`、`credit_mail*`），遇到按 `Missing` 跳过；事务内断言「业务表全空 + 11 张身份表 + 2 张保留的个人配置表计数不变 + `users` 摘要不变」后才提交，任一失败整体回滚。
+- 账单表（`card_statements` / `card_statement_sources`）、占位关联（`statement_placeholders`，删除顺序排在 `card_statements` 与 `transactions` 之前）、绑卡关系（`statement_mailbox_card_links` / `credit_statement_bindings`）与投资估值快照按**业务数据清空**；含加密授权码的 `statement_mailbox_configs` / `credit_statement_mailboxes` 属个人凭据，列在 `PreservedConfigTables` 随身份保留、但不进入身份导出/导入。`auth_login_locks` 是安全状态，同样不清空。
 - 任何新迁移加的表必须显式归类，否则 `Snapshot.Unclassified` 会在清点后列出它并让 `verify` 失败——「业务表全空」这句断言只覆盖已分类的表，正是这个守卫在防止漏清。
 - 身份表白名单（11 张）不得进入删除清单：`households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`。
 - `-confirm` 必须与数据库名完全一致（SQLite 为数据库文件路径）；`-execute` 必须同时提供 `-yes-service-stopped`；MySQL 口令只能从受保护文件读取，不得出现在命令行。
@@ -109,10 +111,11 @@
 | 保留 | 只读证券/理财估值快照：`investment_accounts` / `investment_holdings`，经 `GET /accounts?include=investments` 投影；不写分录、不参与转账 |
 | 保留 | 项目预算 `project-budgets`（`project_budgets` + `transaction_budget_links`，只做额度统计）、流水来源元数据 `transaction_source_metadata`、持久化登录风控 `auth_login_locks` |
 | 保留 | 信用卡账单邮箱与只读对账（`/api/v1/credit-statement-mailbox*`、`/api/v1/accounts/{id}/credit-statement-{preview,sync,binding}`、`GET /api/v1/credit-statements`）：只读 IMAP 取银行发的账单汇总，密文存授权码，落 `card_statements` / `card_statement_sources` 只做只读比对，不写分录、不参与还款计划 |
+| 保留 | 待补明细占位 `POST /accounts/{id}/credit-statement-placeholder`（`statement_placeholders`，迁移 013）：账单已出、明细未上传时，按银行报出的应还生成一笔「待补明细」信用卡支出（`occurred_on`=还款截止日），关联表只存账单 ↔ 流水与银行账期日期；金额由服务端取自已落库账单、不接受客户端提交，重复请求 409，明细补录后冲正归零 |
 | 保留 | 前端五界面：账单 / 记账面板 / 图表 / 资产 / 我的；账户行内转账；前端 xlsx 导出；PWA |
 | 退役 | V1 信用账单（`credit_statements` / `credit_statement_items` 及其还款、调整、计提）、分期、负债、到期调度、**V1 投资交易**、股票自选、V1 账单导入（`statement_import_*`）、V1 信用账单邮件（`credit_mailbox*` / IMAP 自动过账）、V1 项目（`projects` 表）、仪表盘、退款、家庭公告 |
 
-退役模块的路由、视图与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。两个例外都只是数据：只读投资估值快照是 pfm 导入的展示数据，不提供买卖、转账、估值重算或已实现收益账务；`card_statements` 是银行报的账期金额，只用于与账本派生值比对差异，不产生分录。009/010 留下的 `credit_statement_mailboxes` / `credit_statement_bindings` 是 011 拆分前的旧结构，011 复制数据但不删表，新代码不再读写。
+退役模块的路由、视图与表结构已删除；`internal/credit`、`internal/invest` 包不存在。不要以「历史兼容」为名恢复它们。信用卡还款计划只保留 `accounts` 两列配置与 `internal/api/credit_debt.go` 的只读派生，不构成恢复 V1 信用账单模块。两个例外都只是数据：只读投资估值快照是 pfm 导入的展示数据，不提供买卖、转账、估值重算或已实现收益账务；`card_statements` 是银行报的账期金额，只用于与账本派生值比对差异，本身不产生分录——用户显式点击「生成待补流水」才由 `statement_placeholders` 关联一笔占位支出，这是人工确认的单笔记账，不是 V1 的 IMAP 自动过账、分期或利息计提。009/010 留下的 `credit_statement_mailboxes` / `credit_statement_bindings` 是 011 拆分前的旧结构，011 复制数据但不删表，新代码不再读写。
 
 ## Phase 0（历史，仅存档，不再约束当前代码）
 

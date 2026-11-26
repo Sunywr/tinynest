@@ -33,9 +33,15 @@ const cardStatementColumns = `
 			  AND e.occurred_on>=s.period_start_on AND e.occurred_on<=s.period_end_on
 			  AND e.status='posted' AND e.reversal_of IS NULL AND e.biz_type='expense'
 			  AND t.status='posted' AND t.type='expense' AND t.account_id=s.account_id
-	       ) END AS ledger_charge_minor
+	       ) END AS ledger_charge_minor,
+	       pt.id AS placeholder_transaction_id,
+	       pt.status AS placeholder_status
 	FROM card_statements s
 	JOIN accounts a ON a.household_id=s.household_id AND a.id=s.account_id
+	-- At most one placeholder row per statement is enforced by the primary key, so
+	-- this join cannot multiply the list.
+	LEFT JOIN statement_placeholders ph ON ph.household_id=s.household_id AND ph.statement_id=s.id
+	LEFT JOIN transactions pt ON pt.household_id=ph.household_id AND pt.id=ph.transaction_id
 	WHERE s.household_id=?
 	ORDER BY s.period_end_on DESC, a.name ASC, s.id ASC`
 
@@ -52,8 +58,10 @@ func (a *API) handleListCardStatements(w http.ResponseWriter, r *http.Request) {
 		var id, accountID, accountName, periodEnd, currency, status, reviewReason string
 		var amount, sourceCount int64
 		var periodStart, dueOn, ledgerCharge sql.NullString
+		var placeholderID, placeholderStatus sql.NullString
 		if err := rows.Scan(&id, &accountID, &accountName, &periodStart, &periodEnd, &dueOn,
-			&currency, &amount, &status, &reviewReason, &sourceCount, &ledgerCharge); err != nil {
+			&currency, &amount, &status, &reviewReason, &sourceCount, &ledgerCharge,
+			&placeholderID, &placeholderStatus); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -63,6 +71,8 @@ func (a *API) handleListCardStatements(w http.ResponseWriter, r *http.Request) {
 			"due_on": nullable(dueOn), "currency": currency, "amount_due_minor": amount,
 			"status": status, "review_reason": reviewReason, "source_count": sourceCount,
 			"ledger_charge_minor": nil, "difference_minor": nil,
+			"placeholder_transaction_id": nullable(placeholderID),
+			"placeholder_state":          placeholderState(placeholderStatus),
 		}
 		if ledgerCharge.Valid {
 			charge, err := strconv.ParseInt(ledgerCharge.String, 10, 64)
@@ -87,6 +97,19 @@ func nullable(value sql.NullString) any {
 		return value.String
 	}
 	return nil
+}
+
+// placeholderState tells the bill view whether a 待补明细 transaction still stands
+// in for the missing details, so the operator can see a reversed placeholder that
+// was never replaced instead of an unexplained gap.
+func placeholderState(status sql.NullString) string {
+	if !status.Valid {
+		return ""
+	}
+	if status.String == "posted" {
+		return "awaiting_detail"
+	}
+	return "reversed"
 }
 
 func nullableText(value string) any {

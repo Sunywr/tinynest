@@ -195,6 +195,27 @@ export type CardStatement = {
   source_count: number
   ledger_charge_minor: number | null
   difference_minor: number | null
+  placeholder_transaction_id: string | null
+  placeholder_state: string
+}
+
+// The 待补明细 placeholder: one expense carrying the bank's own 应还 amount,
+// dated at the reported repayment deadline, so the repayment plan reserves cash
+// before details are ever uploaded. Amount and dates are read back from the
+// stored bank summary, so the client only ever sends the statement id.
+export type StatementPlaceholder = {
+  transaction_id: string
+  statement_id: string
+  account_id: string
+  account_name: string
+  amount_minor: number
+  currency: string
+  occurred_on: string
+  due_on: string
+  period_start_on: string | null
+  period_end_on: string
+  category_id: string
+  category_name: string
 }
 export type InvestmentHolding = {
   id: string
@@ -429,6 +450,8 @@ export const api = {
   accountsWithDebt: () => get<AccountsWithDebt>('/accounts?include=credit_debt'),
   accountsOverview: () => get<AccountsOverview>('/accounts?include=credit_debt,investments'),
   cardStatements: () => get<{ items: CardStatement[] }>('/credit-statements'),
+  createStatementPlaceholder: (accountId: string, statementId: string) =>
+    post<StatementPlaceholder>(`/accounts/${encodeURIComponent(accountId)}/credit-statement-placeholder`, { statement_id: statementId }),
   investments: () => get<AccountsWithInvestments>('/accounts?include=investments'),
   account: (id: string) => get<Account & { items?: unknown[] }>(`/accounts/${encodeURIComponent(id)}`),
   createAccount: (body: {

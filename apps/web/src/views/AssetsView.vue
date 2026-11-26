@@ -5,17 +5,20 @@ import { ArrowLeftRight, Plus, X } from 'lucide-vue-next'
 import AccountForm from '../components/AccountForm.vue'
 import AccountRow from '../components/AccountRow.vue'
 import AppSkeleton from '../components/AppSkeleton.vue'
+import ConfirmSheet from '../components/ConfirmSheet.vue'
 import CreditDebtPanel from '../components/CreditDebtPanel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InvestmentPanel from '../components/InvestmentPanel.vue'
 import TransferForm from '../components/TransferForm.vue'
 import { api, type Account, type CardStatement, type CreditDebtPlan, type InvestmentOverview } from '../services/api'
-import { formatMinor } from '../services/format'
+import { formatMinor, dateLabel } from '../services/format'
 import { useSession } from '../composables/useSession'
+import { useToast } from '../composables/useToast'
 
 type JournalRow = { id: string; occurred_on: string; change_minor?: number; amount_minor?: number; note?: string | null; reversal_of?: string | null }
 
 const session = useSession()
+const { toast, error: toastError } = useToast()
 const accounts = ref<Account[]>([])
 const plan = ref<CreditDebtPlan | null>(null)
 const statements = ref<CardStatement[]>([])
@@ -26,6 +29,8 @@ const error = ref('')
 const formOpen = ref(false)
 const formAccount = ref<Account | null>(null)
 const transferOpen = ref(false)
+const placeholderFor = ref<CardStatement | null>(null)
+const placeholderBusy = ref(false)
 const journalFor = ref<Account | null>(null)
 const journal = ref<JournalRow[]>([])
 const journalLoading = ref(false)
@@ -98,6 +103,46 @@ function closeForm() {
   formAccount.value = null
 }
 
+function askPlaceholder(accountId: string, statementId: string) {
+  const statement = statements.value.find(item => item.id === statementId && item.account_id === accountId)
+  if (!statement) {
+    toastError('银行账单已变化，正在重新读取')
+    void loadStatements(creditAccounts.value.length > 0)
+    return
+  }
+  placeholderFor.value = statement
+}
+
+const placeholderMessage = computed(() => {
+  const statement = placeholderFor.value
+  if (!statement) return ''
+  return `将按「${statement.account_name}」${dateLabel(statement.period_end_on)} 这期账单，记一笔 ${formatMinor(statement.amount_due_minor)} 的待补明细支出。`
+})
+const placeholderDetail = computed(() => {
+  const statement = placeholderFor.value
+  if (!statement) return ''
+  const card = plan.value?.cards.find(item => item.account_id === statement.account_id)
+  const due = statement.due_on ? dateLabel(statement.due_on)
+    : card?.due_day ? `按每月 ${card.due_day} 日还款日推算` : '该卡还没设置还款日，服务器会拒绝并说明原因'
+  return `金额与账期取银行报出的汇总，不是手填；支出日期记在还款截止 ${due}，以便提前占住现金。补录真实明细后删除这笔流水即可冲正。`
+})
+
+async function confirmPlaceholder() {
+  const statement = placeholderFor.value
+  if (!statement || placeholderBusy.value) return
+  placeholderBusy.value = true
+  try {
+    const created = await api.createStatementPlaceholder(statement.account_id, statement.id)
+    toast(`已生成待补明细流水 ${formatMinor(created.amount_minor)} · ${created.occurred_on}`)
+    placeholderFor.value = null
+    await load()
+  } catch (e) {
+    toastError(e instanceof Error ? e.message : '生成待补明细流水失败，请重试')
+  } finally {
+    placeholderBusy.value = false
+  }
+}
+
 async function openJournal(account: Account) {
   if (journalLoading.value) return
   journalFor.value = account
@@ -154,11 +199,13 @@ onMounted(() => void load())
     <InvestmentPanel v-if="investments && investments.account_count && !error" :overview="investments" />
 
     <CreditDebtPanel v-if="plan && plan.cards.length && !error" :plan="plan" :can-write="canWrite"
-      :statements="statements" :statements-failed="statementsFailed" @configure="openConfigure" />
+      :statements="statements" :statements-failed="statementsFailed" :placeholder-busy="placeholderBusy"
+      @configure="openConfigure" @placeholder="askPlaceholder" />
 
     <p class="info-line" role="note">
       现金与信用卡仍按复式记账；信用卡是负债账户，支出增加欠款、还款按账户转账处理。可为信用卡设置账单日与还款日，
       页面按已入账流水估算发薪日前需准备的现金；不提供分期、利息、最低还款或自动扣款。
+      账单已出但明细没上传时，可按银行报出的应还金额生成一笔「待补明细」支出，记在还款截止日，让还款计划先把这笔现金占住；补录明细后删除这笔占位即可。
       证券/理财账户为只读估值快照，不写分录、不参与转账；其市值计入本页净资产，但不等同于账本余额。
     </p>
 
@@ -217,5 +264,9 @@ onMounted(() => void load())
     <SurfaceTransition>
       <TransferForm v-if="transferOpen" :accounts="active" @close="transferOpen = false" @saved="load" />
     </SurfaceTransition>
+
+    <ConfirmSheet :open="!!placeholderFor" title="生成待补明细流水？" :message="placeholderMessage"
+      :detail="placeholderDetail" confirm-label="生成占位流水" cancel-label="取消"
+      :busy="placeholderBusy" @confirm="confirmPlaceholder" @cancel="placeholderFor = null" />
   </section>
 </template>

@@ -1,10 +1,10 @@
 # TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
-> 契约范围：**72 条业务路由**（按「方法 + 路径」计，在 `91b47c9` 上以 `TestRouteBudget` 实测）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 72。
-> 路由总数由 `TestRouteBudget` 冻结为 ≤72；包括注册及登录使用的图形验证码入口。
+> 契约范围：**73 条业务路由**（按「方法 + 路径」计，2026-11-26 在当前工作树以 `TestRouteBudget` 实测：`Register wired 73 routes (budget 73)`）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 73。
+> 路由总数由 `TestRouteBudget` 冻结为 ≤73；包括注册及登录使用的图形验证码入口。
 > 信用卡还款计划与投资估值不是新路由，而是 `GET /accounts?include=credit_debt,investments` 的可选投影；`include` 接受空值、`credit_debt`、`investments` 或逗号组合。
-> 账单邮箱、绑卡、预览、同步与只读对账共 10 条路由见 §11，全部只读账本、不写分录。
+> 账单邮箱、绑卡、预览、同步与只读对账共 11 条路由见 §11：其中 10 条只读账本、不写分录，只有 `POST /accounts/{id}/credit-statement-placeholder`（生成「待补明细」占位流水）会写入账本。
 
 ## 1. 通用约定
 
@@ -240,9 +240,9 @@
 
 支出可通过 `budget_id` 关联一个家庭内项目。更正时省略该字段保留关联，传空字符串清除关联。仅提交 `budget_id` 时只更新关联和审计记录。项目实际支出按关联的有效分录跨月累计，同时仍计入发生当月的月度预算。
 
-## 11. 信用卡账单邮箱与对账（10 条）
+## 11. 信用卡账单邮箱、对账与待补明细占位（11 条）
 
-鉴权：会话，且当前用户 `role` ∈ `admin` / `member`（`viewer` 与已被降级的账号在写路径上返回 403 `forbidden`「当前账号不能修改此邮箱配置」）。所有路径都接受查询参数 `provider`，取值 `qq`（默认，含空值）或 `163`，其他值 400 `invalid_request`「请选择 QQ 或 163 邮箱」。
+鉴权：会话，且当前用户 `role` ∈ `admin` / `member`（`viewer` 与已被降级的账号在写路径上返回 403 `forbidden`；邮箱类路径给出「当前账号不能修改此邮箱配置」，其余写路径由中间件统一给出「只读账号不能修改家庭账本」）。除 `POST /accounts/{id}/credit-statement-placeholder`（只读已落库的账单，不访问邮箱，忽略 `provider`）外，本节路径都接受查询参数 `provider`，取值 `qq`（默认，含空值）或 `163`，其他值 400 `invalid_request`「请选择 QQ 或 163 邮箱」。
 
 邮箱配置按 `(household_id, user_id, provider)` 隔离，`version` 是乐观锁：读取返回当前版本，写入必须回传同一版本，成功后自增。授权码以 AES-GCM 密文存 `auth_code_cipher`（密钥来自 `TINYNEST_MAIL_KEY_FILE`），响应只回显掩码邮箱，**任何接口都不返回明文邮箱或授权码**；IMAP 全程只读（不删信、不改旗标）。
 
@@ -257,7 +257,8 @@
 | DELETE | `/accounts/{id}/credit-statement-binding` | 同上 | 204 无响应体（重复解绑幂等）；写审计 `unbind_statement_card`；被他人绑定视为 404 | 400、404、409 `conflict`、403、503 |
 | POST | `/accounts/{id}/credit-statement-preview` | 查询 `provider?`、`version`（必填 ≥1） | 200 `{items:[{received_on?,statement_on?,due_on?,amount_due_minor?,needs_review?}],since:"YYYY-MM-DD"}`，`since` 为业务今天前 30 天；只读 IMAP 搜索并把解析结果**只回显、不落库** | 400 `unsupported_statement_card`、404（该卡未绑定给当前邮箱）、409、429 `rate_limited`、502 `statement_preview_failed`、503 |
 | POST | `/accounts/{id}/credit-statement-sync` | 同上，`since` 为业务今天前 45 天 | 200 `{since,created,linked,conflicts,needs_review,items:[{statement_on,due_on,result}]}`，`result` ∈ `created`/`linked`/`conflict`/`needs_review` | 同预览 |
-| GET | `/credit-statements` | 无 | 200 `{items:[{id,account_id,account_name,period_start_on,period_end_on,due_on,currency,amount_due_minor,status,review_reason,source_count,ledger_charge_minor,difference_minor}]}`，按 `period_end_on` 降序；`ledger_charge_minor`/`difference_minor` 在无账期起点时为 `null` | 401 |
+| GET | `/credit-statements` | 无 | 200 `{items:[{id,account_id,account_name,period_start_on,period_end_on,due_on,currency,amount_due_minor,status,review_reason,source_count,ledger_charge_minor,difference_minor,placeholder_transaction_id,placeholder_state}]}`，按 `period_end_on` 降序；`ledger_charge_minor`/`difference_minor` 在无账期起点时为 `null`；`placeholder_transaction_id` 在无占位时为 `null`，`placeholder_state` ∈ `''`（无占位）/ `awaiting_detail`（占位仍有效）/ `reversed`（占位已被冲正） | 401 |
+| POST | `/accounts/{id}/credit-statement-placeholder` | `statement_id`（必填，非空） | 201 `{transaction_id,statement_id,account_id,account_name,amount_minor,currency:"CNY",occurred_on,due_on,period_start_on,period_end_on,category_id,category_name:"待补明细"}`；`occurred_on == due_on`，`period_start_on` 可为 `null`；同一事务内写 `transactions` + 配平分录 + `statement_placeholders` 关联 + 审计 `create_statement_placeholder`（`entity="transaction"`，payload 含 `statement_id`/`amount_minor`/`due_on`） | 400 `invalid_request`、401、403 `forbidden`（`viewer`）、404 `not_found`（卡不存在/已停用/非 `credit`，或该 `statement_id` 不属于本家庭这张卡）、409 `cycle_not_closed` / `amount_unknown` / `due_date_unknown` / `cycle_already_recorded` / `placeholder_exists` / `placeholder_reversed` |
 
 约束与口径：
 
@@ -268,9 +269,20 @@
 - 落库只写 `card_statements` / `card_statement_sources`（见 [数据模型](er-v2.md) §6.4），不写 `transactions` / `journal_entries`，也不被还款计划读取。同一 `(household_id, account_id, period_end_on)` 已存在时**保留首次记录的金额**，只有金额不一致才在 `review_reason=''` 时写入「银行账单金额与已记录金额不一致，请核对」并计为 `conflict`。
 - 来源幂等：`digest = SHA-256("email", provider, user_id, IMAP UID, account_id, statement_on, due_on, 卡尾号, amount_due, "CNY")`，配合 `UNIQUE(household_id, digest)`；同一封邮件重放只增加不重复，且不新增审计。
 - 审计只在 `created + conflicts > 0` 时写一条 `sync_card_statement`（`entity="card_statement"`，`entity_id` 为卡账户 ID，payload 含三种计数）。
-- `ledger_charge_minor` 由同一账期内该卡的**有效**支出分录聚合（`e.status='posted' AND e.reversal_of IS NULL AND biz_type='expense'` 且 `t.status='posted' AND t.type='expense'`），`difference_minor = amount_due_minor − ledger_charge_minor`；两者仅作只读比对，任何非零差额都不触发自动过账。
+- `ledger_charge_minor` 由同一账期内该卡的**有效**支出分录聚合（`e.status='posted' AND e.reversal_of IS NULL AND biz_type='expense'` 且 `t.status='posted' AND t.type='expense'`，窗口 `occurred_on` ∈ `[period_start_on, period_end_on]`），`difference_minor = amount_due_minor − ledger_charge_minor`；两者仅作只读比对，任何非零差额都不触发自动过账。占位流水记在还款截止日、落在该窗口**之外**，因此生成占位后 `ledger_charge_minor` 不变、差额仍显示「明细未补」——占位解决的是现金流占位，不是对账差额。
 
-## 12. 健康检查（2 条，不计入 72）
+### 11.1 待补明细占位
+
+用户懒得上传明细时，可把银行已报的当期应还**先记成一笔真实支出**，科目是自动确保存在的单层分类「待补明细」（`code=pending`，`cat_<householdID>_pending`），日期是还款截止日，备注写明账期、金额与「明细补录后请冲正本笔」。该接口是 §11 中唯一写账本的路径，契约要点：
+
+- **只接受 `statement_id`**：金额、账期、截止日全部取自已落库的 `card_statements` 行，客户端不能提交金额；`statement_id` 不属于本家庭这张卡时按 404 处理，不泄露他人数据。分类行由事务内 `placeholderCategory()` 确保存在（缺失则按 `kind='expense'` 追加排序插入，已被软删除则重新激活），不新增迁移种子。
+- 拒绝条件（均 409，`message` 即界面文案）：`cycle_not_closed`（`period_end_on` 晚于业务今天，账期没结束就没有应还）、`amount_unknown`（银行未报金额或 ≤0）、`due_date_unknown`（银行未报截止日且账户未配 `due_day`，或日期无法解析）、`cycle_already_recorded`（该账期已有有效支出净额，重复占位会双计）。银行未报截止日但账户配了还款日时，按账期结束日 + `dueAfter()` 推算截止日。
+- 幂等：`PRIMARY KEY(household_id, statement_id)` + 幂等键 `statement-placeholder:<statement_id>`。已挂占位再请求返回 409 `placeholder_exists`（响应带 `transaction_id`）；占位已被冲正则返回 409 `placeholder_reversed`。事务内会**重新检查**关联与账期净额，因此并发同步或重复点击不会双计；唯一键冲突回滚后重读关联再回 409，而不是 500。
+- 一次性写入：`transactions` 行、配平分录（`journal_entries` / `journal_lines`）、`statement_placeholders` 关联、审计日志在同一 `WithTx` 内完成，任一失败整体回滚。
+- 删除方式：走标准 `DELETE /transactions/{id}`（冲正，`reversal_of` 沿用原 `occurred_on`），同一账期净额归零；关联行保留以便界面显示「已冲正」并阻止重复占位。补录真实明细后可直接冲正占位，顺序不限。
+- 与还款计划的关系：计划把这笔占位按 `statement_placeholders` 里的**银行账期**归入对应账期（而不是 `occurred_on` 所在的下一期），因此逾期未还会显示为 `overdue`、待还合计包含该金额；被冲正的占位不再计入。
+
+## 12. 健康检查（2 条，不计入 73）
 
 | 方法 | 路径 | 鉴权 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
@@ -289,6 +301,7 @@
 - 重放：同一家庭内已提交过该键时，直接返回 200 `{id,status:"posted",replayed:true}`，不重复记账；事务失败后还会再查一次，覆盖并发请求已提交同键的情况。
 - 幂等键不跨家庭复用：回放查询按 `(idempotency_key, household_id)` 限定，其他家庭看不到该流水。
 - 账单同步不使用 `Idempotency-Key`：去重靠数据库唯一约束 `(household_id, account_id, period_end_on)` 与来源 `UNIQUE(household_id, digest)`，以及邮箱配置 `version` 的乐观锁，因此重复点击同步不会产生第二行账单或第二条来源。
+- 待补明细占位同样**不读客户端 `Idempotency-Key`**：去重靠 `statement_placeholders` 的 `PRIMARY KEY(household_id, statement_id)`，并额外写入服务器派生的键 `statement-placeholder:<statement_id>`（`transactions.idempotency_key` / `journal_entries.idempotency_key`），因此重复点击返回 409 `placeholder_exists`，不会产生第二笔占位支出。
 
 ### 13.2 家庭隔离与只读角色
 

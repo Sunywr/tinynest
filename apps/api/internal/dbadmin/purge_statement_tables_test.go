@@ -35,6 +35,12 @@ func seedStatementRows(t *testing.T, admin *Admin, f fixture) {
 	mustExec(t, admin, `INSERT INTO card_statement_sources
 		(id, household_id, statement_id, kind, provider, user_id, uid, received_on, digest, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		"css1", f.household, "cs1", "email", "qq", f.user, 42, "2026-11-01", "digest1", "2026-11-01T00:00:00Z")
+	// The 待补明细 placeholder references both the statement and a transaction, so
+	// it is the deepest child in this chain.
+	mustExec(t, admin, `INSERT INTO statement_placeholders
+		(household_id, statement_id, transaction_id, period_start_on, period_end_on, due_on, created_at)
+		VALUES (?,?,?,?,?,?,?)`,
+		f.household, "cs1", "tx1", "2026-10-02", "2026-11-01", "2026-11-25", "2026-11-01T00:00:00Z")
 	mustExec(t, admin, `INSERT INTO investment_accounts (id, household_id, kind, name, cash_minor) VALUES (?,?,?,?,?)`,
 		"inv1", f.household, "security", "证券账户", 500000)
 	mustExec(t, admin, `INSERT INTO investment_holdings (id, household_id, account_id, symbol, name, market_value_minor)
@@ -53,7 +59,7 @@ func TestPurgeClearsCardStatementTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("purge with synced statements: %v (committed=%v)", err, result.Committed)
 	}
-	for _, table := range []string{"card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts", "investment_holdings"} {
+	for _, table := range []string{"statement_placeholders", "card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts", "investment_holdings"} {
 		var rows int
 		if err := admin.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&rows); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -119,6 +125,7 @@ func TestStatementTablesSortBeforeTheirParentsInDeleteOrder(t *testing.T) {
 		position[table] = i
 	}
 	childBefore := map[string][]string{
+		"statement_placeholders":       {"card_statements", "transactions"},
 		"card_statements":              {"accounts"},
 		"card_statement_sources":       {"card_statements"},
 		"statement_mailbox_card_links": {"accounts"},

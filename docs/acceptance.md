@@ -7,14 +7,14 @@
 ## 1. 构建与静态检查
 
 - [ ] `cd apps/api && go build ./...`
-- [ ] `cd apps/api && go test ./... -count=1`（115 个 Test 函数；无 MySQL 时 2 个 drill 会 skip）
+- [ ] `cd apps/api && go test ./... -count=1`（159 个 Test 函数、35 个 `*_test.go`；无 MySQL 时 2 个 drill 会 skip）
 - [ ] `cd apps/api && go vet ./...`
 - [ ] `cd apps/api && go mod tidy -diff`（退出码必须为 0）
 - [ ] `cd apps/api && go test -race ./... -count=1`（需 cgo/gcc；不具备时标 `UNVERIFIED`）
 - [ ] `cd apps/web && npm.cmd ci`（Windows 上 `npm` 被执行策略拦截时用 `npm.cmd`）
 - [ ] `cd apps/web && npm.cmd run typecheck`
 - [ ] `cd apps/web && npm.cmd run build`
-- [ ] `cd apps/web && npm.cmd run test:e2e`（78 条用例）
+- [ ] `cd apps/web && npm.cmd run test:e2e`（98 条用例，2 个 spec 文件）
 - [ ] `git diff --check`（退出码必须为 0）
 - [ ] 全树无行尾空白：`git grep -nI -E '[[:blank:]]+$' -- '*.md' '*.go' '*.ts' '*.vue' '*.css' '*.py' '*.sql' '*.yml' '*.yaml' '*.json' '*.html' '*.js'`
 - [ ] `python3 scripts/verify-brand.py`（原始团子图与 Web 副本 SHA-256 一致）
@@ -22,8 +22,9 @@
 
 ## 2. 迁移与基线
 
-- [ ] 空库全量迁移：`TestMigrateFromZeroAppliesBothVersions` 通过，`schema_migrations` 版本为 1、2
+- [ ] 空库全量迁移：`TestMigrateFromZeroAppliesEveryVersion` 通过，`schema_migrations` 版本为 `[1..13]`（两个方言各 13 个迁移文件，`001`–`013`）；011 拆分把既有 QQ 配置与绑定复制进按服务商隔离的新表：`TestStatementProvidersMigrateExistingQQMailboxAndBinding` 断言升级到 `[11 12]`
 - [ ] 重复执行 `Migrate()` 为 no-op：`TestMigrationsAreIdempotent`
+- [ ] `013_statement_placeholders.sql` 两方言同名同义，MySQL 版可重复执行：隔离 8.4.7 实例上空库跑完 001→013（`applied_versions=13`、库内 39 张含 `schema_migrations`），已建库再 `SOURCE` 两次退出码 `0 0`，`SHOW CREATE TABLE` 显示 `PRIMARY KEY(household_id,statement_id)`、`uq_statement_placeholders_transaction`、`idx_statement_placeholders_due` 与指向 `card_statements(household_id,id)` 的 `ON DELETE CASCADE`；SQLite 空库迁移后 40 张（多 `sqlite_sequence`）
 - [ ] V1 形态的迁移账本（无 `checksum` 列）被拒绝：`TestV1ShapedLedgerIsRefusedUntouched`
 - [ ] `schema_meta.baseline` 缺失或不是 `v2` 时拒绝启动：`TestBaselineGuardRejectsV1Database`、`TestBaselineGuardRequiresV2Marker`
 - [ ] 迁移文件校验和被篡改时拒绝启动：`TestChecksumTamperIsDetected`
@@ -35,7 +36,7 @@
 
 ## 3. 账务与安全回归
 
-- [ ] 路由预算：`TestRouteBudget`（`Register` ≤55）
+- [ ] 路由预算：`TestRouteBudget`（`Register` ≤73，实测 `Register wired 73 routes`）
 - [ ] 端到端账务闭环：`TestBookkeepingLifecycle`
 - [ ] 更正 = 冲正 + 替换：`TestTransactionCorrectionIsReversalPlusReplacement`
 - [ ] 删除 = 只写冲正：`TestTransactionDeleteIsReversalOnly`
@@ -50,7 +51,9 @@
 - [ ] 信用卡账单日/还款日配置与校验：`TestCreditAccountCycleSettings`、`TestCreditCycleColumnsAreNullable`
 - [ ] 信用卡还款计划：周期/发薪日边界、发薪日前金额、期初欠款、无发薪日/未配置、冲正更正删除、未来日期、溢缴款、两家庭隔离：`TestCreditCycleForBoundaries`、`TestNextPaydayAfterBoundaries`、`TestCreditDebtPlanBeforePayday`、`TestCreditDebtPlanMissingPaydayAndUnconfigured`、`TestCreditDebtPlanOpeningDebtIsAlreadyBilled`、`TestCreditDebtPlanReflectsReversalAndCorrection`、`TestCreditDebtPlanFutureAndOverpayment`、`TestCreditDebtPlanHouseholdIsolation`
 - [ ] 投资估值快照：表结构可用、总额/账户/持仓/收益/股息/占比、家庭隔离、组合 include：`TestInvestmentSnapshotTablesAreUsable`、`TestInvestmentOverviewTotalsAndIsolation`
-- [ ] 无拆分行/退款路由回归：确认 55 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/credit-*`、`/installments`、`/investments`、`/dashboard`、`/schedule`；`GET /accounts?include=credit_debt` 与 `?include=investments` 是既有集合路由的投影，不算新增路由
+- [ ] 无拆分行/退款路由回归：确认 73 条路由中没有 `/refunds`、`/transactions/{id}/replace`、`/projects`、`/installments`、`/investments`、`/dashboard`、`/schedule`，也没有 V1 信用账单的还款/调整/计提/分期写路径；`GET /accounts?include=credit_debt` 与 `?include=investments` 是既有集合路由的投影，不算新增路由
+- [ ] 账单邮箱与只读对账不触碰账本：`TestStatementSyncStoresBankSummaryWithoutLedgerWrites` 等 8 条 `TestStatementSync*` / `TestStatementsAreHouseholdScoped` 断言同步前后 `GET /accounts?include=credit_debt` 的 `total_debt_minor` 不变、不写 `transactions`/`journal_entries`/`journal_lines`；`/api/v1/credit-statement-mailbox*`、`/api/v1/accounts/{id}/credit-statement-{binding,preview,sync}`、`GET /api/v1/credit-statements` 这 10 条是 V2 新增的邮箱与只读汇总路由，**不代表 V1 信用账单模块已恢复**（它们不产生还款、调整、计提或分期）
+- [ ] 待补明细占位写真实分录且守住双计：`TestStatementPlaceholderWritesAwaitingDetailTransaction`（借贷配平、分类「待补明细」、`occurred_on`=还款截止日、审计 `create_statement_placeholder`）、`TestStatementPlaceholderCountsFutureDeadline`（未来截止日仍进还款计划并按银行账期归期，`overdue`/`unbilled` 不被 `occurred_on` 误导）、`TestStatementPlaceholderReversalNetsThePeriodToZero`（冲正后同一日净额归零、计划不再占现金）、`TestStatementPlaceholderReplayReturnsExistingTransaction`（重复请求 409 `placeholder_exists` 且只有一笔）、`TestStatementPlaceholderRefusedWhenCycleAlreadyRecorded`（账期已有明细 → 409 `cycle_already_recorded`）、`TestStatementPlaceholderGuardsStatementState`（`cycle_not_closed` / `amount_unknown` / `due_date_unknown` 三个子用例）、`TestStatementPlaceholderDerivesDeadlineFromCardConfig`（银行未报截止日时按卡的 `due_day` 推算）、`TestStatementPlaceholderPermissionsAndScoping`（`viewer` 403、缺 `statement_id` 400、非信用卡/他家庭/他卡账单 404）、`TestStatementPlaceholderListedWithStatement`（`GET /credit-statements` 回显 `placeholder_transaction_id` / `placeholder_state`）、`TestStatementPlaceholderRowsAreHouseholdConsistent`（关联行家庭一致，SQL 层按 `household_id` 限定）。MySQL 侧同样跑通，但 `TestStatementPlaceholderGuardsStatementState` 的 3 个子用例需**每个子用例一个进程**（见 §2 的空库前提）
 - [ ] 初始化安全：`TestSetupRequiresBootstrapToken`、`TestSetupDisabledWithoutConfiguredToken`、`TestSetupDisabledFlagRefusesBootstrapEvenWithValidToken`、`TestSetupConcurrentBootstrapOnlyOneSucceeds`
 - [ ] Cookie `Secure` 与可信反代：`TestSessionCookieSecureInProductionProxy`、`TestSessionCookieSecureCanBeDisabledForLocalDev`、`TestSessionCookieHonorsTrustedProxyForwardedProto`、`TestSessionCookieIgnoresUntrustedForwardedProto`
 - [ ] 登录失败限流：`TestLoginFailureRateLimit`、`TestLoginRateLimitScopeIsolation`、`TestLoginRateLimitConcurrentAndAuditSafe`
@@ -70,6 +73,7 @@
 - [ ] 资产：现金/信用卡分组、证券/理财只读估值卡片、净资产（含投资市值并明确标注）、行内转账；信用卡可配置账单日/还款日，显示发薪日前需准备、可用现金、缺口、下次还款与账单周期；未配置/无发薪日/逾期/无欠款状态如实标注，不宣称现金足够
 - [ ] 投资卡片：账户归属、市值、成本、累计收益/率、股息率、可展开持仓、最近交易快照与股息；为空账户/无持仓时如实显示
 - [ ] 资产页 390×844 无横向溢出；「设置账单日」可打开编辑表单并保存；「我的 → 个人资料」保存后发薪日不丢失（E06/E07）；投资卡片/图表视图无横向溢出（E08/D06）
+- [ ] 待补明细占位的界面反馈：账单已出且金额已报时才提供按钮；点击先弹确认（写明卡名、账期、金额与还款截止日），确认后成功才提示「已生成待补明细流水 …」并刷新；服务端 409 时确认层保持打开并原样显示服务器原因，不伪造成功（E11/E12，98 条 E2E 全绿）。**真实登录后的人工点按仍 `UNVERIFIED`**
 - [ ] 我的：成员与邀请（邀请新成员、复制邀请链接、撤销邀请、审批加入申请）、分类管理、预算、导出 xlsx、邮箱与密码、管理员区（用户/审计）
 - [ ] 用户管理与审计入口仅管理员可见；普通成员页面不渲染管理员区，接口返回 403（H05 / `TestMemberAccountLifecycle`）
 - [ ] 家庭成员面板显示成员绑定状态；未绑定成员可生成邀请码，已绑定成员显示登录账号与角色；管理员可把本家庭已有账号直接绑定到未绑定成员，非管理员不显示邀请/审批操作
@@ -85,7 +89,9 @@
 
 - [ ] `tinynest-admin` 与 API 共用环境变量，能连到目标库；二进制不出现在任何 HTTP 暴露路径
 - [ ] `identity-export` / `identity-import` 往返：`TestIdentityExportImportRoundTrip`
-- [ ] 清理表集合一致：`TestPurgeTableListsAreConsistent`；45 张清理表、11 张身份表
+- [ ] 清理表集合一致：`TestPurgeTableListsAreConsistent`；`PurgeGroups` 与 `DeleteOrder` 各 **55 个表名（16 组）**，在当前 V2 基线中 **23 张存在、32 个是 V1 遗留名**（按 `Missing` 跳过并列出）；11 张身份表 + 2 张保留的个人配置表（`statement_mailbox_configs`、`credit_statement_mailboxes`）永不进入删除清单
+- [ ] 账单/绑卡/投资快照/待补明细占位可清干净且不阻塞 `DELETE FROM accounts`：`TestPurgeClearsCardStatementTables`（含 `statement_placeholders` 随账单一起清空）、`TestStatementTablesSortBeforeTheirParentsInDeleteOrder`（占位关联排在 `card_statements` 与 `transactions` 之前）；未分类表被 `Snapshot.Unclassified` 挡下：`TestV2SchemaHasNoUnclassifiedTables`
+- [ ] `-household` 不缩小删除范围（多家庭会全部清空）：`TestPurgeHouseholdFlagDoesNotScopeDeletes`
 - [ ] `purge --dry-run` 只读：`TestPurgeDryRunChangesNothing`
 - [ ] 清理后业务表全空、身份不变：`TestPurgeEmptiesBusinessDataAndKeepsIdentity`
 - [ ] 多家庭拒绝：`TestPurgeRefusesMultipleHouseholds`；借贷不平衡拒绝：`TestPurgeRefusesUnbalancedJournal`

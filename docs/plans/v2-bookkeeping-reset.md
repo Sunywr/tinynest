@@ -30,12 +30,12 @@ V2 的目标不是继续增加功能，而是把现状（140 条路由、55 张�
 | --- | --- | --- |
 | 后端 Go 代码 | 121 文件、25,495 行；其中 `internal/api` 95 文件、21,503 行 | 后端非测试代码 ≤7,000 行（P2 实测 7,408 行，差 5.8%，未达标，如实记录） |
 | 前端源码 | `src` 22 文件、5,794 行；`App.vue` 3,041 行单文件 | 前端单文件 ≤300 行（P3 实测最大 242 行，`styles.css` 除外） |
-| HTTP 路由 | 138 + 2 = 140 条 | Register ≤55 条（P2 实测 55 条，`TestRouteBudget` 断言；另有 healthz/readyz 2 条不在 Register 内） |
+| HTTP 路由 | 138 + 2 = 140 条 | Register ≤55 条（P2 实测 55 条，`TestRouteBudget` 断言；另有 healthz/readyz 2 条不在 Register 内。**当前预算为 72**：账单邮箱 5 + 绑卡 2 + 预览/同步 2 + 银行汇总列表 1，实测 `Register wired 73 routes`） |
 | Go 测试 | 51 文件、189 个用例 | ≈120 个（P2 实测 99 个测试函数、21 文件） |
 | Playwright E2E | 89 个（68 + 21） | ≈45 个（P3 实测 72 个） |
-| SQLite 迁移 | 21 个版本 | 单一通用迁移器（基线 001–002；后续追加 003 分类颜色、004 信用卡账单配置，当前 4 个文件） |
-| MySQL 迁移 | 14 个版本 | 单一通用迁移器（基线 001–002；后续追加 003 分类颜色、004 信用卡账单配置，当前 4 个文件） |
-| 数据库表 | SQLite 与 MySQL 各 55 张表；无 `ON DELETE` 级联 | 55 → 25 张（运行时 26 张，含迁移账本 `schema_migrations`） |
+| SQLite 迁移 | 21 个版本 | 单一通用迁移器（基线 001–002；003 分类颜色、004 信用卡账单配置、005 投资快照、006 登录风控、007 项目预算、008 来源元数据、009–011 账单邮箱、012 银行汇总，**当前 13 个文件**） |
+| MySQL 迁移 | 14 个版本 | 单一通用迁移器（与 SQLite 同名 **13 个文件**，MySQL 版必须可重跑） |
+| 数据库表 | SQLite 与 MySQL 各 55 张表；无 `ON DELETE` 级联 | 55 → 25 张为 P2 期目标；**当前空库迁移后 38 张**，MySQL 运行时 39 张（含 `schema_migrations`）、SQLite 40 张（另有 `sqlite_sequence`），逐表见 `docs/er-v2.md` §1 |
 
 统计口径说明：以上为当前工作树的静态清点结果（文件数、行数、路由与迁移版本数）；生产运行态数据、CI 实测耗时、E2E 执行结果仍为 UNVERIFIED。
 
@@ -102,10 +102,10 @@ V2 的目标不是继续增加功能，而是把现状（140 条路由、55 张�
 
 ## 4. 数据清理范围
 
-- 清理对象：v1 业务数据行，共 42 张表（分组、表名与边缘情况以清理手册 §4 为准）；另列「成员档案与邀请」3 张表（`household_members` / `household_user_members` / `household_invites`），合计 **45 张表** 在 `tinynest-admin purge` 白名单内，需在 dry-run 时确认去留：若 V2 继续提供家庭成员功能，这 3 张表按「清空后重建」处理，不随退役模块删除结构。
-- 保留数据（11 张身份表）：`households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`。
+- 清理对象：v1 业务数据行，最初口径为 42 张表 + 「成员档案与邀请」3 张表 = **45 张**。**当前 `tinynest-admin purge` 白名单为 16 组、55 个表名**：迁移 005/009–012 加入后新增「银行账单与绑卡」4 张与「投资估值快照」2 张，在 V2 基线中 **23 张存在、32 个是 V1 遗留名**（按 `Missing` 跳过并在输出列出）。分组、表名与边缘情况以[清理手册](v2-prod-purge-runbook.md) §4.3 为准；「成员档案与邀请」3 张表按「清空后重建」处理，该口径未经用户单独确认，执行人要求在 dry-run 核对阶段明确提出。
+- 保留数据（11 张身份表）：`households`、`users`、`sessions`、`pending_registrations`、`site_administrators`、`email_identities`、`email_challenges`、`mail_configuration`、`mail_preferences`、`mail_daily_usage`、`mail_recipient_daily_usage`。另有 2 张含 AES-GCM 密文授权码的个人配置表（`statement_mailbox_configs`、`credit_statement_mailboxes`）与 `auth_login_locks`（安全状态）同样不清空，但**前两张不进入身份导出/导入**，切换新库时是否搬运由执行人单独判断。
 - 清空重建：`categories` 默认清理为空（严格口径），需要清理后继续使用 v1 界面时加 `-reseed-categories`；`accounts` 清空后必须先建账户才能记账，属预期；`transactions` 等流水表清空后界面显示空状态。
-- 计数口径说明：清理只删除数据行、不执行 DDL，因此可以在单事务内回滚；v1 库仍保留空表结构，V2 的 25 张业务表目标由新库基线承担（见切换手册）。
+- 计数口径说明：清理只删除数据行、不执行 DDL，因此可以在单事务内回滚；v1 库仍保留空表结构，V2 的新库基线现为 **38 张业务表**（P2 期目标 25 张，2026-11-22 加 005 估值快照 2 张为 27，再加 006–012 的 10 张为 37，2026-11-26 加 013 `statement_placeholders` 的 1 张为 38；见切换手册 步骤 3）。
 - 密钥：32 字节 `mail-key` / `credit-mail-key` 必须单独备份；缺失会导致 `mail_configuration.password_cipher` 与 `mail_queue.payload` 不可解。
 
 ## 5. 模块退役范围

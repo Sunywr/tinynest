@@ -9,7 +9,7 @@
 
 - 目标：生产库业务数据清空，保留 11 张身份表与 2 张含加密授权码的个人配置表（§4.1、§4.2）；清理前后这些表的计数与迁移版本一致，`verify` 全绿。
 - 边界：生产清理由用户执行（决策①）；我们交付工具与手册，不接触生产凭据、不代执行、不保存生产数据。
-- 清理语义：只删除数据行（DML），不执行 DDL。原因：MySQL 的 `TRUNCATE` / `DROP` 会隐式提交，无法满足「单事务执行、失败整体回滚」；v1 库清空后保留空表结构，V2 的基线目标由新库承担（空库迁移后 37 张表，MySQL 运行时含 `schema_migrations` 为 38 张，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 39 张；见切换手册）。
+- 清理语义：只删除数据行（DML），不执行 DDL。原因：MySQL 的 `TRUNCATE` / `DROP` 会隐式提交，无法满足「单事务执行、失败整体回滚」；v1 库清空后保留空表结构，V2 的基线目标由新库承担（空库迁移后 38 张表，MySQL 运行时含 `schema_migrations` 为 40 张，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 40 张；见切换手册）。
 - 不变量：11 张身份表数据完整；`journal_lines` 借贷合计在清理前采集、清理后归零并可核对；迁移版本不变；备份与旧库保留 ≥30 天。
 
 ## 2. 安全不变量与前置条件
@@ -103,9 +103,9 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json -json
 
 口径来源：`PreservedConfigTables`（2 张）与 `IdentityTables`（11 张）在代码里分开定义，`identity-export` 只导出后者。切换新库时是否单独搬运邮箱授权码由执行人判断并写入证据；`sqlite_sequence` 仅在 SQLite 出现，同样不计入业务表。
 
-### 4.3 清理分组（16 组、54 个表名）
+### 4.3 清理分组（16 组、55 个表名）
 
-`internal/dbadmin/tables.go` 的 `PurgeGroups` 是唯一事实来源。下表逐组照抄代码，「存在」列是 2026-11-25 在 V2 基线 schema（37 张表）上的实测命中数，† 标记的表名在当前 schema 中已不存在。
+`internal/dbadmin/tables.go` 的 `PurgeGroups` 是唯一事实来源。下表逐组照抄代码，「存在」列是 2026-11-26 在当前工作树（V2 基线 + 迁移 `013`，38 张表）上以 `PurgeTableSet()` + `MissingPurgeTables()` 实测的命中数，† 标记的表名在当前 schema 中已不存在。
 
 | 分组 | 表名 | 存在 |
 | --- | --- | --- |
@@ -113,7 +113,7 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json -json
 | 复式分录 | `journal_entries`、`journal_lines`、`account_opening_balances` | 3/3 |
 | 记账数据 | `transactions`、`budgets`、`project_budgets`、`transaction_budget_links`、`transaction_source_metadata`、`transaction_splits`†、`refunds`† | 5/7 |
 | 信用账单 | `credit_instruments`†、`credit_statements`†、`credit_statement_items`†、`credit_payments`†、`credit_instrument_changes`†、`credit_statement_adjustments`†、`credit_statement_provisions`† | 0/7 |
-| 银行账单与绑卡 | `card_statement_sources`、`card_statements`、`statement_mailbox_card_links`、`credit_statement_bindings` | 4/4 |
+| 银行账单与绑卡 | `statement_placeholders`、`card_statement_sources`、`card_statements`、`statement_mailbox_card_links`、`credit_statement_bindings` | 5/5 |
 | 分期 | `installment_contracts`†、`installment_schedule_items`†、`installment_payments`†、`installment_adjustments`† | 0/4 |
 | 负债 | `debt_contracts`†、`debt_schedule_items`†、`debt_payments`† | 0/3 |
 | 到期调度 | `schedule_due_items`† | 0/1 |
@@ -126,11 +126,11 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json -json
 | 运营与审计 | `audit_logs`、`schedule_runs`†、`stock_quotes`† | 1/3 |
 | 成员档案与邀请 | `household_members`、`household_user_members`、`household_invites` | 3/3 |
 
-当前 V2 基线中真实被清理的 22 张表：`categories`、`accounts`、`ledger_accounts`、`journal_entries`、`journal_lines`、`account_opening_balances`、`transactions`、`budgets`、`project_budgets`、`transaction_budget_links`、`transaction_source_metadata`、`card_statement_sources`、`card_statements`、`statement_mailbox_card_links`、`credit_statement_bindings`、`investment_holdings`、`investment_accounts`、`mail_queue`、`audit_logs`、`household_members`、`household_user_members`、`household_invites`。
+当前 V2 基线中真实被清理的 23 张表：`categories`、`accounts`、`ledger_accounts`、`journal_entries`、`journal_lines`、`account_opening_balances`、`transactions`、`budgets`、`project_budgets`、`transaction_budget_links`、`transaction_source_metadata`、`statement_placeholders`、`card_statement_sources`、`card_statements`、`statement_mailbox_card_links`、`credit_statement_bindings`、`investment_holdings`、`investment_accounts`、`mail_queue`、`audit_logs`、`household_members`、`household_user_members`、`household_invites`。
 
 其余 32 个表名是 V1 模块遗留（分期、负债、到期调度、V1 投资交易与股票、V1 信用账单与账单导入等），在 V2 空库上不存在，执行时逐项列为「已跳过」。注意「银行账单与绑卡」和「投资估值快照」两组是 V2 之后重新引入的**只读**数据，与 V1 同名模块不是一回事，本轮按用户口径计入清理范围：账单+绑卡+投资快照清理，邮箱配置保留。
 
-口径说明：54 个表名 = 22 张存在 + 32 个不存在，另有 11 张身份表 + 2 张保留配置表 + `auth_login_locks` + `schema_meta` 不计入清理，合计覆盖 V2 基线的 37 张表。删除顺序由 `DeleteOrder()` 固定为子表先于父表，外键全程不禁用，因此「删干净」本身就是没留孤儿行的证明。执行时一律以 `purge -dry-run` 的实际输出为准：新迁移加的表若未归类，会出现在 `Unclassified` 警告里并让 `verify` 失败，不会静默漏清。成员档案（`household_members`、`household_user_members`、`household_invites`）在代码里已列入清理组，依据是「用户下次登录由 `/household/members/current` 自动重建档案」；这不是用户单独确认过的口径，执行人若要求保留成员档案，必须在 dry-run 核对阶段明确提出并改用其他方案，否则按本节口径清空。
+口径说明：55 个表名 = 23 张存在 + 32 个不存在，另有 11 张身份表 + 2 张保留配置表 + `auth_login_locks` + `schema_meta` 不计入清理，合计覆盖 V2 基线的 38 张表。删除顺序由 `DeleteOrder()` 固定为子表先于父表，外键全程不禁用，因此「删干净」本身就是没留孤儿行的证明。执行时一律以 `purge -dry-run` 的实际输出为准：新迁移加的表若未归类，会出现在 `Unclassified` 警告里并让 `verify` 失败，不会静默漏清。成员档案（`household_members`、`household_user_members`、`household_invites`）在代码里已列入清理组，依据是「用户下次登录由 `/household/members/current` 自动重建档案」；这不是用户单独确认过的口径，执行人若要求保留成员档案，必须在 dry-run 核对阶段明确提出并改用其他方案，否则按本节口径清空。
 
 ### 4.4 清理后行为说明
 
@@ -139,6 +139,7 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json -json
 - `mail_queue` 清空后待发邮件丢失，属预期。
 - `investment_accounts` / `investment_holdings` 是从 pfm 导入的只读估值快照，清空后资产页的投资市值与含投资的净资产显示为空，需重新导入才有值；它们不参与分录，清理不影响账本余额。
 - `card_statements` / `card_statement_sources` 是银行报的账期汇总，清空后账单页的并排比对回到「无银行数据」，需重新同步邮箱才有值。
+- `statement_placeholders`（013）只是「银行账单 ↔ 待补明细占位流水」的关联：它排在 `card_statements` 与 `transactions` 之前删除，因此清理后不会留下悬空关联。由占位产生的那笔「待补明细」支出连同其分录随 `transactions` / `journal_*` 一起清空，`categories` 里的「待补明细」分类也随分类清理消失（清理后该分类不会被重建，除非再次生成占位或手工创建）。
 - 加密配置依赖 32 字节 `mail-key`：`mail_configuration.password_cipher`、`mail_queue.payload` 与保留的 `statement_mailbox_configs.auth_code_cipher` 都用它加解密，密钥丢失即不可解。`credit-mail-key` 属已退役的 V1 信用账单模块，仅在读取旧库密文时才需要。
 - 清理只删数据，不执行 DDL；当前 schema 中不存在的 V1 遗留表名不产生任何语句，旧库的空表结构原样保留，便于回滚与切换前导出。
 
@@ -202,8 +203,8 @@ TINYNEST_MYSQL_DATABASE=<隔离库名> tinynest-admin -driver mysql baseline-cap
 | 检查项 | 命令或方式 | 期望 |
 | --- | --- | --- |
 | V2 基线标记 | `SELECT value FROM schema_meta WHERE meta_key='baseline';` | `v2` |
-| 迁移版本 | `SELECT version FROM schema_migrations ORDER BY version;` | 与基线记录逐值一致（当前为 1–12） |
-| 表数 | `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='<隔离库名>';` | 与生产基线一致（当前 38 张，含 `schema_migrations`） |
+| 迁移版本 | `SELECT version FROM schema_migrations ORDER BY version;` | 与基线记录逐值一致（当前为 1–13） |
+| 表数 | `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='<隔离库名>';` | 与生产基线一致（当前 39 张，含 `schema_migrations`） |
 | 身份计数 | §4.1 的 11 张表逐一 `COUNT(*)`，或直接比对 `restored-baseline.json` 的 `identity_tables` | 与基线一致 |
 | 保留配置计数 | §4.2 的 2 张表 `COUNT(*)` | 与基线一致 |
 | `users` 摘要 | 比对 `users_digest` | 完全相同（口令哈希、角色、状态的 SHA-256） |
@@ -231,7 +232,7 @@ tinynest-admin -driver mysql purge -dry-run -json-out=<归档目录>/dry-run.jso
 
 人工核对清单：
 
-- [ ] 输出中的表清单与 §4.3 的 54 个表名一致，「已跳过」列表与 §4.3 的 † 项一致，无遗漏、无多余表。
+- [ ] 输出中的表清单与 §4.3 的 55 个表名一致，「已跳过」列表与 §4.3 的 † 项一致，无遗漏、无多余表。
 - [ ] 输出包含每张表的预计删除行数，且与步骤 2 转储、`baseline-capture` 的计数互相印证。
 - [ ] 11 张身份表与 §4.2 的 2 张保留配置表均未出现在删除清单中。
 - [ ] 未出现「未分类表」警告；出现即说明有新迁移的表未归类，先补归类再继续。
@@ -347,9 +348,9 @@ tinynest-admin -driver mysql verify -baseline=<备份目录>/baseline.json
 
 ## 9. UNVERIFIED 清单
 
-- 表名与分组口径已在 2026-11-25 用只读方式核对：代码 `PurgeGroups`/`DeleteOrder` 共 54 个表名，与 V2 基线 37 张表求交得 22 张存在、32 个 V1 遗留名，生产 `tinynest_v2` 的两次只读 dry-run 输出与此逐值一致（见[发布证据](../reviews/v2-statement-ui-deployment-evidence.md)）。**手册正文仍未在生产现场逐条执行**。
+- 表名与分组口径已两次核对，两个口径不要混用：**2026-11-25 生产只读**（迁移 `[1..12]`、37 张表）时 `PurgeGroups`/`DeleteOrder` 共 54 个表名，其中 22 张存在、32 个 V1 遗留名，生产 `tinynest_v2` 的两次只读 dry-run 输出与此逐值一致（见[发布证据](../reviews/v2-statement-ui-deployment-evidence.md)）；**2026-11-26 加入迁移 `013` 后**在当前工作树重测为 55 个表名 / 23 张存在 / 32 个遗留名，新增的那张是 `statement_placeholders`。**生产库要先跑新二进制（启动时自动补 013）才会出现该表**，否则它和 V1 遗留名一样按「表不存在」跳过，不影响其余清理。手册正文仍未在生产现场逐条执行。
 - 生产 `purge -execute`、`verify`、`baseline-capture` 的实际输出与耗时 UNVERIFIED（属破坏性操作，未获授权执行）。
-- 步骤 2 的备份已在 2026-11-25 修复并产出真实转储（导出运行时库 + 基线行断言 + SHA-256 sidecar）。**步骤 3 的隔离恢复逐项比对已在 2026-11-25 生产执行通过**：把 `tinynest_v2-20261125T085500Z.sql`（12,859,119 字节，`sha256sum -c` OK）导入同实例上明确命名的隔离库，导入耗时 10.661s，隔离库 38 张表、`baseline=v2`、迁移 `[1..12]`，用 `tinynest-admin baseline-capture` 与生产基线逐字段比对得 **0 项差异**（身份 51 行、保留配置 3 行、业务 95,176 行、`journal_entries` 12,391 / `journal_lines` 24,782 / 借=贷=1,311,336,623、`users_digest` 相同、迁移版本与家庭数相同），核对后已 `DROP` 隔离库。同一份模板随后作为生产运维脚本接管定时备份，并实测到「库名与运行时不一致即中止、不写出转储」这条守卫（退出码 1）。仍 UNVERIFIED 的是：转储尚无第二份**异地**副本。
+- 步骤 2 的备份已在 2026-11-25 修复并产出真实转储（导出运行时库 + 基线行断言 + SHA-256 sidecar）。**步骤 3 的隔离恢复逐项比对已在 2026-11-25 生产执行通过**：把 `tinynest_v2-20261125T085500Z.sql`（12,859,119 字节，`sha256sum -c` OK）导入同实例上明确命名的隔离库，导入耗时 10.661s，隔离库 39 张表、`baseline=v2`、迁移 `[1..13]`，用 `tinynest-admin baseline-capture` 与生产基线逐字段比对得 **0 项差异**（身份 51 行、保留配置 3 行、业务 95,176 行、`journal_entries` 12,391 / `journal_lines` 24,782 / 借=贷=1,311,336,623、`users_digest` 相同、迁移版本与家庭数相同），核对后已 `DROP` 隔离库。同一份模板随后作为生产运维脚本接管定时备份，并实测到「库名与运行时不一致即中止、不写出转储」这条守卫（退出码 1）。仍 UNVERIFIED 的是：转储尚无第二份**异地**副本。
 - `purge` 的三道负面守卫在生产只读实测均为退出码 1：`-confirm` 与运行时库名不符（`-confirm 必须与数据库名完全一致（"tinynest_v2"），收到 "tinynest"`）、`-execute` 缺 `-yes-service-stopped`、多家庭库未加 `-household`（新文案明确 `the deletes are not household-scoped`）。三次运行前后 `transactions` 12,330 / `journal_entries` 12,391 / `journal_lines` 24,782 逐值未变。
 - 密钥备份文件的实际保管方式与责任 UNVERIFIED，需用户确认。
 - 旧库与备份保留 ≥30 天的执行情况 UNVERIFIED。

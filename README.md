@@ -22,7 +22,7 @@
 
 ## 项目进度与接手
 
-当前基线是 **V2 记账重置**：保留身份/权限/家庭/邮件、复式记账内核、信用卡还款计划与只读的证券/理财估值快照；V1 的信用账单、分期、负债、投资交易、账单导入等模块退役，前端重建为手机优先的记账界面。投资快照从 pfm 导入，使用独立两张表，不写分录、不参与转账。范围、度量与未验证项见 [当前进度](docs/project-status.md)，启动与验证见 [开发说明](docs/DEVELOPMENT.md)。AI Agent 从 [AGENTS.md](AGENTS.md) 加载项目专属的 [高级开发工程师 Skill](.agents/skills/tinynest-senior-engineer/SKILL.md)。
+当前基线是 **V2 记账重置**：保留身份/权限/家庭/邮件、复式记账内核、信用卡还款计划与只读的证券/理财估值快照；V1 的信用账单、分期、负债、投资交易、账单导入等模块退役，前端重建为手机优先的记账界面。投资快照从 pfm 导入，使用独立两张表，不写分录、不参与转账。V2 之后新增的信用卡账单邮箱（只读 IMAP、AES-GCM 密文授权码）与银行汇总只读对账与 V1 同名模块**不同**：只落 `card_statements` 与账本比对，不写分录、不参与还款计划、不自动过账。范围、度量与未验证项见 [当前进度](docs/project-status.md)，启动与验证见 [开发说明](docs/DEVELOPMENT.md)。AI Agent 从 [AGENTS.md](AGENTS.md) 加载项目专属的 [高级开发工程师 Skill](.agents/skills/tinynest-senior-engineer/SKILL.md)。
 
 ## 现在能做什么
 
@@ -73,8 +73,8 @@ TinyNest 采用前后端分离设计，面向个人及家庭自托管部署场�
 | --- | --- |
 | Web 客户端 | Vue 3 · TypeScript · Vite；路由使用 vue-router 4（V2 唯一新增依赖） |
 | 移动端 | 响应式 Web · Progressive Web App（PWA），安全区与 44px 触控约束 |
-| API 服务 | Go 模块化单体；55 条业务路由 + 健康检查；复式记账 API |
-| 数据层 | SQLite（本地）或 MySQL 8（生产，仅 B 机，Unix socket）；V2 两个方言各 5 个迁移版本（001–005）；运行时 28 张表 |
+| API 服务 | Go 模块化单体；73 条业务路由 + 健康检查；复式记账 API |
+| 数据层 | SQLite（本地）或 MySQL 8（生产，仅 B 机，Unix socket）；V2 两个方言各 13 个迁移文件（001–013）；空库迁移后 38 张表，MySQL 运行时 39 张、SQLite 40 张 |
 | 账务内核 | `journal_entries` / `journal_lines` 唯一事实来源；余额重建；已入账不可变，纠错用冲正 |
 | 部署 | Nginx · Linux systemd · HTTPS 接入方案；前后端可分别部署在两台服务器 |
 
@@ -87,6 +87,7 @@ TinyNest 采用前后端分离设计，面向个人及家庭自托管部署场�
 | **Phase 0 · 工程初始化** | 品牌视觉、PC / iPhone Demo、前后端工程骨架、PWA 基础、部署模板 | **已完成并归档** |
 | **V0.1 · 家庭财务核心账本** | 复式记账内核、认证与家庭隔离、信用/分期/投资等 V1 模块 | **已归档**（V1 报告见 [docs/reviews/v1-implementation-report.md](docs/reviews/v1-implementation-report.md)） |
 | **V2 · 记账重置** | 模块收敛、运维清理 CLI、V2 数据层与 API、前端五界面重建、文档与验收 | **代码与文档完成**；生产清理/切库与实机验收待用户执行（`UNVERIFIED`） |
+| **V2 增量 · 信用卡账单导入与对账** | 账单邮箱（迁移 009–011）、银行汇总只读对账（迁移 012）、汇总展示与「同步账单」入口 | **进行中**：邮箱、绑卡、同步与只读汇总已上线生产；明细匹配、占位与 XLS 补录未实施，仍为只读 |
 | **V2.1 · 可选** | `internal/api` 分包重构等维护性工作 | 未排期；不属于 V2 验收 |
 
 V2 的 API 契约、数据模型与账务规则分别见 [docs/api-v2.md](docs/api-v2.md)、[docs/er-v2.md](docs/er-v2.md)、[docs/accounting-rules-v2.md](docs/accounting-rules-v2.md)；生产执行以 [清理手册](docs/plans/v2-prod-purge-runbook.md) 与 [切换手册](docs/plans/v2-cutover-runbook.md) 为准。

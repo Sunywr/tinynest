@@ -36,6 +36,8 @@
   - 清理清单中 22 张表在 V2 schema 中存在（含 `card_statements` 0、`card_statement_sources` 0、`statement_mailbox_card_links` 7、`credit_statement_bindings` 0、`investment_accounts` 3、`investment_holdings` 31、`transaction_source_metadata` 33,074），32 个 V1 遗留名按「表不存在」跳过——与 `AGENTS.md` 本轮修正后的 54/22/32 口径逐项一致；
   - 保留段列出 11 张身份表（合计 51 行）与 2 张含密文的个人配置表（`statement_mailbox_configs` 2、`credit_statement_mailboxes` 1），未出现「未分类」告警。
 - 未执行 `purge --execute`、`verify`、`baseline-capture` 或 `identity-*`：清理是破坏性动作，需用户逐步授权，且 [生产清理手册](../plans/v2-prod-purge-runbook.md) 的正文数字仍是旧口径（45 张/11 张），修正后才可照做。
+  - **后续更正（2026-11-26）**：本条记录的是 16:52–17:05 的当时状态，两点已被同日更晚的工作取代——手册正文的 54/22 + 11 + 2 口径已在 `1a143e2` 改写完毕（2026-11-26 在 `31d4061` 复核与代码逐值一致），`baseline-capture` 也已在 B 机对生产库与隔离库各执行一次（只读，见本文「2026-11-25 隔离恢复演练」一节）。仍未执行的只有 `purge --execute` 与 `verify`。
+  - **再后续（2026-11-26 第三轮）**：本文上述所有计数（54/22/32、12 个迁移、37/38 张表、72 条路由）记录的是迁移 013 之前的实测，**未发布到生产**——同日在本地工作树实现了「待补明细占位」，新增迁移 `013_statement_placeholders`（表 `statement_placeholders`）、路由 `POST /api/v1/accounts/{id}/credit-statement-placeholder`（共 73 条）与清理清单扩容（55 个表名 / 23 张存在）。B 机仍运行 `v2-50b6752`（迁移 `[1..12]`），生产库里**没有** `statement_placeholders`；照本文核对表数或清理清单时，先确认对比的是哪个版本，不要用本轮本地值去核生产库。详见[实施进度](../plans/credit-card-statement-import/实施进度.md)「本轮交付（2026-11-26 第三轮）」，本轮改动尚未提交、未部署、未打 tag。
 
 ## 4. 前端发布与实际执行顺序
 

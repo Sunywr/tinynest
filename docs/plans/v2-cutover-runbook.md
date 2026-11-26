@@ -80,11 +80,13 @@ TINYNEST_MYSQL_DATABASE=<新库名> TINYNEST_MYSQL_USER=<迁移账号> <新二�
 核对项：
 
 ```sql
-SELECT `value` FROM schema_meta WHERE `key` = 'baseline';  -- 期望 v2
+SELECT `value` FROM schema_meta WHERE `meta_key` = 'baseline';  -- 期望 v2（列名是 `meta_key`，写成 `key` 实测报 `ERROR 1054 (42S22): Unknown column 'key' in 'where clause'`）
 SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema = '<新库名>';
 ```
 
-期望：`baseline=v2`；新库表数符合 V2 目标 27 张业务表（另加迁移账本 `schema_migrations`，运行时 28 张；逐表清单见模块规格 §6）；启动日志无迁移错误与解密错误。若新库非空或 baseline 与二进制不符，启动应被拒绝——此时不得绕过守卫，必须处理或重建新库。
+期望：`baseline=v2`；迁移版本为 `[1..13]`；新库表数符合当前 V2 基线 **38 张业务表**——MySQL 运行时 **39 张**（另加迁移器创建的 `schema_migrations`），SQLite **40 张**（再因 `AUTOINCREMENT` 多出 `sqlite_sequence`）；启动日志无迁移错误与解密错误。若新库非空或 baseline 与二进制不符，启动应被拒绝——此时不得绕过守卫，必须处理或重建新库。
+
+> 口径修正（2026-11-26）：本段此前写「27 张业务表、运行时 28 张」，那是迁移 006–012 加入之前的 V2 目标值。**按旧数判定会把建立成功的新库误读成缺表**，进而去「补建」或重建本该保留的基线。逐表清单以 [ER](../er-v2.md) §1（001 计 21、002 计 4、005 计 2、006 计 1、007 计 2、008 计 1、009–012 计 6、013 计 1，合计 38）为准，模块规格 §6 的 27/28 为冻结时的历史目标。
 
 ### 步骤 4：停止旧服务
 
@@ -162,12 +164,12 @@ curl -sS -b <临时 Cookie 文件> '<站点地址>/api/v1/stats/summary?month=<Y
 
 | 冒烟项 | 期望结果 |
 | --- | --- |
-| `GET /api/v1/readyz` | 200 |
-| 登录 `POST /auth/session` | 200，Set-Cookie 正常 |
-| `GET /auth/me` | 返回导入的用户与家庭 |
-| `POST /household/members/current` | 200，当前成员切换成功 |
-| 记一笔 `POST /transactions` | 201 / 200，流水与统计可见 |
-| `GET /stats/summary` | 金额与该笔流水一致 |
+| `GET /api/v1/readyz` | 200（裸 `/readyz` 实测 404，不算通过） |
+| 登录 `POST /api/v1/auth/session` | 200，Set-Cookie 正常 |
+| `GET /api/v1/auth/me` | 返回导入的用户与家庭 |
+| `POST /api/v1/household/members/current` | 200，当前成员切换成功 |
+| 记一笔 `POST /api/v1/transactions` | 201 / 200，流水与统计可见 |
+| `GET /api/v1/stats/summary` | 金额与该笔流水一致 |
 | 服务日志 | 无迁移错误、无解密错误、无 5xx |
 
 冒烟产生的测试流水必须当场用 `DELETE /api/v1/transactions/{id}` 冲正，并在证据中记录；不得把测试数据留在生产账本。
@@ -228,7 +230,7 @@ FROM users;
 ### 4.4 迁移与基线核对（仅新库）
 
 ```sql
-SELECT `value` FROM schema_meta WHERE `key` = 'baseline';  -- 期望 v2
+SELECT `value` FROM schema_meta WHERE `meta_key` = 'baseline';  -- 期望 v2（列名是 `meta_key`，写成 `key` 实测报 `ERROR 1054 (42S22): Unknown column 'key' in 'where clause'`）
 SELECT COUNT(*) AS versions FROM schema_migrations;        -- 由新二进制重建，不要求与旧库一致
 ```
 

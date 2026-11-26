@@ -93,7 +93,7 @@ func (f *statementSyncFixture) expense(amount int64, on string) {
 }
 
 type statementCounts struct {
-	statements, sources, transactions, entries, lines, audit int
+	statements, sources, placeholders, transactions, entries, lines, audit int
 }
 
 func (f *statementSyncFixture) counts() statementCounts {
@@ -106,10 +106,12 @@ func (f *statementSyncFixture) counts() statementCounts {
 	}{
 		{`SELECT COUNT(*) FROM card_statements`, nil, &out.statements},
 		{`SELECT COUNT(*) FROM card_statement_sources`, nil, &out.sources},
+		{`SELECT COUNT(*) FROM statement_placeholders`, nil, &out.placeholders},
 		{`SELECT COUNT(*) FROM transactions`, nil, &out.transactions},
 		{`SELECT COUNT(*) FROM journal_entries`, nil, &out.entries},
 		{`SELECT COUNT(*) FROM journal_lines`, nil, &out.lines},
-		{`SELECT COUNT(*) FROM audit_logs WHERE action LIKE 'sync_card_statement%'`, nil, &out.audit},
+		{`SELECT COUNT(*) FROM audit_logs
+			WHERE action LIKE 'sync_card_statement%' OR action='create_statement_placeholder'`, nil, &out.audit},
 	}
 	for _, item := range queries {
 		if err := f.database.QueryRow(item.query, item.args...).Scan(item.target); err != nil {

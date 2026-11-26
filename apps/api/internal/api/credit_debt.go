@@ -228,29 +228,43 @@ func (a *API) loadCreditCards(ctx context.Context, householdID string) (map[stri
 // intent:
 //   - a posted credit-card expense (transaction type=expense, posted),
 //   - a posted cash -> credit repayment (transaction type=transfer, posted),
-//   - an opening liability entry.
+//   - an opening liability entry,
+//   - a 待补明细 placeholder posted for a stored bank summary.
 //
 // Reversed/deleted/corrected originals and reversal entries are excluded; their
 // net effect is already zero on the ledger and they must not be scheduled twice.
+//
+// Ordinary charges are cut off at today because a charge the ledger dates in the
+// future is not part of the balance owed yet. A 待补明细 placeholder is the one
+// exception: it is deliberately dated at the repayment deadline, which can still
+// lie ahead, and reserving it is the whole point. Its period and deadline are
+// therefore read from the stored bank summary instead of the card's cycle grid, so
+// the amount bills for the cycle it actually covers rather than the one the
+// deadline date happens to fall in.
 func (a *API) loadCreditEvents(ctx context.Context, householdID, today string, cards map[string]*creditCardState) error {
 	rows, err := a.DB.QueryContext(ctx, `
 		SELECT a.id,e.occurred_on,e.biz_type,
-		       COALESCE(SUM(l.credit_minor-l.debit_minor),0) AS delta_minor
+		       COALESCE(SUM(l.credit_minor-l.debit_minor),0) AS delta_minor,
+		       MAX(p.period_start_on) AS placeholder_period_start,
+		       MAX(p.period_end_on) AS placeholder_period_end,
+		       MAX(p.due_on) AS placeholder_due_on
 		FROM accounts a
 		JOIN journal_lines l ON l.account_code=a.ledger_code
 		JOIN journal_entries e ON e.id=l.entry_id AND e.household_id=a.household_id
 		LEFT JOIN transactions t ON t.id=e.biz_id AND t.household_id=e.household_id
+		LEFT JOIN statement_placeholders p ON p.household_id=t.household_id AND p.transaction_id=t.id
 		WHERE a.household_id=? AND a.kind='credit' AND a.status<>'deleted'
-		  AND e.occurred_on<=? AND e.status='posted' AND e.reversal_of IS NULL
+		  AND e.status='posted' AND e.reversal_of IS NULL
 		  AND (
-		    e.biz_type='opening_liability'
+		    (e.biz_type='opening_liability' AND e.occurred_on<=?)
 		    OR (t.status='posted' AND (
-		      (e.biz_type='expense' AND t.type='expense' AND t.account_id=a.id)
+		      (e.biz_type='expense' AND t.type='expense' AND t.account_id=a.id
+		       AND (p.statement_id IS NOT NULL OR e.occurred_on<=?))
 		      OR (e.biz_type='credit_repayment' AND t.type='transfer' AND t.to_account_id=a.id)
 		    ))
 		  )
 		GROUP BY a.id,e.id,e.occurred_on,e.biz_type
-		ORDER BY a.id,e.occurred_on,e.id`, householdID, today)
+		ORDER BY a.id,e.occurred_on,e.id`, householdID, today, today)
 	if err != nil {
 		return err
 	}
@@ -258,7 +272,9 @@ func (a *API) loadCreditEvents(ctx context.Context, householdID, today string, c
 	for rows.Next() {
 		var accountID, occurredOn, bizType string
 		var delta int64
-		if err := rows.Scan(&accountID, &occurredOn, &bizType, &delta); err != nil {
+		var placeholderStart, placeholderEnd, placeholderDue sql.NullString
+		if err := rows.Scan(&accountID, &occurredOn, &bizType, &delta,
+			&placeholderStart, &placeholderEnd, &placeholderDue); err != nil {
 			return err
 		}
 		card := cards[accountID]
@@ -271,18 +287,33 @@ func (a *API) loadCreditEvents(ctx context.Context, householdID, today string, c
 		}
 		if delta > 0 {
 			charge := creditCharge{amount: money.Minor(delta), occurredOn: on}
-			if card.configured {
-				if bizType == "opening_liability" {
-					// Opening debt is already billed as of the account's opening date:
-					// assign it to the most recent statement close on/before that date.
-					end := previousStatementCloseOnOrBefore(on, card.statementDay)
-					charge.periodEnd = end
-					charge.periodStart = previousStatementClose(end, card.statementDay).AddDate(0, 0, 1)
-					charge.dueOn = dueAfter(end, card.dueDay)
-				} else {
-					cycle := cycleFor(on, card.statementDay, card.dueDay)
-					charge.periodStart, charge.periodEnd, charge.dueOn = cycle.start, cycle.end, cycle.due
+			switch {
+			case placeholderEnd.Valid:
+				if charge.periodEnd, err = time.Parse("2006-01-02", placeholderEnd.String); err != nil {
+					return err
 				}
+				charge.periodStart = charge.periodEnd
+				if placeholderStart.Valid {
+					if charge.periodStart, err = time.Parse("2006-01-02", placeholderStart.String); err != nil {
+						return err
+					}
+				}
+				if charge.dueOn, err = time.Parse("2006-01-02", placeholderDue.String); err != nil {
+					return err
+				}
+			case !card.configured:
+				// No cycle grid to schedule against: the debt is real but its dates are
+				// unknown, so only the total and any credit balance are meaningful.
+			case bizType == "opening_liability":
+				// Opening debt is already billed as of the account's opening date:
+				// assign it to the most recent statement close on/before that date.
+				end := previousStatementCloseOnOrBefore(on, card.statementDay)
+				charge.periodEnd = end
+				charge.periodStart = previousStatementClose(end, card.statementDay).AddDate(0, 0, 1)
+				charge.dueOn = dueAfter(end, card.dueDay)
+			default:
+				cycle := cycleFor(on, card.statementDay, card.dueDay)
+				charge.periodStart, charge.periodEnd, charge.dueOn = cycle.start, cycle.end, cycle.due
 			}
 			card.charges = append(card.charges, charge)
 		} else {

@@ -101,7 +101,7 @@ func TestStatementProvidersMigrateExistingQQMailboxAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	applied, err := database.Migrate(ctx)
-	if err != nil || len(applied) != 2 || applied[0] != 11 || applied[1] != 12 {
+	if err != nil || len(applied) != 3 || applied[0] != 11 || applied[1] != 12 || applied[2] != 13 {
 		t.Fatalf("apply 011 and later to existing V2: applied=%v, err=%v", applied, err)
 	}
 	again, err := database.Migrate(ctx)
