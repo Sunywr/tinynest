@@ -37,7 +37,7 @@
   - 保留段列出 11 张身份表（合计 51 行）与 2 张含密文的个人配置表（`statement_mailbox_configs` 2、`credit_statement_mailboxes` 1），未出现「未分类」告警。
 - 未执行 `purge --execute`、`verify`、`baseline-capture` 或 `identity-*`：清理是破坏性动作，需用户逐步授权，且 [生产清理手册](../plans/v2-prod-purge-runbook.md) 的正文数字仍是旧口径（45 张/11 张），修正后才可照做。
   - **后续更正（2026-11-26）**：本条记录的是 16:52–17:05 的当时状态，两点已被同日更晚的工作取代——手册正文的 54/22 + 11 + 2 口径已在 `1a143e2` 改写完毕（2026-11-26 在 `31d4061` 复核与代码逐值一致），`baseline-capture` 也已在 B 机对生产库与隔离库各执行一次（只读，见本文「2026-11-25 隔离恢复演练」一节）。仍未执行的只有 `purge --execute` 与 `verify`。
-  - **再后续（2026-11-26 第三轮）**：本文上述所有计数（54/22/32、12 个迁移、37/38 张表、72 条路由）记录的是迁移 013 之前的实测，**未发布到生产**——同日在本地工作树实现了「待补明细占位」，新增迁移 `013_statement_placeholders`（表 `statement_placeholders`）、路由 `POST /api/v1/accounts/{id}/credit-statement-placeholder`（共 73 条）与清理清单扩容（55 个表名 / 23 张存在）。B 机仍运行 `v2-50b6752`（迁移 `[1..12]`），生产库里**没有** `statement_placeholders`；照本文核对表数或清理清单时，先确认对比的是哪个版本，不要用本轮本地值去核生产库。详见[实施进度](../plans/credit-card-statement-import/实施进度.md)「本轮交付（2026-11-26 第三轮）」，本轮改动尚未提交、未部署、未打 tag。
+  - **再后续（2026-11-26 第三轮）**：本文上述所有计数（54/22/32、12 个迁移、37/38 张表、72 条路由）记录的是迁移 013 之前的实测，**未发布到生产**——同日在本地工作树实现了「待补明细占位」，新增迁移 `013_statement_placeholders`（表 `statement_placeholders`）、路由 `POST /api/v1/accounts/{id}/credit-statement-placeholder`（共 73 条）与清理清单扩容（55 个表名 / 23 张存在）。B 机仍运行 `v2-50b6752`（迁移 `[1..12]`），生产库里**没有** `statement_placeholders`；照本文核对表数或清理清单时，先确认对比的是哪个版本，不要用本轮本地值去核生产库。详见[实施进度](../plans/credit-card-statement-import/实施进度.md)「本轮交付（2026-11-26 第三轮）」。**该轮改动已于 2026-11-26 15:39 CST 以 `v2-9376f47` 部署生产（迁移 013 已应用），见本文件 §10；仍未创建 git tag。**
 
 ## 4. 前端发布与实际执行顺序
 
@@ -99,3 +99,24 @@
 - **环境余量与旁证**：`/dev/vda2` 40G、**96% 已用、1.7G 可用**（演练前后一致），备份目录因三次验证转储由 47M 增至 85M；`tinynest`（V1）与 `pfm` 库仍在。`card_statements`/`card_statement_sources` 恢复后仍 0 行，说明生产至今没有落库的银行汇总，账单页的并排比对当前显示「无银行数据」是事实而非故障。
 - **回滚点**：删 `releases/v2-1a143e2/` 即停用新 CLI（`current` 未指向）；备份脚本与 drop-in 各用 `.pre-template-20261125T094540Z.bak` `cp` 回 + `daemon-reload` 即复原；数据库回滚点为 085500Z 转储（本轮已证可恢复）与 012 迁移前备份，均保留 ≥30 天。
 - **本轮仍 `UNVERIFIED`**：`1a143e2` 的 CI 与 `go test -race`（本机无 cgo 工具链）、`purge -execute` 与 `verify` 的生产执行、转储的第二份异地副本校验、登录后实机冒烟与真实邮箱同步、`tinynest_app` 口令轮换（§8）、B 机现场 `go test ./...`。
+
+## 10. 2026-11-26 待补明细占位上线（迁移 013，`v2-9376f47`）
+
+本段记录「待补明细占位」从提交到生产的实际执行。授权来源：用户原话「提交推送代码，部署生产环境」；**未授权打 tag**，本次也未创建。
+
+| 项目 | 结果 |
+| --- | --- |
+| 执行时间 | 2026-11-26 15:37–15:43 CST |
+| 代码提交 | `9376f47a29f6fa95acf81cefa2093e1de5861aad`；`origin/main` 由 `31d4061` fast-forward 到 `9376f47`，无强制推送、无合并提交、未建 tag |
+| 远端 CI | 未核对（本机无 `gh`，GitHub API 匿名 403）→ `UNVERIFIED`；本地门禁见[实施进度](../plans/credit-card-statement-import/实施进度.md)「本轮交付 · 验证」 |
+| 部署前基线 | `baseline-capture`（旧 admin，只读）写入 `/var/backups/tinynest/baseline-20261126-pre013.json`：分录 12,391 / 行 24,782 / 借=贷=1,311,336,623 / `users` 摘要 `8af4984b…` / 身份 51 行（3 家庭）/ 保留配置 3 行 |
+| 部署前备份 | `systemctl start tinynest-backup.service` → `Result=success`；新转储 `tinynest_v2-20261126T073845Z.sql` 12,859,119 字节，`sha256sum -c` = OK，含 `schema_meta` baseline 行 |
+| 后端 | `current` 由 `v2-50b6752` 切到 `releases/v2-9376f47`。`tinynest-api` 12,419,256 字节、SHA-256 `749b06fdfa56c5a38ae05d28c305729eeadd510598bcfc8e22e946f0c52d8312`；同目录安装新 `tinynest-admin` 9,179,320 字节、SHA-256 `129fd9f299df6f800587d457f756cf2c68d9840ea6695f5c916b72641c0f0b4f`——**旧 admin 不认识迁移版本 13，会拒绝打开新库，必须同批升级**。构建方式：`git archive 9376f47` 的 LF 树 + `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w"`；上传后 B 机摘要与本地逐字节一致 |
+| 迁移 | 重启后 journal：`INFO database ready applied_migrations=[13]`；服务 `active`、`bootstrap endpoint disabled`、`TinyNest API started listen=127.0.0.1:8787 phase=v2` |
+| 迁移后数据库 | 运行时 **39** 张表；`statement_placeholders` 存在且 0 行；`schema_migrations` 13 行、`MAX(version)=13`；`schema_meta` 按真实列名 `meta_key` 读出 `baseline=v2` |
+| 数据未变 | 部署前后 `journal_entries` 12,391 / `journal_lines` 24,782 / 借贷各 1,311,336,623 / households 3 / users 3 完全一致；`users` 摘要与部署前基线相同 |
+| 回滚点 | 旧 `v2-50b6752` **迁移后无法启动**（基线守卫拒绝未知版本 13）。另建并安装 `releases/v2-50b6752-compatible-013/tinynest-api`（`31d4061` 旧实现 + 内嵌 013，12,386,488 字节、SHA-256 `398a959a814193234a22f95a98e403409cde6ad135439ed4cc8c09a1c175c2c4`），`current` 未指向它；真回滚 = 切该二进制重启，或按备份恢复 |
+| 运维 CLI 复核（新 admin） | `purge -dry-run -household=<id>`：迁移版本 `[1 2 … 13]`、家庭数 3 并打印「DELETE 不按家庭过滤」告警、身份 51 行、保留配置 3 行、待清理业务 95,176 行、无未分类告警；`dry-run 结束：未修改任何数据` |
+| 前端 | `current` 由 `v2-332a69b` 切到 `releases/v2-9376f47`；tar SHA-256 `88a39cc98802f0a725c2945c64514efd1be8bc5466af6f441b3fdb07342cc614`；`index.html` `4ad2f457…`；JS 入口 `index-D8wY-t7U.js` 691,922 字节、SHA-256 `eac4586356e2d31a68935ac0a1373c72100edf2dff02dae966e3f12a635096df`（含「待补明细」与 `credit-statement-placeholder` 字符串）；CSS `index-BgBuHdXF.css`。nginx 以 `/projects/tinynest/web/current` 为 root，切软链即生效，未改配置、未 reload |
+| 线上核验 | 经 HTTPS 取回 `index.html` 与 bundle 的 SHA-256 与本地构建逐字节一致；`https://<站点>/api/v1/healthz` 200、`/api/v1/readyz` = `{"check":"mysql_ping_and_migrations","phase":"v2","status":"ready"}`、匿名 `/api/v1/accounts` 401、首页 200；B 机 loopback 同样 200/ready/401 |
+| 仍未验证 | 真实账号登录后点「生成待补流水」的实机冒烟（确认弹层 → 待还出现占位 → 删除后归零显示「已冲正」）、PWA 旧 Service Worker 更新、iPhone 实机、远端 CI 结果、`go test -race`（本机无 GCC）→ 全部 `UNVERIFIED` |
