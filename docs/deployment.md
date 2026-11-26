@@ -1,6 +1,6 @@
 # 运行与部署指引（服务器 A/B 完全独立）
 
-> 适用版本：**V2 记账重置**。数据层为 V2 基线：两个方言各 13 个迁移文件（`001`–`013`），空库迁移后 38 张表、MySQL 运行时 39 张、SQLite 40 张；不支持 V1 旧库原地升级。
+> 适用版本：**V2 记账重置**。数据层为 V2 基线：两个方言各 14 个迁移文件（`001`–`014`），空库迁移后 39 张表、MySQL 运行时 40 张、SQLite 41 张；不支持 V1 旧库原地升级。
 > 生产清理与新库切换由用户执行，步骤与证据要求以 [生产清理手册](plans/v2-prod-purge-runbook.md) 与 [新库切换手册](plans/v2-cutover-runbook.md) 为准。
 > 本地开发见 [DEVELOPMENT.md](DEVELOPMENT.md)，架构与边界见 [architecture.md](architecture.md)，安全底线见 [security.md](security.md)。
 

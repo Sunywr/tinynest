@@ -1,10 +1,10 @@
 # TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
-> 契约范围：**73 条业务路由**（按「方法 + 路径」计，2026-11-26 在当前工作树以 `TestRouteBudget` 实测：`Register wired 73 routes (budget 73)`）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 73。
-> 路由总数由 `TestRouteBudget` 冻结为 ≤73；包括注册及登录使用的图形验证码入口。
+> 契约范围：**75 条业务路由**（按「方法 + 路径」计，2026-11-26 在当前工作树以 `TestRouteBudget` 实测：`Register wired 75 routes (budget 75)`）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 75。
+> 路由总数由 `TestRouteBudget` 冻结为 ≤75；包括注册及登录使用的图形验证码入口。
 > 信用卡还款计划与投资估值不是新路由，而是 `GET /accounts?include=credit_debt,investments` 的可选投影；`include` 接受空值、`credit_debt`、`investments` 或逗号组合。
-> 账单邮箱、绑卡、预览、同步与只读对账共 11 条路由见 §11：其中 10 条只读账本、不写分录，只有 `POST /accounts/{id}/credit-statement-placeholder`（生成「待补明细」占位流水）会写入账本。
+> 账单邮箱、绑卡、预览、同步、只读对账、待补明细占位与账单明细补录共 13 条路由见 §11：其中 11 条只读账本、不写分录，只有 `POST /accounts/{id}/credit-statement-placeholder`（生成「待补明细」占位流水）与 `POST /accounts/{id}/statement-detail-import`（把银行明细里的消费行入账）会写入账本。
 
 ## 1. 通用约定
 
@@ -240,9 +240,9 @@
 
 支出可通过 `budget_id` 关联一个家庭内项目。更正时省略该字段保留关联，传空字符串清除关联。仅提交 `budget_id` 时只更新关联和审计记录。项目实际支出按关联的有效分录跨月累计，同时仍计入发生当月的月度预算。
 
-## 11. 信用卡账单邮箱、对账与待补明细占位（11 条）
+## 11. 信用卡账单邮箱、对账、待补明细占位与明细补录（13 条）
 
-鉴权：会话，且当前用户 `role` ∈ `admin` / `member`（`viewer` 与已被降级的账号在写路径上返回 403 `forbidden`；邮箱类路径给出「当前账号不能修改此邮箱配置」，其余写路径由中间件统一给出「只读账号不能修改家庭账本」）。除 `POST /accounts/{id}/credit-statement-placeholder`（只读已落库的账单，不访问邮箱，忽略 `provider`）外，本节路径都接受查询参数 `provider`，取值 `qq`（默认，含空值）或 `163`，其他值 400 `invalid_request`「请选择 QQ 或 163 邮箱」。
+鉴权：会话，且当前用户 `role` ∈ `admin` / `member`（`viewer` 与已被降级的账号在写路径上返回 403 `forbidden`；邮箱类路径给出「当前账号不能修改此邮箱配置」，其余写路径由中间件统一给出「只读账号不能修改家庭账本」）。除 `POST /accounts/{id}/credit-statement-placeholder` 与两条 `statement-detail-*`（三者只读已落库的账单与浏览器上传的明细，不访问邮箱，忽略 `provider`）外，本节路径都接受查询参数 `provider`，取值 `qq`（默认，含空值）或 `163`，其他值 400 `invalid_request`「请选择 QQ 或 163 邮箱」。
 
 邮箱配置按 `(household_id, user_id, provider)` 隔离，`version` 是乐观锁：读取返回当前版本，写入必须回传同一版本，成功后自增。授权码以 AES-GCM 密文存 `auth_code_cipher`（密钥来自 `TINYNEST_MAIL_KEY_FILE`），响应只回显掩码邮箱，**任何接口都不返回明文邮箱或授权码**；IMAP 全程只读（不删信、不改旗标）。
 
@@ -259,6 +259,8 @@
 | POST | `/accounts/{id}/credit-statement-sync` | 同上，`since` 为业务今天前 45 天 | 200 `{since,created,linked,conflicts,needs_review,items:[{statement_on,due_on,result}]}`，`result` ∈ `created`/`linked`/`conflict`/`needs_review` | 同预览 |
 | GET | `/credit-statements` | 无 | 200 `{items:[{id,account_id,account_name,period_start_on,period_end_on,due_on,currency,amount_due_minor,status,review_reason,source_count,ledger_charge_minor,difference_minor,placeholder_transaction_id,placeholder_state}]}`，按 `period_end_on` 降序；`ledger_charge_minor`/`difference_minor` 在无账期起点时为 `null`；`placeholder_transaction_id` 在无占位时为 `null`，`placeholder_state` ∈ `''`（无占位）/ `awaiting_detail`（占位仍有效）/ `reversed`（占位已被冲正） | 401 |
 | POST | `/accounts/{id}/credit-statement-placeholder` | `statement_id`（必填，非空） | 201 `{transaction_id,statement_id,account_id,account_name,amount_minor,currency:"CNY",occurred_on,due_on,period_start_on,period_end_on,category_id,category_name:"待补明细"}`；`occurred_on == due_on`，`period_start_on` 可为 `null`；同一事务内写 `transactions` + 配平分录 + `statement_placeholders` 关联 + 审计 `create_statement_placeholder`（`entity="transaction"`，payload 含 `statement_id`/`amount_minor`/`due_on`） | 400 `invalid_request`、401、403 `forbidden`（`viewer`）、404 `not_found`（卡不存在/已停用/非 `credit`，或该 `statement_id` 不属于本家庭这张卡）、409 `cycle_not_closed` / `amount_unknown` / `due_date_unknown` / `cycle_already_recorded` / `placeholder_exists` / `placeholder_reversed` |
+| POST | `/accounts/{id}/statement-detail-preview` | `rows`（银行明细的原始单元格，1–3000 行）、`card_tail`（必填，归一化后取末 4 位）、`statement_id?`；请求体上限 1 MiB | 200 `{account_id,statement_id,counts:{rows,charges,refunds,payments,fees,review,held,matched,missing,skipped},charge_minor,missing_minor,items:[…],placeholder?}`；`items` 每行 `{row_no,seq,txn_on,post_on,description,card_tail,currency,amount_minor,kind,state,reason,already_imported,transaction_id}`；**只分析不落库**，不访问邮箱 | 400 `invalid_request` / `too_many_rows`、401、403、404 `not_found`（卡非本家庭的 `active` 信用卡，或 `statement_id` 不属于本卡） |
+| POST | `/accounts/{id}/statement-detail-import` | 同上（预览与入账共用同一批行与同一套判定） | 200 在预览字段之上追加 `created`、`matched`、`held`、`skipped`、`amount_minor`、`transactions[]`、`replayed`；`amount_minor` **只计本次真正入账的行**；每笔为分类「账单补录」的信用卡支出（`occurred_on` = 银行交易日期）；同一事务内写 `transactions` + 配平分录 + `statement_details` 逐行登记 + `card_statement_sources`（`kind='xls'`）+ 审计 `import_statement_details` | 同预览，另有 409 `placeholder_not_reversed`（该账期仍有未冲正的待补明细占位，响应带 `placeholder` 对象） |
 
 约束与口径：
 
@@ -282,7 +284,24 @@
 - 删除方式：走标准 `DELETE /transactions/{id}`（冲正，`reversal_of` 沿用原 `occurred_on`），同一账期净额归零；关联行保留以便界面显示「已冲正」并阻止重复占位。补录真实明细后可直接冲正占位，顺序不限。
 - 与还款计划的关系：计划把这笔占位按 `statement_placeholders` 里的**银行账期**归入对应账期（而不是 `occurred_on` 所在的下一期），因此逾期未还会显示为 `overdue`、待还合计包含该金额；被冲正的占位不再计入。
 
-## 12. 健康检查（2 条，不计入 73）
+### 11.2 账单明细补录
+
+银行明细文件由浏览器读成单元格矩阵后原样提交，**语义判定全部在服务端完成**：界面不提交金额，服务端也不相信界面带来的分类。契约要点：
+
+- **列序与容错**：按浦发版式取前 7 列（交易日期 / 记账日期 / 交易摘要 / 卡号末四位 / 卡片类型 / 交易币种 / 交易金额）。表头行（含「日期」「摘要」）与全空行跳过，既不计入也不登记。日期接受 `20261020`、`2026-10-20`、`2026/10/20`、`2026.10.20`；金额接受千分位（半/全角）、空格、`￥`/`¥`、会计式的尾负号与括号，一律经 `money.ParseYuan` 转成整数分，不使用浮点。单元格若是数字/布尔（XLSX 原始类型），先按原文本化再解析。
+- **冻结四类口径**（2026-11-26 用户确认，见 [账务规则](accounting-rules-v2.md)）：`kind` ∈ `charge` 消费 / `refund` 退款 / `payment` 还款或转入 / `fee` 费用利息 / `review` 未识别，判定只看银行摘要词表。**只有 `charge` 且账本没有对应流水的行会入账**，其余四类只登记状态与原因。
+- 判为 `review` 并写明原因的情形：卡号末四位与提交的 `card_tail` 不符、金额无法解析、币种不是人民币、金额为负但摘要没写退款、交易日期无法解析。`state` ∈ `imported`（已入账）/ `matched`（账本已有）/ `held`（只登记不入账）；`missing` 只出现在预览响应里表示「待入账」，从不落库。
+- **入账日期**：`occurred_on` = 银行的**交易日期**（不是记账日期），`post_on` 只作为登记字段保留，方便回溯银行自己的记账日。
+- 账本匹配：同家庭、同卡、同一天、同金额且 `status='posted'` 的支出流水。命中 1 条 → `matched` 并记录该 `transaction_id`（不再记账）；命中 ≥2 条 → `held`，原因「无法唯一对应，请人工核对」。待补明细占位、以及被另一条明细行占用的流水都排除在匹配之外，因此两行明细不可能指向同一笔入账。
+- 账期约束：带 `statement_id` 时按该账单的 `period_start_on..period_end_on` 过滤（起点为空按「至 `period_end_on`」处理），窗口外的消费行 `held` 并注明窗口；不带 `statement_id` 时只按卡与日期判定，也不写来源行。
+- 逐行幂等：`row_key = SHA-256(交易日期或原文 \x1f 金额或原文 \x1f 卡尾 \x1f 币种 \x1f 摘要)`，同键重复出现的行用 `seq` 递增区分，`UNIQUE(household_id, account_id, row_key, seq)`。重复上传同一文件返回 `created:0`、`replayed:true`，只补真正新增的行；派生幂等键 `statement-detail:<row_key>`（`seq>0` 时追加 `#<seq>`）写入 `transactions.idempotency_key` / `journal_entries.idempotency_key`，**不读客户端的 `Idempotency-Key`**。
+- 与占位互斥：本批存在可入账消费、且该账期还有未冲正的「待补明细」占位时，409 `placeholder_not_reversed` 并回显占位（`transaction_id`/`statement_id`/`amount_minor`/`period_start_on`/`period_end_on`/`due_on`），整批不写。是否冲正占位由用户决定，服务端不会自动冲掉整笔占位换取导入成功。
+- 分类只由服务端决定：「账单补录」单层支出分类（`code=statement_detail`，`cat_<householdID>_statement_detail`）在写事务内按需 ensure（缺失则插入，被软删除则重新激活），不是默认种子；请求体里的 `category_id` 一律忽略，用户之后可用 `PATCH /transactions/{id}` 改分类。
+- 一次性写入：每笔支出的 `transactions` 行与配平分录、全部 `statement_details` 登记行、`card_statement_sources` 来源行、审计日志在同一 `WithTx` 内完成，任一失败整体回滚，不会留下半张账单。审计动作 `import_statement_details`（`entity="account"`，`entity_id` 为卡账户 ID，payload 含 `rows`/`created`/`stored`/`amount_minor`/`statement_id`），仅在有新登记行或新来源时写。
+- 来源追溯：`digest = SHA-256("card="+账户ID, "tail="+卡尾, 每行单元格)`，命中 `UNIQUE(household_id, digest)` 时不重复写来源行——同一份文件重传算一次，改用修正后的导出算新来源。
+- 单次上限 3000 行（超出 400 `too_many_rows`），请求体上限 1 MiB（`decode` 统一限制）。
+
+## 12. 健康检查（2 条，不计入 75）
 
 | 方法 | 路径 | 鉴权 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |
@@ -302,6 +321,7 @@
 - 幂等键不跨家庭复用：回放查询按 `(idempotency_key, household_id)` 限定，其他家庭看不到该流水。
 - 账单同步不使用 `Idempotency-Key`：去重靠数据库唯一约束 `(household_id, account_id, period_end_on)` 与来源 `UNIQUE(household_id, digest)`，以及邮箱配置 `version` 的乐观锁，因此重复点击同步不会产生第二行账单或第二条来源。
 - 待补明细占位同样**不读客户端 `Idempotency-Key`**：去重靠 `statement_placeholders` 的 `PRIMARY KEY(household_id, statement_id)`，并额外写入服务器派生的键 `statement-placeholder:<statement_id>`（`transactions.idempotency_key` / `journal_entries.idempotency_key`），因此重复点击返回 409 `placeholder_exists`，不会产生第二笔占位支出。
+- 账单明细补录也**不读客户端 `Idempotency-Key`**：幂等粒度是**行**而不是请求——`statement_details` 的 `UNIQUE(household_id, account_id, row_key, seq)` 决定哪些行已经见过，入账行再叠一层派生键 `statement-detail:<row_key>[#seq]`。同一份文件重复上传返回 200 `created:0, replayed:true`；文件里只有一行改了金额时，只有那一行会被入账。
 
 ### 13.2 家庭隔离与只读角色
 

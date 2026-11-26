@@ -50,6 +50,7 @@
 - **期初余额不进收入/支出**：对方科目固定 `3010` 期初权益；信用卡期初欠款同样走权益，不确认费用。
 - 每笔流水只有一个 `category_id`（单层分类）；V2 API 不再接受拆分行，内核的 `ledger.Split` 类型只作为单分类调用路径使用。
 - **待补明细占位就是规则 2**：`POST /accounts/{id}/credit-statement-placeholder` 用银行报出的应还金额生成一笔信用卡支出（借 `5010:pending` / 贷 `2010:<信用卡>`），`occurred_on` 取还款截止日、分类固定「待补明细」。它不引入新的分录形态，因此与正常信用卡支出一样只增加负债、不动现金余额，但会让 §6.5 的现金计划把这笔应还提前占住。补录真实明细后冲正这笔占位：冲正沿用占位的 `occurred_on`（还款截止日），因此截止日当天多算的那笔支出归零，不会污染账单账期本身。
+- **账单明细补录同样是规则 2**：`POST /accounts/{id}/statement-detail-import` 把银行明细里**判定为「消费」且账本尚无对应流水**的行逐笔生成信用卡支出（借 `5010:statement_detail` / 贷 `2010:<信用卡>`），`occurred_on` = 银行的**交易日期**（不是记账日期），分类「账单补录」。退款、还款或转入、费用利息与未识别四类只在 `statement_details` 登记状态与原因、**不写任何分录**——银行报表里的负数不是退款的证据，是否记账由家庭自己决定（口径于 2026-11-26 由用户确认：首批浦发、四类分开只入账消费、日期取交易日期）。同一账期若还有未冲正的待补明细占位，整批导入以 409 `placeholder_not_reversed` 拒绝，服务端不会自动冲掉占位。
 
 ## 4. API 事件映射
 
@@ -63,6 +64,8 @@
 | `PATCH /transactions/{id}` | 任意可改字段 | 冲正原分录 + 规则 1–5 重新入账 | 同一事务 |
 | `DELETE /transactions/{id}` | 无 | 规则 8 | 只冲正，不物理删除 |
 | `POST /accounts/{id}/credit-statement-placeholder` | `statement_id`（金额与日期取自银行账单，客户端不可提交） | 规则 2 | 分类固定「待补明细」，`occurred_on`=还款截止日；同时写 `statement_placeholders` 关联与审计 |
+| `POST /accounts/{id}/statement-detail-preview` | `rows`（银行明细单元格）、`card_tail`、`statement_id?` | **无**（只分析，不落库） | 回显每行的 `kind`/`state`/`reason` 与待入账合计 |
+| `POST /accounts/{id}/statement-detail-import` | 同上（与预览同一批行、同一套判定） | 规则 2（仅 `kind=charge` 且账本无对应流水的行） | 分类固定「账单补录」，`occurred_on`=银行交易日期；同时逐行登记 `statement_details`、写 `card_statement_sources(kind='xls')` 与审计；金额与日期客户端不可提交 |
 
 冲正分录的 `biz_id` 沿用原业务 ID、`biz_type=reversal`、行 memo 为「撤销原记录」；`occurred_on` 沿用原日期。
 
@@ -89,6 +92,8 @@
 转账（`1010`/`2010`）、信用卡还款（`2010` 借方 / `1010` 贷方）、期初余额（`3010`）都不匹配上述前缀，因此**不计入收支**。
 
 「待补明细」占位是 `5010:pending`，**计入支出**，且按它的 `occurred_on`（还款截止日）落在截止日所在的月份，不落在银行账期本身——这是刻意取舍：现金流视图需要看到这笔钱，代价是该月支出统计里会短暂出现一笔尚未对应真实消费的分类。补录明细后冲正占位即可归位：冲正沿用占位的 `occurred_on`，抵销记在同一月份，不会在补录当月额外留下一笔反向支出。因此不要把带占位的月份当作最终分类结果对外引用。
+
+「账单补录」`5010:statement_detail` 与任何手工记账的支出**完全同权**：计入支出、按银行交易日期落进所属月份、可被 `PATCH /transactions/{id}` 改成真实分类（改分类即冲正 + 重新入账，同一事务）。它只是导入那一刻的归属，不代表这些消费无法归类——补录后应尽快改到真实分类，否则分类排行会长期挂着一笔「账单补录」。同一账期因此可能出现「截止日一笔占位支出 + 账期内若干笔补录支出」的双计形态，这正是导入用 409 `placeholder_not_reversed` 拦住的原因：先冲正占位，再补录明细。
 
 ### 6.2 分类统计
 
@@ -123,6 +128,7 @@
 9. **完成度**：`complete` 仅在发薪日已设置且所有未删除信用卡都配置时才是 true；否则界面显示「已知需准备 / 未配置卡未计入」，不得宣称现金足够。
 10. **无快照**：不保存历史账单；修改账单日/还款日会按当前配置重算未还金额。未来日期的流水不计入「截至今天」的计划。
 11. **待补明细占位是第 3 条的两处例外**：关联到 `statement_placeholders` 的支出流水**不受「截至今天」限制**——它的 `occurred_on` 是未来的还款截止日，而把这笔现金提前占住正是目的；它的账期与到期日也**不走卡的周期网格**，而是直接采用银行报的 `period_start_on` / `period_end_on` / `due_on`，因此这笔钱归入它真正覆盖的那个账期（显示为已出账/逾期），而不是截止日恰好落进的下一期。占位被冲正后（`reversal_of` 非空或流水 `status<>'posted'`）两处例外同时失效，金额不再占计划。
+12. **补录明细不需要例外**：`statement_details` 入账的每笔消费 `occurred_on` 是账期之内的银行交易日期，因此第 3 条的「截至今天」与第 1 条的周期网格都直接适用——补录完成后该账期的未还来自真实消费，计划自然反映出来。也正因如此，占位与补录覆盖同一账期会双计，服务端以 409 拦住而不是替用户冲正（见 §3 约束与 [API 契约](api-v2.md) §11.2）。
 
 ## 7. 幂等
 
@@ -131,6 +137,7 @@
 - 同一家庭内重复提交同一键：返回 200 `{id,status:"posted",replayed:true}`，不产生重复分录；事务失败后会重新查询是否已被并发请求提交。
 - 其它写操作（更正、删除、分类/账户/预算、成员与管理员操作）没有 API 级幂等键；重试前应先读取当前状态。
 - 待补明细占位不读请求头，但由服务器派生键 `statement-placeholder:<statement_id>` 写入两表的 `idempotency_key`，并用 `statement_placeholders` 的 `PRIMARY KEY(household_id, statement_id)` 挡住第二笔：重复请求得到 409，而不是第二笔占位支出。
+- 账单明细补录同样不读请求头，幂等粒度是**行**：`statement_details` 的 `UNIQUE(household_id, account_id, row_key, seq)` 决定哪些行已经见过，入账行再叠一层派生键 `statement-detail:<row_key>[#seq]`。因此重传同一份文件返回 `created:0`、`replayed:true`；只有修正后新增的行会被入账，同一行永远只可能产生一笔支出。
 - 幂等只防重复提交，不替代「已冲正不可再操作」等业务状态校验。
 
 ## 8. 余额重建、并发与家庭隔离
@@ -152,10 +159,10 @@
 | 流水拆分 | `transaction_splits`，多分类分摊 | 单分类，无拆分行 |
 | 退款 | `/refunds` 路由与 `refunds` 表 | 退役；内核构造器未暴露 |
 | 信用账单/分期/负债/投资交易 | 有独立表与规则 | 整套退役；仅保留 pfm 只读估值快照 |
-| 信用卡账单日/还款日 | 独立 `credit_instruments` + 账单表 | 仅 `accounts` 两个可空配置列 + 只读派生计划，无账单表/分期/利息 |
+| 信用卡账单日/还款日 | 独立 `credit_instruments` + 账单表 | 仅 `accounts` 两个可空配置列 + 只读派生计划；无分期、无利息计提。V2 增量另建**只读**银行账单表（012 汇总、013 占位关联、014 明细登记），只有用户显式点击才产生普通流水（见 §3 约束、§6.5） |
 | 分类 | 两级，可设 `parent_id` | 单层，无 `parent_id` |
 | 统计科目 | 含利息、手续费、保险、分红、投资损益等 | 仅 `4010:%` 收入、`5010:%` 支出；还款计划与投资收益单独只读派生 |
-| 迁移 | 多版本增量 | 单一迁移器 + `baseline=v2` 基线重置（当前 001–013，两个方言各 13 个文件） |
+| 迁移 | 多版本增量 | 单一迁移器 + `baseline=v2` 基线重置（当前 001–014，两个方言各 14 个文件） |
 
 ## 11. 相关代码与文档
 
@@ -164,5 +171,6 @@
 - 统计与预算：`apps/api/internal/api/stats.go`。
 - 信用卡还款计划：`apps/api/internal/api/credit_debt.go`（只读派生）；账户配置列在 `internal/api/accounts.go`。
 - 证券/理财估值快照：`apps/api/internal/api/investments.go`（只读投影）；表在 `005_investments.sql`。
+- 银行账单：`internal/api/credit_statements.go`（邮箱只读同步与比对）、`internal/api/credit_statement_placeholder.go`（待补明细占位）、`internal/api/statement_details.go`（明细解析、四类判定、逐行幂等与补录入账）；表在 `012`–`014`。
 - 余额重建：`apps/api/internal/db/journal.go`。
 - 数据模型：[er-v2.md](er-v2.md)；接口契约：[api-v2.md](api-v2.md)；迁移与基线：[DEVELOPMENT.md](DEVELOPMENT.md) §5。

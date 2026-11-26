@@ -42,8 +42,8 @@ var PurgeGroups = []Group{
 	},
 	{
 		Name:   "银行账单与绑卡",
-		Note:   "迁移 010-013 的只读对账数据：银行汇总、邮件来源、绑卡关系与待补明细占位；加密授权码在保留组",
-		Tables: []string{"statement_placeholders", "card_statement_sources", "card_statements", "statement_mailbox_card_links", "credit_statement_bindings"},
+		Note:   "迁移 010-014 的只读对账数据：银行汇总、邮件来源、绑卡关系、待补明细占位与上传的账单明细；加密授权码在保留组",
+		Tables: []string{"statement_placeholders", "statement_details", "card_statement_sources", "card_statements", "statement_mailbox_card_links", "credit_statement_bindings"},
 	},
 	{
 		Name:   "分期",
@@ -160,6 +160,7 @@ var deleteOrder = []string{
 	// placeholder link points at BOTH a statement and a transaction, so it goes
 	// first; the ledger rows it references stay until their own turn.
 	"statement_placeholders",
+	"statement_details",
 	"card_statement_sources",
 	"card_statements",
 	"statement_mailbox_card_links",

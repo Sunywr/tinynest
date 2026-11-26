@@ -38,7 +38,7 @@ npm.cmd run test:e2e
 先阅读 `apps/api/.env.example`（示例配置，勿提交真实值）。本地用 SQLite 时不需要 MySQL 与邮件密钥；`TINYNEST_COOKIE_SECURE` **必须显式**设置。
 
 ```bash
-# 终端 1：Go API（启动时自动应用 V2 迁移 001–013）
+# 终端 1：Go API（启动时自动应用 V2 迁移 001–014）
 cd apps/api
 mkdir -p data
 export TINYNEST_DATA_DIR=./data
@@ -134,7 +134,7 @@ tinynest/
 
 ## 5. 数据库迁移（V2）
 
-- 每个方言当前有 **版本 1–4**：`migrations/001_core.sql`、`002_bookkeeping.sql`、`003_category_style.sql`、`004_credit_cycle.sql`（SQLite）与 `internal/db/mysql/` 下同名文件（MySQL）。文件名前 3 位是版本号。
+- 每个方言当前有 **版本 1–14（001–014）**：`001_core.sql`、`002_bookkeeping.sql`、`003_category_style.sql`、`004_credit_cycle.sql`、`005_investments.sql`、`006_auth_login_locks.sql`、`007_project_budgets.sql`、`008_transaction_source_metadata.sql`、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`、`012_card_statements.sql`、`013_statement_placeholders.sql`、`014_statement_details.sql`（SQLite 在 `internal/db/migrations/`，MySQL 在 `internal/db/mysql/` 同名）。文件名前 3 位是版本号。空库迁移后 39 张表，MySQL 运行时 40 张、SQLite 41 张。
 - 单一迁移器 `internal/db/migrate.go` 按版本升序应用缺失版本，记录 SHA-256 校验和，校验版本连续性与已应用版本的校验和；`schema_meta` 写入 `baseline=v2`。
 - SQLite 的迁移文件与账本行在同一事务；MySQL DDL 隐式提交，因此 **MySQL 迁移文件必须可重跑**。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；需要 `ALTER TABLE` 时用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法）。
 - `schema_meta.baseline` 缺失/不是 `v2`、出现二进制不认识的版本、校验和不一致时启动失败，中文错误指向 [新库切换手册](plans/v2-cutover-runbook.md)。**不得绕过守卫**。
@@ -183,6 +183,7 @@ go test ./internal/dbadmin -run '^TestMySQLPurgeDrill$' -count=1
 ```
 
 - 本机已用 MySQL 8.0.46 隔离实例验证 24 条 API 测试、2 条 dbadmin drill 与 dump/restore 对账；生产 Unix socket 与 `readyz` 仍未验证。
+- 2026-11-26 另在一台临时 MySQL 8.4.7 隔离实例（临时 datadir、`127.0.0.1:3307`，口令只经 `TINYNEST_TEST_MYSQL_PASSWORD_FILE` 传入，用完即停进程并删除数据目录）跑通迁移 `001→014` 全链与 `014_statement_details.sql` 重放三次（退出码 `0 0 0`、行数不变），并复跑 `TestMySQLPurgeDrill`、`TestMySQLIdentityCutoverDrill`（各自独立空库）与 11 条 `TestStatementDetail*`（每条一个空库）；机器自带服务实例未被触碰。
 - `internal/api/mysql_windows_test.go` 与 `internal/dbadmin/mysql_windows_test.go` 只在 `TINYNEST_TEST_MYSQL_TCP` 设置时注册拨号器；Linux CI 仍使用 `scripts/mysql-ci-drill.sh` 的 Unix socket 路径。
 
 - `scripts/check-phase0.sh` / `.ps1` 名字保留历史，实际执行品牌校验、Go test/vet 与前端构建；V2 的完整门禁以 `.github/workflows/ci.yml` 为准（Go build/test/race/vet/tidy、MySQL Unix socket 与备份恢复演练、Web typecheck/build、Playwright E2E、全树行尾空白检查）。
@@ -212,7 +213,7 @@ export TINYNEST_DB_PATH="$PWD/data/tinynest.sqlite3"
 - 先停止 API（`purge -execute` 还要求 `-yes-service-stopped` 显式确认），否则调度/邮件 worker 会边清边写。
 - `-confirm` 必须与目标数据库名完全一致；SQLite 模式下 `Database.Name()` 就是数据库文件路径，必须逐字匹配。
 - MySQL 口令只通过 `TINYNEST_MYSQL_PASSWORD_FILE` 或 `CREDENTIALS_DIRECTORY/mysql-password` 提供，不接受命令行密码。
-- `purge` 在单事务内清理 **55 个表名（16 组）**：当前 V2 基线中 23 张存在、32 个是 V1 遗留名（按 `Missing` 跳过并在输出里列出）；保留 11 张身份表与 2 张含加密授权码的个人配置表（`statement_mailbox_configs`、`credit_statement_mailboxes`，后者不进入身份导出）。事务内断言已分类的业务表全空、身份与保留配置计数、`users` 摘要不变后才提交；未归类的新表会让 `verify` 失败而不是静默漏清。
+- `purge` 在单事务内清理 **56 个表名（16 组）**：当前 V2 基线中 24 张存在、32 个是 V1 遗留名（按 `Missing` 跳过并在输出里列出）；保留 11 张身份表与 2 张含加密授权码的个人配置表（`statement_mailbox_configs`、`credit_statement_mailboxes`，后者不进入身份导出）。事务内断言已分类的业务表全空、身份与保留配置计数、`users` 摘要不变后才提交；未归类的新表会让 `verify` 失败而不是静默漏清。
 - 执行前先备份并做隔离恢复比对；执行后立即 `verify`；旧库与备份保留 ≥30 天。完整命令、判据与回滚见 [生产清理手册](plans/v2-prod-purge-runbook.md) 与 [新库切换手册](plans/v2-cutover-runbook.md)。
 - `identity-export` 输出含用户名与邮箱（及口令哈希），权限 0600，按机密保管并限期删除，不得进入仓库。
 

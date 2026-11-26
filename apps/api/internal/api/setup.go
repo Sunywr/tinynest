@@ -65,6 +65,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.route(mux, "PUT /api/v1/accounts/{id}/credit-statement-binding", a.handleStatementBinding)
 	a.route(mux, "DELETE /api/v1/accounts/{id}/credit-statement-binding", a.handleStatementBinding)
 	a.route(mux, "POST /api/v1/accounts/{id}/credit-statement-placeholder", a.handleStatementPlaceholder)
+	a.route(mux, "POST /api/v1/accounts/{id}/statement-detail-preview", a.handleStatementDetailPreview)
+	a.route(mux, "POST /api/v1/accounts/{id}/statement-detail-import", a.handleStatementDetailImport)
 
 	// --- bookkeeping: categories -------------------------------------------------
 	a.registerBookkeeping(mux)

@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import * as XLSX from 'xlsx'
 import { fillCaptcha, captchaProof } from './captcha-fixture'
 
 /**
@@ -1690,5 +1691,133 @@ test.describe('I 分类配色与金额输入', () => {
     for (let index = 0; index < 3; index += 1) {
       await expect(incomeOptions.nth(index).locator('.category-tile svg')).toBeVisible()
     }
+  })
+})
+
+
+// ---------------------------------------------------- J 信用卡账单明细补录
+// Playwright needs the workbook as Node bytes and this tsconfig carries no
+// @types/node, so the global is declared rather than adding a dependency.
+declare const Buffer: { from(input: string, encoding: 'base64'): Uint8Array }
+
+test.describe('J 账单明细补录', () => {
+  const detailHeader = ['交易日期', '记账日期', '交易摘要', '卡号末四位', '卡片类型', '交易币种', '交易金额', '原始交易金额&币种']
+
+  /** 浦发账单明细版式：八列、日期写成 20261020、金额是元。测试用真实 xlsx 字节流。 */
+  const detailRow = (txnOn: string, desc: string, tail: string, currency: string, amount: string): string[] =>
+    [txnOn, txnOn, desc, tail, '主卡', currency, amount, amount]
+
+  function detailWorkbook(rows: string[][]): Uint8Array {
+    const book = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([detailHeader, ...rows]), '账单明细')
+    return Buffer.from(XLSX.write(book, { bookType: 'xlsx', type: 'base64' }) as string, 'base64')
+  }
+
+  async function upload(sheet: Locator, rows: string[][], name = 'bill.xlsx') {
+    await sheet.getByTestId('detail-file').setInputFiles({
+      name,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: detailWorkbook(rows),
+    })
+  }
+
+  async function openDetailSheet(page: Page, csrf: string, cardName: string) {
+    await page.request.post('/api/v1/accounts', {
+      data: { kind: 'credit', name: cardName, statement_day: 1, due_day: 25 },
+      headers: writeHeaders(csrf),
+    })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto('/assets')
+    const panel = page.getByRole('region', { name: '信用卡还款计划' })
+    await expect(panel).toBeVisible()
+    await panel.locator('.credit-debt-row', { hasText: cardName }).getByTestId('detail-upload').click()
+    return page.getByRole('dialog', { name: /上传账单明细/ })
+  }
+
+  async function bookedExpenses(page: Page): Promise<any[]> {
+    const body = await (await page.request.get('/api/v1/transactions?limit=200')).json()
+    return (body.items as any[]).filter(item => item.type === 'expense' && item.status === 'posted')
+  }
+
+  test('J01 预览展示分类与原因，不写任何流水', async ({ page }) => {
+    const csrf = await signIn(page)
+    const before = await bookedExpenses(page)
+    const sheet = await openDetailSheet(page, csrf, `明细预览卡 ${uid('c')}`)
+    await upload(sheet, [
+      detailRow('20261020', '支付宝－某商户', '4321', '人民币', '123.45'),
+      detailRow('20261026', '某商户退款', '4321', '人民币', '-60.00'),
+      detailRow('20261028', '自助还款', '4321', '人民币', '-500.00'),
+      detailRow('20261029', '年费', '4321', '人民币', '100.00'),
+    ])
+    const counts = sheet.getByTestId('detail-counts')
+    await expect(counts).toContainText('明细 4 行')
+    await expect(counts).toContainText('消费 1 笔 ¥123.45')
+    await expect(counts).toContainText('待入账 1 笔 ¥123.45')
+    await expect(counts).toContainText('暂不入账 3')
+    const list = sheet.getByTestId('detail-list')
+    await expect(list).toContainText('消费 · 待入账')
+    await expect(list).toContainText('退款不自动入账')
+    await expect(list).toContainText('还款或转入不是消费')
+    await expect(list).toContainText('费用与利息不自动入账')
+    // 预览是只读的：入账只能由「确认入账」触发。
+    expect((await bookedExpenses(page)).length).toBe(before.length)
+    await expect(sheet.getByTestId('detail-import')).toBeEnabled()
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+  })
+
+  test('J02 确认入账只记消费，重复上传同一行不双计', async ({ page }) => {
+    const csrf = await signIn(page)
+    const before = await bookedExpenses(page)
+    const sheet = await openDetailSheet(page, csrf, `明细入账卡 ${uid('c')}`)
+    const rows = [
+      detailRow('20261020', '支付宝－某商户', '4321', '人民币', '123.45'),
+      detailRow('20261025', '某超市', '4321', '人民币', '300.00'),
+      detailRow('20261029', '年费', '4321', '人民币', '100.00'),
+    ]
+    await upload(sheet, rows)
+    await expect(sheet.getByTestId('detail-counts')).toContainText('待入账 2 笔 ¥423.45')
+
+    await sheet.getByTestId('detail-import').click()
+    await expect(sheet.getByText('已入账 2 笔消费 ¥423.45')).toBeVisible()
+    const after = await bookedExpenses(page)
+    expect(after.length).toBe(before.length + 2)
+    const booked = after.filter(item => item.category_name === '账单补录')
+    expect(booked.map(item => item.amount_minor).sort((a, b) => a - b)).toEqual([12345, 30000])
+
+    // 同一份文件重新下载后少了一行：预览如实标出「此前已补录」，没有待入账时确认按钮不可用。
+    await upload(sheet, rows.slice(1), 'bill-again.xlsx')
+    await expect(sheet.getByTestId('detail-counts')).toContainText('此前已补录 2')
+    await expect(sheet.getByTestId('detail-counts')).toContainText('待入账 0 笔')
+    await expect(sheet.getByTestId('detail-import')).toBeDisabled()
+    expect((await bookedExpenses(page)).length).toBe(after.length)
+    await expect(sheet.getByTestId('detail-list')).toContainText('此前已上传')
+
+    // 多一行新消费的重传：只有这一行入账，已补录的行不双计。
+    await upload(sheet, [...rows, detailRow('20261102', '某酒店', '4321', '人民币', '77.70')], 'bill-more.xlsx')
+    await expect(sheet.getByTestId('detail-counts')).toContainText('待入账 1 笔 ¥77.70')
+    // 连点保护会丢弃 450ms 内对同一按钮的第二次点击（src/services/interactionFeedback.ts）。
+    // 换文件后的这次确认是新意图，等过窗口再点，测的才是入账而不是防抖。
+    await page.waitForTimeout(500)
+    await sheet.getByTestId('detail-import').click()
+    await expect(sheet.getByText('已入账 1 笔消费 ¥77.70')).toBeVisible()
+    const extended = await bookedExpenses(page)
+    expect(extended.length).toBe(after.length + 1)
+    expect(extended.filter(item => item.amount_minor === 12345 && item.category_name === '账单补录').length).toBe(1)
+  })
+
+  test('J03 未填卡号末四位时服务器拒绝，界面不假装成功', async ({ page }) => {
+    const csrf = await signIn(page)
+    const before = await bookedExpenses(page)
+    const sheet = await openDetailSheet(page, csrf, `明细缺尾卡 ${uid('c')}`)
+    await upload(sheet, [detailRow('20261020', '支付宝－某商户', '4321', '人民币', '123.45')])
+    await expect(sheet.getByTestId('detail-counts')).toContainText('待入账 1 笔')
+    await sheet.getByTestId('detail-tail').fill('')
+    await sheet.getByTestId('detail-preview').click()
+    await expect(sheet.locator('.inline-error')).toContainText('缺少卡号末四位')
+    await expect(sheet.getByTestId('detail-counts')).toHaveCount(0)
+    // 预览失败后确认按钮不可用：不给出「看起来已入账」的下一步。
+    await expect(sheet.getByTestId('detail-import')).toBeDisabled()
+    expect((await bookedExpenses(page)).length).toBe(before.length)
   })
 })

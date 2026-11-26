@@ -41,6 +41,20 @@ func seedStatementRows(t *testing.T, admin *Admin, f fixture) {
 		(household_id, statement_id, transaction_id, period_start_on, period_end_on, due_on, created_at)
 		VALUES (?,?,?,?,?,?,?)`,
 		f.household, "cs1", "tx1", "2026-10-02", "2026-11-01", "2026-11-25", "2026-11-01T00:00:00Z")
+	// An uploaded detail line references the statement, the card and the
+	// transaction it became, so it is as deep as the placeholder link.
+	mustExec(t, admin, `INSERT INTO statement_details
+		(id, household_id, account_id, statement_id, transaction_id, row_key, row_no, seq, card_tail,
+		 kind, state, txn_on, post_on, description, amount_minor, currency, review_reason, source_digest, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"sd1", f.household, "acctcc", "cs1", nil, "rowkey1", 3, 0, "4321",
+		"refund", "held", "2026-10-20", "2026-10-22", "某商户退款", -6000, "CNY", "退款不自动入账", "filedigest1", "2026-11-01T00:00:00Z")
+	mustExec(t, admin, `INSERT INTO statement_details
+		(id, household_id, account_id, statement_id, transaction_id, row_key, row_no, seq, card_tail,
+		 kind, state, txn_on, post_on, description, amount_minor, currency, review_reason, source_digest, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"sd2", f.household, "acctcc", "cs1", "tx2", "rowkey2", 4, 0, "4321",
+		"charge", "matched", "2026-11-02", "2026-11-02", "自助还款", 2000, "CNY", "", "filedigest1", "2026-11-01T00:00:00Z")
 	mustExec(t, admin, `INSERT INTO investment_accounts (id, household_id, kind, name, cash_minor) VALUES (?,?,?,?,?)`,
 		"inv1", f.household, "security", "证券账户", 500000)
 	mustExec(t, admin, `INSERT INTO investment_holdings (id, household_id, account_id, symbol, name, market_value_minor)
@@ -59,7 +73,7 @@ func TestPurgeClearsCardStatementTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("purge with synced statements: %v (committed=%v)", err, result.Committed)
 	}
-	for _, table := range []string{"statement_placeholders", "card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts", "investment_holdings"} {
+	for _, table := range []string{"statement_placeholders", "statement_details", "card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts", "investment_holdings"} {
 		var rows int
 		if err := admin.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&rows); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -126,6 +140,7 @@ func TestStatementTablesSortBeforeTheirParentsInDeleteOrder(t *testing.T) {
 	}
 	childBefore := map[string][]string{
 		"statement_placeholders":       {"card_statements", "transactions"},
+		"statement_details":            {"card_statements", "transactions", "accounts"},
 		"card_statements":              {"accounts"},
 		"card_statement_sources":       {"card_statements"},
 		"statement_mailbox_card_links": {"accounts"},

@@ -33,14 +33,14 @@ PC 浏览器 / iPhone Safari 或主屏 PWA
 | --- | --- | --- |
 | Web 客户端 | `apps/web/` | Vue 3 + TypeScript + Vite + vue-router 4；PWA；只请求相对路径 `/api/v1/*` |
 | API 服务 | `apps/api/cmd/server` | 组合根：打开数据库 → 执行迁移 → 注入 readiness → 注册路由 → 启动邮件 worker |
-| 业务包 | `internal/api` | 73 条业务路由、认证/CSRF/限流中间件、记账、统计、预算、信用卡还款计划派生、只读投资估值投影、账单邮箱与只读对账、身份/家庭/邮件 handler |
+| 业务包 | `internal/api` | 75 条业务路由、认证/CSRF/限流中间件、记账、统计、预算、信用卡还款计划派生、只读投资估值投影、账单邮箱与只读对账、待补明细占位、账单明细补录、身份/家庭/邮件 handler |
 | 账务内核 | `internal/ledger`、`internal/money` | 借贷平衡校验、科目编码、业务分录、冲正、整数分金额 |
 | 数据层 | `internal/db` | SQLite/MySQL 连接、单一迁移器、分录持久化、默认分类 |
 | 运维工具 | `cmd/tinynest-admin`、`internal/dbadmin` | 生产清理、校验、身份导出导入；与本文件描述的数据访问共用 `internal/platform/config` |
 | 邮件运维工具 | `cmd/mail-admin` | 生成邮件密钥、授予/撤销站点管理员、受控改密（仅本地执行） |
 | 健康检查 | `internal/server` | `/api/v1/healthz`、`/api/v1/readyz`，以及 HTTP 超时与中间件骨架 |
 
-`internal/server` 的 `Options.Register` 由组合根注入业务路由，因此 `healthz`/`readyz` 不计入 73 条业务路由（`TestRouteBudget` 实测 `Register wired 73 routes`）。
+`internal/server` 的 `Options.Register` 由组合根注入业务路由，因此 `healthz`/`readyz` 不计入 75 条业务路由（`TestRouteBudget` 实测 `Register wired 75 routes`）。
 
 ## 3. 前端
 
@@ -54,7 +54,7 @@ PC 浏览器 / iPhone Safari 或主屏 PWA
 
 - Go 模块化单体：`net/http` + `modernc.org/sqlite`（纯 Go、无 CGO）或 `go-sql-driver/mysql`；SQLite 启用 WAL、`foreign_keys=ON`、`busy_timeout=5000`、单连接单写。
 - SQLite 与 MySQL 使用同一套迁移器（`internal/db/migrate.go`）与同一套业务代码；方言差异只在 SQL 语法分支（upsert、`FOR UPDATE`、DDL）。
-- 两个方言当前各有 **13 个迁移文件**（`internal/db/migrations/` 与 `internal/db/mysql/` 同名）：`001_core.sql`（21 张表：身份/家庭/邮件/审计/复式内核/`schema_meta`）、`002_bookkeeping.sql`（4 张：分类/账户/流水/预算）、`003_category_style.sql`（分类颜色，无新表）、`004_credit_cycle.sql`（信用卡账单日/还款日配置列，无新表）、`005_investments.sql`（证券/理财估值快照 2 张）、`006_auth_login_locks.sql`（登录风控 1 张）、`007_project_budgets.sql`（项目预算 2 张）、`008_transaction_source_metadata.sql`（1 张）、`009_credit_statement_mailboxes.sql`（1 张）、`010_credit_statement_bindings.sql`（1 张）、`011_statement_mailbox_providers.sql`（按服务商隔离 2 张，从 009/010 复制数据但不删旧表）、`012_card_statements.sql`（银行汇总 2 张）、`013_statement_placeholders.sql`（待补明细占位关联 1 张）。空库迁移后共 **38 张**表；MySQL 运行时另有代码创建的 `schema_migrations` 为 **39 张**，SQLite 再因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **40 张**（2026-11-26 在两方言隔离库上逐张清点）。逐表清单见 [ER](er-v2.md) §1。
+- 两个方言当前各有 **14 个迁移文件**（`internal/db/migrations/` 与 `internal/db/mysql/` 同名）：`001_core.sql`（21 张表：身份/家庭/邮件/审计/复式内核/`schema_meta`）、`002_bookkeeping.sql`（4 张：分类/账户/流水/预算）、`003_category_style.sql`（分类颜色，无新表）、`004_credit_cycle.sql`（信用卡账单日/还款日配置列，无新表）、`005_investments.sql`（证券/理财估值快照 2 张）、`006_auth_login_locks.sql`（登录风控 1 张）、`007_project_budgets.sql`（项目预算 2 张）、`008_transaction_source_metadata.sql`（1 张）、`009_credit_statement_mailboxes.sql`（1 张）、`010_credit_statement_bindings.sql`（1 张）、`011_statement_mailbox_providers.sql`（按服务商隔离 2 张，从 009/010 复制数据但不删旧表）、`012_card_statements.sql`（银行汇总 2 张）、`013_statement_placeholders.sql`（待补明细占位关联 1 张）、`014_statement_details.sql`（账单明细逐行登记 1 张）。空库迁移后共 **39 张**表；MySQL 运行时另有代码创建的 `schema_migrations` 为 **40 张**，SQLite 再因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **41 张**（2026-11-26 在两方言隔离库上逐张清点）。逐表清单见 [ER](er-v2.md) §1。
 - 迁移器按文件名版本升序应用，记录 SHA-256 校验和并校验连续性；SQLite 整文件单事务，MySQL 逐条执行且文件必须可重跑。
 - **基线守卫**：`schema_meta.baseline` 缺失或不是 `v2`、出现不认识的版本、校验和不一致时启动直接失败，中文错误指向 [新库切换手册](plans/v2-cutover-runbook.md)。V2 不支持 V1 旧库原地升级。
 - 默认分类由 Go 常量 `db.DefaultCategories` + `db.SeedForHousehold()` 幂等写入；不再有 SQL 种子文件与启动期 `UPDATE`。

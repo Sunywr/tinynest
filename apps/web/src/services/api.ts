@@ -217,6 +217,70 @@ export type StatementPlaceholder = {
   category_id: string
   category_name: string
 }
+
+// 账单明细补录: the browser hands the bank report's cells over and the server
+// decides what each line means. Only 消费 becomes an expense, so the item list
+// must show WHY a line was not booked instead of hiding it.
+export type StatementDetailKind = 'charge' | 'refund' | 'payment' | 'fee' | 'review'
+export type StatementDetailState = 'imported' | 'matched' | 'held' | 'missing'
+
+export type StatementDetailItem = {
+  row_no: number
+  seq: number
+  txn_on: string | null
+  post_on: string | null
+  description: string
+  card_tail: string
+  currency: string
+  amount_minor: number
+  kind: StatementDetailKind
+  state: StatementDetailState
+  reason: string
+  already_imported: boolean
+  transaction_id: string | null
+}
+
+export type StatementDetailCounts = {
+  rows: number
+  charges: number
+  refunds: number
+  payments: number
+  fees: number
+  review: number
+  held: number
+  matched: number
+  missing: number
+  skipped: number
+}
+
+export type StatementDetailSummary = {
+  account_id: string
+  statement_id: string | null
+  counts: StatementDetailCounts
+  items: StatementDetailItem[]
+  charge_minor: number
+  missing_minor: number
+  created?: number
+  matched?: number
+  held?: number
+  skipped?: number
+  amount_minor?: number
+  transactions?: string[]
+  replayed?: boolean
+  placeholder?: {
+    transaction_id: string
+    statement_id: string
+    amount_minor: number
+    due_on: string | null
+    period_end_on: string
+  }
+}
+
+export type StatementDetailInput = {
+  rows: (string | number | boolean | null)[][]
+  card_tail: string
+  statement_id?: string
+}
 export type InvestmentHolding = {
   id: string
   symbol: string
@@ -452,6 +516,10 @@ export const api = {
   cardStatements: () => get<{ items: CardStatement[] }>('/credit-statements'),
   createStatementPlaceholder: (accountId: string, statementId: string) =>
     post<StatementPlaceholder>(`/accounts/${encodeURIComponent(accountId)}/credit-statement-placeholder`, { statement_id: statementId }),
+  previewStatementDetails: (accountId: string, body: StatementDetailInput) =>
+    post<StatementDetailSummary>(`/accounts/${encodeURIComponent(accountId)}/statement-detail-preview`, body),
+  importStatementDetails: (accountId: string, body: StatementDetailInput) =>
+    post<StatementDetailSummary>(`/accounts/${encodeURIComponent(accountId)}/statement-detail-import`, body),
   investments: () => get<AccountsWithInvestments>('/accounts?include=investments'),
   account: (id: string) => get<Account & { items?: unknown[] }>(`/accounts/${encodeURIComponent(id)}`),
   createAccount: (body: {

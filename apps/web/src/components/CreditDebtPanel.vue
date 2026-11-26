@@ -11,7 +11,11 @@ const props = defineProps<{
   statementsFailed?: boolean
   placeholderBusy?: boolean
 }>()
-const emit = defineEmits<{ configure: [accountId: string]; placeholder: [accountId: string, statementId: string] }>()
+const emit = defineEmits<{
+  configure: [accountId: string]
+  placeholder: [accountId: string, statementId: string]
+  details: [accountId: string]
+}>()
 const router = useRouter()
 
 // Statements arrive newest period first, so the first row per card is the
@@ -174,9 +178,15 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
           <p v-else class="credit-debt-placeholder">银行未报出应还金额，无法生成待补流水。</p>
         </div>
 
-        <button v-if="canWrite" type="button" class="btn-quiet credit-debt-action" @click="emit('configure', row.card.account_id)">
-          {{ row.card.configured ? '调整' : '设置账单日' }}
-        </button>
+        <div v-if="canWrite" class="credit-debt-actions">
+          <button type="button" class="btn-quiet credit-debt-action" data-testid="detail-upload"
+            @click="emit('details', row.card.account_id)">
+            上传账单明细
+          </button>
+          <button type="button" class="btn-quiet credit-debt-action" @click="emit('configure', row.card.account_id)">
+            {{ row.card.configured ? '调整' : '设置账单日' }}
+          </button>
+        </div>
       </li>
     </ul>
 
@@ -219,6 +229,7 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
 .credit-debt-placeholder-action { margin: 0; }
 .credit-debt-bank-failed { margin: 0; padding: 9px 11px; border-radius: 12px; background: var(--cat-1); color: #8a5a4c; font-size: 12px; }
 .credit-debt-action { justify-self: start; margin-top: 2px; }
+.credit-debt-actions { display: grid; gap: 6px; justify-items: start; }
 .credit-debt-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 @media (min-width: 560px) {
   .credit-debt-card { padding: 18px 20px; }
@@ -227,7 +238,7 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
   .credit-debt-amount { grid-column: 1; }
   .credit-debt-meta, .credit-debt-status { grid-column: 2; }
   .credit-debt-row { grid-template-columns: 1fr auto; align-items: start; }
-  .credit-debt-row > :not(.credit-debt-action) { grid-column: 1; }
-  .credit-debt-action { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+  .credit-debt-row > :not(.credit-debt-actions) { grid-column: 1; }
+  .credit-debt-actions { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
 }
 </style>

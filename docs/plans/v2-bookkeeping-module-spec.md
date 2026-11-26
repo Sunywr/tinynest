@@ -524,7 +524,7 @@ V2 账户口径（必须如实标注在界面上）：
 
 不进入 V2 的表（移除）：`transaction_splits`、`refunds`、`projects`，以及 V1 的信用账单、分期、负债、投资交易、账单导入、股票相关表（完整分组见清理手册 §4.3）。本段写就时的 V2 目标为 **27 张业务表**（运行时 28 张，含 `schema_migrations`），其中 2 张是 2026-11-22 扩展的只读投资估值快照。
 
-**当前口径（2026-11-26）**：空库迁移后 **38 张业务表**，MySQL 运行时 39 张、SQLite 40 张。相对本段冻结值多出的 10 张来自后续增量迁移，且**都不是被退役 V1 模块的恢复**：`auth_login_locks`（006，登录风控）、`project_budgets` + `transaction_budget_links`（007，只做「预算 − 关联流水」额度统计，无 V1 `projects` 表与路由）、`transaction_source_metadata`（008）、`credit_statement_mailboxes`（009）+ `credit_statement_bindings`（010）+ `statement_mailbox_configs` + `statement_mailbox_card_links`（011，按服务商隔离，011 只复制 009/010 数据不删旧表）、`card_statements` + `card_statement_sources`（012，只保存**银行报的**账期金额用于只读比对，不写分录、不参与还款计划，命名刻意避开 V1 的 `credit_statements` / `credit_statement_items`）。逐表约束见 [ER](../er-v2.md) §1 与 §4.1/§6.2–§6.4。
+**当前口径（2026-11-26）**：空库迁移后 **39 张业务表**，MySQL 运行时 40 张、SQLite 41 张。相对本段冻结值多出的 12 张来自后续增量迁移（006–014），且**都不是被退役 V1 模块的恢复**：`auth_login_locks`（006，登录风控）、`project_budgets` + `transaction_budget_links`（007，只做「预算 − 关联流水」额度统计，无 V1 `projects` 表与路由）、`transaction_source_metadata`（008）、`credit_statement_mailboxes`（009）+ `credit_statement_bindings`（010）+ `statement_mailbox_configs` + `statement_mailbox_card_links`（011，按服务商隔离，011 只复制 009/010 数据不删旧表）、`card_statements` + `card_statement_sources`（012，只保存**银行报的**账期金额用于只读比对，不写分录、不参与还款计划，命名刻意避开 V1 的 `credit_statements` / `credit_statement_items`）、`statement_placeholders`（013，账单 ↔ 占位流水的一对一关联）、`statement_details`（014，银行明细逐行登记与四类判定，只有「消费」行才产生普通流水，不是 V1 的自动过账）。逐表约束见 [ER](../er-v2.md) §1 与 §4.1/§6.2–§6.6。
 
 ### 6.2 新增表 DDL
 
@@ -607,7 +607,7 @@ CREATE TABLE schema_meta (
 ### 6.3 表数目标
 
 V2 目标表数为 27（55 → 27，运行时 28）。逐表清单：`001_core.sql` 21 张（身份 14 张、审计 1 张、邮件/元数据 2 张、复式内核 4 张，其中 `schema_meta` 为基线元数据）＋ `002_bookkeeping.sql` 4 张（`categories` / `accounts` / `transactions` / `budgets`）＋ `005_investments.sql` 2 张（`investment_accounts` / `investment_holdings`），另加代码创建的 `schema_migrations` 版本账本。`003` 与 `004` 是列级迁移，不新增表。
-> 本段是冻结时的目标值，**不得用于验收**：2026-11-26 实测当前基线为空库 38 张、MySQL 运行时 39 张、SQLite 40 张，逐项见 §6.1 末的「当前口径（2026-11-26）」与本文件 §8 的「逐表清单」行，以及 `docs/er-v2.md` §1。
+> 本段是冻结时的目标值，**不得用于验收**：2026-11-26 实测当前基线为空库 39 张、MySQL 运行时 40 张、SQLite 41 张，逐项见 §6.1 末的「当前口径（2026-11-26）」与本文件 §8 的「逐表清单」行，以及 `docs/er-v2.md` §1。
 
 ### 6.3.1 2026-11-22 扩展：只读投资估值快照
 
@@ -690,7 +690,7 @@ API 与数据：
 | 分类 8 色具体色值 | 设计 token 需要视觉评审，不在本文档发明色值 | P3 已落地 8 色调色板，待用户视觉确认（UNVERIFIED） |
 | 768–1023px 内容最大宽度 | 中间断点只做回归，具体值待定 | P3（UNVERIFIED） |
 | 前端 xlsx 实现方式 | 复用既有 `xlsx` 依赖在前端生成，未新增运行时依赖 | 已实现（`services/export.ts`） |
-| 逐表清单 | P2 实测 25 张业务表 + `schema_migrations`（运行时 26）；2026-11-22 扩展 2 张估值快照后为 27 + 账本（运行时 28）；**迁移 006–013 再加 11 张，现为空库 38 张**（MySQL 运行时 39、SQLite 40，2026-11-26 在两方言上逐张清点），逐表以 `docs/er-v2.md` §1 为准 | 冻结值已被后续迁移取代（见 §6.1 / §6.3.1） |
-| 路由精确计数 | 冻结期实测 Register 55 条，`TestRouteBudget` 断言通过；后续增量（项目预算、账单邮箱 5、绑卡 2、预览/同步 2、银行汇总列表 1、待补明细占位 1）叠加后为 **73 条**（2026-11-26 `TestRouteBudget` 实测 `Register wired 73 routes (budget 73)`），契约见 `docs/api-v2.md` §11 | 预算已提高到 73 |
+| 逐表清单 | P2 实测 25 张业务表 + `schema_migrations`（运行时 26）；2026-11-22 扩展 2 张估值快照后为 27 + 账本（运行时 28）；**迁移 006–014 再加 12 张，现为空库 39 张**（MySQL 运行时 40、SQLite 41，2026-11-26 在两方言上逐张清点），逐表以 `docs/er-v2.md` §1 为准 | 冻结值已被后续迁移取代（见 §6.1 / §6.3.1） |
+| 路由精确计数 | 冻结期实测 Register 55 条，`TestRouteBudget` 断言通过；后续增量（项目预算、账单邮箱 5、绑卡 2、预览/同步 2、银行汇总列表 1、待补明细占位 1、账单明细预览/入账 2）叠加后为 **75 条**（2026-11-26 `TestRouteBudget` 实测 `Register wired 75 routes (budget 75)`），契约见 `docs/api-v2.md` §11 | 预算已提高到 75 |
 | 性能预算数值（LCP / CLS） | 需在真实设备与网络条件下标定 | P5（UNVERIFIED） |
 | 真机与生产验收 | iPhone 实机、生产环境冒烟依赖用户环境 | P5（UNVERIFIED） |

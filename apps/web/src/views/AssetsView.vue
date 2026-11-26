@@ -9,6 +9,7 @@ import ConfirmSheet from '../components/ConfirmSheet.vue'
 import CreditDebtPanel from '../components/CreditDebtPanel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InvestmentPanel from '../components/InvestmentPanel.vue'
+import StatementDetailImport from '../components/StatementDetailImport.vue'
 import TransferForm from '../components/TransferForm.vue'
 import { api, type Account, type CardStatement, type CreditDebtPlan, type InvestmentOverview } from '../services/api'
 import { formatMinor, dateLabel } from '../services/format'
@@ -31,6 +32,7 @@ const formAccount = ref<Account | null>(null)
 const transferOpen = ref(false)
 const placeholderFor = ref<CardStatement | null>(null)
 const placeholderBusy = ref(false)
+const detailCard = ref<{ id: string; name: string } | null>(null)
 const journalFor = ref<Account | null>(null)
 const journal = ref<JournalRow[]>([])
 const journalLoading = ref(false)
@@ -111,6 +113,23 @@ function askPlaceholder(accountId: string, statementId: string) {
     return
   }
   placeholderFor.value = statement
+}
+
+// The detail sheet stays open after a confirmed import so the household reads
+// the server's own per-line verdict; only the numbers underneath refresh.
+const detailStatements = computed(() => {
+  const id = detailCard.value?.id
+  return id ? statements.value.filter(item => item.account_id === id) : []
+})
+
+function openDetails(accountId: string) {
+  const account = accounts.value.find(item => item.id === accountId && item.kind === 'credit')
+  const card = plan.value?.cards.find(item => item.account_id === accountId)
+  if (!account && !card) {
+    void load()
+    return
+  }
+  detailCard.value = { id: accountId, name: card?.name ?? account?.name ?? '信用卡' }
 }
 
 const placeholderMessage = computed(() => {
@@ -200,12 +219,13 @@ onMounted(() => void load())
 
     <CreditDebtPanel v-if="plan && plan.cards.length && !error" :plan="plan" :can-write="canWrite"
       :statements="statements" :statements-failed="statementsFailed" :placeholder-busy="placeholderBusy"
-      @configure="openConfigure" @placeholder="askPlaceholder" />
+      @configure="openConfigure" @placeholder="askPlaceholder" @details="openDetails" />
 
     <p class="info-line" role="note">
       现金与信用卡仍按复式记账；信用卡是负债账户，支出增加欠款、还款按账户转账处理。可为信用卡设置账单日与还款日，
       页面按已入账流水估算发薪日前需准备的现金；不提供分期、利息、最低还款或自动扣款。
       账单已出但明细没上传时，可按银行报出的应还金额生成一笔「待补明细」支出，记在还款截止日，让还款计划先把这笔现金占住；补录明细后删除这笔占位即可。
+      「上传账单明细」读取银行导出的 XLS/XLSX：只有识别为消费的行会入账，退款、还款或转入、费用利息与未识别行只记录不记账；同一行重复上传不会双计。
       证券/理财账户为只读估值快照，不写分录、不参与转账；其市值计入本页净资产，但不等同于账本余额。
     </p>
 
@@ -263,6 +283,10 @@ onMounted(() => void load())
     </SurfaceTransition>
     <SurfaceTransition>
       <TransferForm v-if="transferOpen" :accounts="active" @close="transferOpen = false" @saved="load" />
+    </SurfaceTransition>
+    <SurfaceTransition>
+      <StatementDetailImport v-if="detailCard" :account-id="detailCard.id" :card-name="detailCard.name"
+        :statements="detailStatements" @close="detailCard = null" @imported="loadStatements(creditAccounts.length > 0)" />
     </SurfaceTransition>
 
     <ConfirmSheet :open="!!placeholderFor" title="生成待补明细流水？" :message="placeholderMessage"
