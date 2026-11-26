@@ -58,7 +58,7 @@
 
 ## 4. 数据库迁移与基线
 
-- 迁移文件：SQLite `apps/api/internal/db/migrations/001_core.sql`、`002_bookkeeping.sql`、`003_category_style.sql`、`004_credit_cycle.sql`；MySQL `apps/api/internal/db/mysql/` 下同名文件。文件名前 3 位是版本号。
+- 迁移文件：SQLite 在 `apps/api/internal/db/migrations/`、MySQL 在 `apps/api/internal/db/mysql/` 下同名，各 **14 个版本文件**：`001_core.sql`、`002_bookkeeping.sql`、`003_category_style.sql`、`004_credit_cycle.sql`、`005_investments.sql`、`006_auth_login_locks.sql`、`007_project_budgets.sql`、`008_transaction_source_metadata.sql`、`009_credit_statement_mailboxes.sql`、`010_credit_statement_bindings.sql`、`011_statement_mailbox_providers.sql`、`012_card_statements.sql`、`013_statement_placeholders.sql`、`014_statement_details.sql`。文件名前 3 位是版本号。
 - 单一迁移器 `internal/db/migrate.go` 按版本升序应用，记录 SHA-256 校验和，校验版本连续性与已应用版本校验和；`schema_meta` 写入 `baseline=v2`。
 - SQLite 迁移与账本行在同一事务；MySQL DDL 隐式提交，因此每个 MySQL 迁移文件必须可重跑。新表用 `CREATE TABLE IF NOT EXISTS` 与内联索引；`ALTER TABLE` 用 `information_schema.columns` + `PREPARE/EXECUTE` 做幂等保护（003/004 的写法）。
 - 迁移只在版本推进时执行一次；不存在 V1 时期每次启动执行 `UPDATE categories ...` 的副作用；默认分类由 Go 代码幂等写入。

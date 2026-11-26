@@ -120,3 +120,68 @@
 | 前端 | `current` 由 `v2-332a69b` 切到 `releases/v2-9376f47`；tar SHA-256 `88a39cc98802f0a725c2945c64514efd1be8bc5466af6f441b3fdb07342cc614`；`index.html` `4ad2f457…`；JS 入口 `index-D8wY-t7U.js` 691,922 字节、SHA-256 `eac4586356e2d31a68935ac0a1373c72100edf2dff02dae966e3f12a635096df`（含「待补明细」与 `credit-statement-placeholder` 字符串）；CSS `index-BgBuHdXF.css`。nginx 以 `/projects/tinynest/web/current` 为 root，切软链即生效，未改配置、未 reload |
 | 线上核验 | 经 HTTPS 取回 `index.html` 与 bundle 的 SHA-256 与本地构建逐字节一致；`https://<站点>/api/v1/healthz` 200、`/api/v1/readyz` = `{"check":"mysql_ping_and_migrations","phase":"v2","status":"ready"}`、匿名 `/api/v1/accounts` 401、首页 200；B 机 loopback 同样 200/ready/401 |
 | 仍未验证 | 真实账号登录后点「生成待补流水」的实机冒烟（确认弹层 → 待还出现占位 → 删除后归零显示「已冲正」）、PWA 旧 Service Worker 更新、iPhone 实机、远端 CI 结果、`go test -race`（本机无 GCC）→ 全部 `UNVERIFIED` |
+
+## 11. 2026-11-26 账单明细补录：提交、产物与上线交接（迁移 014，生产**未部署**）
+
+授权来源：用户原话「实施完成后，提交并推送代码，部署生产环境」。**提交与推送已执行；生产部署未执行**：本机 `ssh root@<A 机>` / `ssh root@<B 机>` 均返回 `Permission denied (publickey,password)`，仓库只有 `deploy/**.example` 模板、无部署脚本，且 `docs/deployment.md` §9 要求不向 Agent 索取口令或私钥——因此上线由用户执行，本节只交付可直接照抄的产物、判据与回滚点。**未创建 git tag**（未获授权）。生产仍为 `v2-9376f47`、迁移 `[1..13]`、运行时 39 张表。
+
+### 11.1 提交与推送
+
+| 项目 | 结果 |
+| --- | --- |
+| 代码提交 | `22ea7d18a786abc494b135636fb9c6d4e530907b` —— `feat: 账单明细补录（迁移 014 + 预览/入账双路由 + 逐行幂等）`；34 条目（6 新增 / 28 修改），+2,404 / −110 |
+| 推送 | `git push origin main` 为 fast-forward `400571c..22ea7d1`，无强制推送、无合并提交、无 tag |
+| E2E 副产物 | `apps/web/e2e/artifacts/landing-390.png` / `landing-1440.png` 被本轮 E2E 重写，与改动无关，已 `git checkout --` 回退后才提交 |
+| 换行门禁 | 两个 `014_statement_details.sql` 的工作树与索引 blob 的 CR 字节数均为 **0**（`.gitattributes` 声明 `text eol=lf`），`git ls-files --eol` 报 `i/lf w/lf`；`git diff --cached --check` 退出 0 |
+| 本地门禁 | `go build ./...`、`go vet ./...`、`go mod tidy -diff`、`go test ./... -count=1`（167 PASS + 3 SKIP = 170 个 `Test` 函数、24 子测试、0 FAIL）、`Register wired 75 routes (budget 75)`、`npm.cmd run typecheck`、`npm.cmd run build`、Playwright **101/101**、隔离 MySQL 8.4.7 上 `001→014` 全链与 014 重放三次。明细见[实施进度](../plans/credit-card-statement-import/实施进度.md)「本轮交付 · 验证」 |
+| 远端 CI | 未核对（本机无 `gh`，GitHub API 匿名 403）→ `UNVERIFIED` |
+
+### 11.2 构建产物（本机交叉编译，等待用户上传到 B 机）
+
+构建方式与上一轮一致：`git archive 22ea7d1 | tar -x` 取 **LF 树**，再 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w"`（宿主 Go 1.25.2 windows/amd64）。归档树内 `apps/api/internal/db/**/*.sql` 的 CR 字节合计 **0**；产物魔数为 `7f 45 4c 46`（ELF）；二进制内可 grep 到 **2** 条 `CREATE TABLE IF NOT EXISTS statement_details`（SQLite 与 MySQL 两套 embed 均已进入），说明迁移 014 不是漏编。
+
+| 产物 | 字节 | SHA-256 |
+| --- | --- | --- |
+| `tinynest-api` | 12,484,792 | `8685efa09e1fe3370f21a09d061ee8c7aaa04153c133da831421c64d95927766` |
+| `tinynest-admin` | 9,183,416 | `65b405c6ac029e869b25cdf6853e5f8e473b2fd6a2f2e22c89c17d615aac356b` |
+| `tinynest-api-rollback-compatible-014` | 12,423,352 | `f69f0cfd0f828526087d8b66b37aba2e242d1de694e73cbd961922f490f5596c` |
+| `tinynest-web-22ea7d1.tar.gz`（内含 `dist/`） | 842,938 | `3e34f16b443af2a7f872af5a2da2e0ce90eafce71422a04427273bb97f25f67c` |
+| └ `dist/index.html` | 1,150 | `a77cd66f019adc0ec75d8921ba100081b8c464481e90104f9a79e3ad54021ad1` |
+| └ `dist/assets/index-CQnA64uY.js` | 861,937 | `9125ef32249c554fc79181855dd6aaade963527cf0e11f4482235a220bc47261` |
+| └ `dist/assets/index-CPo9BSta.css` | 76,169 | `03fee67d5276fb49065aaf66fc6fdd4b9d87f6b473711ccf6e0ce8e01793c33c` |
+
+- **`tinynest-admin` 必须与 API 同批升级**：生产在用的 `v2-9376f47/tinynest-admin` 不认识迁移版本 14，切换到 014 之后任何 `baseline-capture` / `purge` / `verify` 都会因「出现不认识的迁移版本」拒绝打开库。
+- `tinynest-api-rollback-compatible-014` 是**回滚点**：源码取 `400571c`（014 之前的实现）但把两套 `014_statement_details.sql` 放进 embed，因此它在已应用迁移 14 的库上仍能启动（实测二进制含 014 DDL、含 `credit-statement-placeholder` 路由、不含 `statement-detail-import` 路由）。旧 `v2-9376f47/tinynest-api` 在迁移 14 之后**无法启动**，基线守卫会拒绝未知版本；真回滚 = 切这份兼容二进制，或按备份恢复。安装后不要把 `current` 指向它，除非确实要回滚。
+
+初始包体积观察（如实记录，不阻塞上线）：入口 JS 由 `v2-9376f47` 的 691,922 增至 **861,937** 字节（gzip 282.14 kB），增量来自浏览器解析银行 XLS 需要保留 `xlsx` 的 `read` / `sheet_to_json` 分支（`services/export.ts` 只用 `write`，所以模块此前只带写出侧）。本轮试过把 `services/statementXls.ts` 改成 `await import('xlsx')`：因 `export.ts` 仍静态引入同一模块，产物不分片、体积反而 +9 KB，故按已跑通 101/101 的静态引入提交。要让 `xlsx` 彻底离开初始包，得同时改 `services/export.ts`——那是现有导出功能的重构，留作后续项，且需要重跑全量 E2E 与 PWA 检查。
+
+### 11.3 B 机上线判据（由用户执行，逐条核对后再进下一条）
+
+1. **只读基线**：`tinynest-admin baseline-capture --out=/var/backups/tinynest/baseline-<UTC>-pre014.json`（用**生产在用**的 admin 即可，此时库里最高只有 13）。记下 `journal_entries` / `journal_lines` / 借贷合计 / `users_digest` / 家庭数。
+2. **备份**：`systemctl start tinynest-backup.service` → 等 `Result=success` → 对最新 `tinynest_v2-*.sql` 跑 `sha256sum -c`，并确认转储里有 `schema_meta` 的 `baseline` 行。**备份失败不得继续**。
+3. **安装**：新建 `api/releases/v2-22ea7d1/`，放入 `tinynest-api` 与 `tinynest-admin`，`chmod 755`，逐个 `sha256sum` 与 §11.2 表一致；先把 `current` 软链切过去再 `systemctl restart tinynest-api`。迁移在启动期自动执行，**不要手工建表、不要改 `schema_meta` 或守卫**。
+4. **启动判据**：`journalctl -u tinynest-api -n 50 --no-pager` 出现 `applied_migrations=[14]` 与 `database ready`、`TinyNest API started`，且没有 baseline/校验和类中文报错。
+5. **数据库判据**：运行时 **40** 张表（含 `schema_migrations`）、`statement_details` 存在且 **0 行**、`schema_migrations` 14 行 `MAX(version)=14`、`schema_meta` 用 `meta_key` 读出 `baseline=v2`；`journal_entries` 12,391 / `journal_lines` 24,782 / 借贷各 1,311,336,623 / households 3 / users 3 与步骤 1 逐值相同，`users_digest` 相同。任一不符 → 按 §11.2 的兼容二进制回滚并保留现场。
+6. **服务判据**：B 机 loopback 与公网 HTTPS 各自 `curl -fsS .../api/v1/healthz`（200）、`.../api/v1/readyz`（`status=ready`、`check=mysql_ping_and_migrations`）、匿名 `.../api/v1/accounts`（401）。**裸 `/healthz`、`/readyz` 返回 404 属正常，不算失败**（见 §2 的路径纠正）。
+7. **A 机前端**：解包到 `web/releases/v2-22ea7d1/`，核对 `index.html` / JS / CSS 三个 SHA-256，再切 `current`；nginx root 指向软链，无需 reload。随后经 HTTPS 取回同名文件比对逐字节一致，并确认 bundle 内含「上传账单明细」与 `statement-detail-preview` 字符串。
+8. **登录后实机冒烟（只有用户能做）**：见 §11.4。
+9. **旧产物保留** ≥30 天（`v2-9376f47` 发布目录与本轮之前的备份）。
+
+### 11.4 需要用户在生产验证与告警的操作步骤
+
+**验证（登录真实账号，口令不交给 Agent）**
+
+1. 资产页信用卡卡片：对一张**已出账**的卡点「上传账单明细」→ 选**真实银行导出文件**（浦发首批）→ 预览弹层逐行看四类判定与「待入账笔数/金额」，此时**流水页不应新增任何记录**（预览零写入）。
+2. 确认入账后核对：只出现判定为「消费」的笔数、每笔 `分类=账单补录`、日期=银行的**交易日期**；**同一文件立刻重传一次**，应显示「本次新增 0 笔 / 已重放」，账本不双计。
+3. 把其中一笔补录支出改到真实分类，确认资产页与图表口径随之变化、余额仍从分录派生。
+4. 占位互斥：若该账期还有未冲正的「待补明细」占位，上传应被**整批拒绝**并提示先冲正（错误码 `placeholder_not_reversed`）；先删除占位再上传，应成功。任何一步都不应出现「冲正了但没入账」的半态。
+5. 「我的 → 账单邮箱」执行一次真实同步，确认汇总与差额仍按只读展示。
+6. 老 Chrome/微信浏览器上传一个 >8MB 或 >3,000 行的文件：应看到明确拒绝文案，不得伪造成功。
+
+**告警与巡检（上线后 24 小时）**
+
+- 实时看日志：`journalctl -u tinynest-api -f`。需要立刻处理的关键字：`database not ready`、`baseline`、`checksum`、`applied_migrations` 缺 14、任何 5xx 与 `statement-detail-import` 报错。
+- 服务态：`systemctl is-active tinynest-api tinynest-backup.timer nginx ssh`；`timedatectl` 确认时区未漂移（业务日期按 Asia/Shanghai）。
+- 磁盘：`df -h /` 与 `du -xsh /var/backups/tinynest/mysql | tail -1`。上一轮记录 `/dev/vda2` 已用 **96%、1.7G 可用**——**这是本轮最大的实际风险**：备份脚本只写不删，任何一次新转储都可能把盘写满，MySQL 写满会直接让记账 5xx。上线前先量 `journalctl --disk-usage`，按只读→收敛的顺序处理旧日志（`journalctl --vacuum-size=200M`），**不得**动 `/var/lib/mysql`、`/var/backups/tinynest/mysql` 或 `current` 指向的发布目录。
+- 备份新鲜度：`ls -l --time-style=full-iso /var/backups/tinynest/mysql | tail -3`，确认每日新增且大小在 10MB 量级（异常小的转储意味着库名写错，见 §2）。第二份**异地副本**仍缺，属既有 `UNVERIFIED`。
+- 仍待处置的上轮事故：§8 记录的 MySQL 口令轮换尚未执行；本轮产物上传与验证会再次用到同一批凭据，建议在同一次停服窗口内完成。
