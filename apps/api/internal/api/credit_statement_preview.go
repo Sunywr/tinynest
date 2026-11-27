@@ -18,6 +18,7 @@ var statementAccountTail = regexp.MustCompile(`[（(]([0-9]{4})[）)]\s*$`)
 type statementReadTarget struct {
 	provider, sender, bank, tail string
 	email, authCode              string
+	subjectKeyword               string
 	accountID, cardName          string
 	userID, householdID          string
 	version                      int64
@@ -58,6 +59,17 @@ func (a *API) prepareStatementRead(w http.ResponseWriter, r *http.Request, provi
 		return target, false
 	}
 	target.cardName, target.bank, target.sender, target.tail = cardName, bank, sender, tail[1]
+
+	if err := a.DB.QueryRowContext(r.Context(), `SELECT subject_keyword FROM statement_mailbox_card_links
+  WHERE household_id=? AND account_id=? AND user_id=? AND provider=?`, target.householdID,
+		target.accountID, target.userID, target.provider).Scan(&target.subjectKeyword); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeStatementMailboxError(w, errConflict)
+		} else {
+			internalErr(w, err)
+		}
+		return target, false
+	}
 
 	config, err := loadStatementMailbox(r.Context(), a.DB, p, provider)
 	if err != nil {
@@ -109,7 +121,7 @@ func (a *API) readStatementMails(w http.ResponseWriter, r *http.Request, target 
 		if fetch := a.opts.StatementMailboxFetch; fetch != nil {
 			batch, err = fetch(r.Context(), target.email, target.authCode, target.sender, target.bank, target.tail, period.start)
 		} else {
-			batch, err = readStatementInboxWindow(r.Context(), target.email, target.authCode, target.sender, target.bank, target.tail, period)
+			batch, err = readStatementInboxWindow(r.Context(), target.email, target.authCode, target.sender, target.bank, target.tail, period, target.subjectKeyword)
 		}
 		if err != nil {
 			writeErr(w, 502, failedCode, failedMessage)

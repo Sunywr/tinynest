@@ -48,7 +48,7 @@ var (
 	statementCommAmount   = regexp.MustCompile(`本期应还款\s*[:：]?\s*[￥¥]\s*([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?)(?:\s|$)`)
 )
 
-func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bool) {
+func parseStatementMail(raw []byte, bank, tail string, subjectKeywords ...string) (statementMailPreview, bool) {
 	var out statementMailPreview
 	msg, err := mail.ReadMessage(bytes.NewReader(raw))
 	if err != nil || !statementSenderMatches(msg.Header.Get("From"), bank) {
@@ -56,12 +56,20 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 	}
 	decoder := mime.WordDecoder{CharsetReader: statementCharsetReader}
 	subject, err := decoder.DecodeHeader(msg.Header.Get("Subject"))
-	if err != nil || !strings.Contains(subject, "账单") {
+	if err != nil {
 		return out, false
 	}
 	// The verified sender identifies SPDB even when a generic credit-card
 	// statement notice omits the bank name from its subject.
-	if bank != "spdb" && !statementBankMatches(subject, bank) {
+	keyword := ""
+	if len(subjectKeywords) > 0 {
+		keyword = subjectKeywords[0]
+	}
+	if keyword != "" {
+		if !strings.Contains(strings.ToLower(subject), strings.ToLower(keyword)) {
+			return out, false
+		}
+	} else if !strings.Contains(subject, "账单") || (bank != "spdb" && !statementBankMatches(subject, bank)) {
 		return out, false
 	}
 	if received, err := msg.Header.Date(); err == nil {

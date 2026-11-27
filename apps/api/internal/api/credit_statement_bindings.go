@@ -3,18 +3,23 @@ package api
 import (
 	"database/sql"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type statementBindingCard struct {
-	ID      string                 `json:"id"`
-	Name    string                 `json:"name"`
-	Status  string                 `json:"status"`
-	Bound   bool                   `json:"bound"`
-	Taken   bool                   `json:"taken"`
-	Periods []mailboxBillingPeriod `json:"billing_periods,omitempty"`
+	SubjectKeyword string                 `json:"subject_keyword,omitempty"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Status         string                 `json:"status"`
+	Bound          bool                   `json:"bound"`
+	Taken          bool                   `json:"taken"`
+	Periods        []mailboxBillingPeriod `json:"billing_periods,omitempty"`
 }
 
 type mailboxBillingPeriod struct {
@@ -46,7 +51,7 @@ func (a *API) handleStatementBindingCards(w http.ResponseWriter, r *http.Request
 	}
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(), `
-		SELECT a.id,a.name,a.status,b.user_id,b.provider,a.statement_day
+		SELECT a.id,a.name,a.status,b.user_id,b.provider,a.statement_day,b.subject_keyword
 		FROM accounts a LEFT JOIN statement_mailbox_card_links b
 		  ON b.household_id=a.household_id AND b.account_id=a.id
 		WHERE a.household_id=? AND a.kind='credit'
@@ -61,9 +66,9 @@ func (a *API) handleStatementBindingCards(w http.ResponseWriter, r *http.Request
 	today := a.businessToday()
 	for rows.Next() {
 		var card statementBindingCard
-		var owner, boundProvider sql.NullString
+		var owner, boundProvider, keyword sql.NullString
 		var statementDay sql.NullInt64
-		if err := rows.Scan(&card.ID, &card.Name, &card.Status, &owner, &boundProvider, &statementDay); err != nil {
+		if err := rows.Scan(&card.ID, &card.Name, &card.Status, &owner, &boundProvider, &statementDay, &keyword); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -71,6 +76,7 @@ func (a *API) handleStatementBindingCards(w http.ResponseWriter, r *http.Request
 		card.Taken = owner.Valid && !card.Bound
 		if card.Bound && card.Status == "active" {
 			card.Periods = mailboxBillingPeriods(today, statementDay.Int64)
+			card.SubjectKeyword = keyword.String
 		}
 		cards = append(cards, card)
 	}
@@ -99,6 +105,23 @@ func (a *API) handleStatementBinding(w http.ResponseWriter, r *http.Request) {
 	p, _ := principal(r)
 	ctx, accountID := r.Context(), r.PathValue("id")
 	bind := r.Method == http.MethodPut
+	var input struct {
+		SubjectKeyword *string `json:"subject_keyword"`
+	}
+	if bind {
+		if err := decode(r, &input); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, 400, "invalid_request", "无法读取标题关键词")
+			return
+		}
+		if input.SubjectKeyword != nil {
+			keyword := strings.TrimSpace(*input.SubjectKeyword)
+			if utf8.RuneCountInString(keyword) > 80 || strings.ContainsFunc(keyword, unicode.IsControl) {
+				writeErr(w, 400, "invalid_request", "标题关键词最多 80 字且不能包含控制字符")
+				return
+			}
+			input.SubjectKeyword = &keyword
+		}
+	}
 	err = a.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		if err := a.lockStatementMailboxUser(ctx, tx, p); err != nil {
 			return err
@@ -134,6 +157,17 @@ func (a *API) handleStatementBinding(w http.ResponseWriter, r *http.Request) {
 				return errStatementCardTaken
 			}
 			return sql.ErrNoRows
+		}
+		if bind && input.SubjectKeyword != nil {
+			if owner == "" {
+				return sql.ErrNoRows
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE statement_mailbox_card_links SET subject_keyword=?
+     WHERE household_id=? AND account_id=? AND user_id=? AND provider=?`,
+				*input.SubjectKeyword, p.HouseholdID, accountID, p.UserID, provider); err != nil {
+				return err
+			}
+			return audit(ctx, tx, p, "update_statement_subject_keyword", "account", accountID, "")
 		}
 		if bind == (owner != "") {
 			return nil

@@ -24,7 +24,7 @@ func readStatementInbox(ctx context.Context, email, code, sender, bank, tail str
 	return readStatementInboxWindow(ctx, email, code, sender, bank, tail, statementDateRange{start: since})
 }
 
-func readStatementInboxWindow(ctx context.Context, email, code, sender, bank, tail string, period statementDateRange) ([]statementMailPreview, error) {
+func readStatementInboxWindow(ctx context.Context, email, code, sender, bank, tail string, period statementDateRange, subjectKeywords ...string) ([]statementMailPreview, error) {
 	items := []statementMailPreview{}
 	err := withStatementInbox(ctx, email, code, 15*time.Second, func(conn io.Writer, reader *bufio.Reader) error {
 		uids, err := searchStatementMail(conn, reader, sender, period.start, period.end)
@@ -42,7 +42,7 @@ func readStatementInboxWindow(ctx context.Context, email, code, sender, bank, ta
 				if err != nil {
 					return err
 				}
-				if item, ok := parseStatementMail(raw, bank, tail); ok {
+				if item, ok := parseStatementMail(raw, bank, tail, subjectKeywords...); ok {
 					item.UID = uid
 					items = append(items, item)
 				}

@@ -170,3 +170,37 @@ func TestCommBilingualStatementSummary(t *testing.T) {
 		t.Fatal("must not use another card's balance")
 	}
 }
+
+func TestStatementSubjectKeywordStillRequiresBankSender(t *testing.T) {
+	raw := []byte("From: statement@bocomcc.com\r\nSubject: " +
+		mime.BEncoding.Encode("UTF-8", "您的每月对账通知") + "\r\n\r\n账单日：2026-11-07")
+	if _, ok := parseStatementMail(raw, "comm", "1234", "每月对账通知"); !ok {
+		t.Fatal("custom decoded title did not match")
+	}
+	if _, ok := parseStatementMail(raw, "comm", "1234", "其他标题"); ok {
+		t.Fatal("nonmatching title accepted")
+	}
+	spoofed := strings.Replace(string(raw), "statement@bocomcc.com", "statement@example.net", 1)
+	if _, ok := parseStatementMail([]byte(spoofed), "comm", "1234", "每月对账通知"); ok {
+		t.Fatal("unknown sender passed a custom title rule")
+	}
+}
+
+func TestStatementSubjectKeywordSavedAndCleared(t *testing.T) {
+	fixture := newStatementSyncFixture(t)
+	for _, change := range []struct{ input, want string }{
+		{"  电子对账通知  ", "电子对账通知"},
+		{"", ""},
+	} {
+		status, body := fixture.client.do("PUT", fixture.bindingPath()+"?version=1", map[string]string{"subject_keyword": change.input})
+		if status != http.StatusNoContent {
+			t.Fatalf("save keyword: %d %v", status, body)
+		}
+		result := fixture.client.mustOK("GET", "/api/v1/credit-statement-mailbox/cards", nil)
+		cards := v012Rows(t, result)
+		actual, _ := cards[0]["subject_keyword"].(string)
+		if len(cards) != 1 || actual != change.want {
+			t.Fatalf("expected persisted keyword %q in %v", change.want, cards)
+		}
+	}
+}

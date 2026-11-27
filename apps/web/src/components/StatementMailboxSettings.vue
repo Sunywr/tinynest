@@ -13,7 +13,7 @@ type MailboxConfig = {
 }
 
 type BillingPeriod = { start: string; end: string }
-type BindingCard = { id: string; name: string; status: string; bound: boolean; taken: boolean; billing_periods?: BillingPeriod[] }
+type BindingCard = { id: string; name: string; status: string; bound: boolean; taken: boolean; billing_periods?: BillingPeriod[]; subject_keyword?: string }
 type MailPreview = {
   received_on?: string
   statement_on?: string
@@ -127,13 +127,30 @@ function disable() {
   })
 }
 
+const subjectDrafts = ref<Record<string, string>>({})
+
 async function loadCards() {
   const result = await request<{ items: BindingCard[] }>(path + '/cards' + providerQuery)
   for (const card of result.items) {
     selections.value[card.id] ??= []
+    subjectDrafts.value[card.id] = card.subject_keyword ?? ""
     manualRanges.value[card.id] ??= [{ start: '', end: '' }]
   }
   cards.value = result.items
+}
+
+function saveSubjectKeyword(card: BindingCard) {
+  const current = config.value
+  if (!current?.enabled || !card.bound) return
+  return run(async () => {
+    const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
+    const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-binding?${query}`
+    await request(endpoint, { method: 'PUT', body: jsonBody({ subject_keyword: subjectDrafts.value[card.id].trim() }) })
+    await loadCards()
+    preview.value = null
+    sync.value = null
+    message.value = '账单邮件标题关键词已保存。'
+  })
 }
 
 function updateBinding(card: BindingCard) {
@@ -292,6 +309,15 @@ onMounted(refresh)
                     <button type="button" class="btn-quiet" :disabled="rangesFor(card).length >= 12"
                       @click="rangesFor(card).push({ start: '', end: '' })">添加日期范围</button>
                   </fieldset>
+                </details>
+                <details v-if="card.bound && card.status === 'active'" class="card-periods">
+                  <summary>邮件标题关键词</summary>
+                  <form class="mailbox-actions" @submit.prevent="saveSubjectKeyword(card)">
+                    <label :for="'statement-subject-' + card.id">标题关键词</label>
+                    <input :id="'statement-subject-' + card.id" v-model="subjectDrafts[card.id]" type="text"
+                      maxlength="80" placeholder="留空使用银行默认规则" :disabled="busy" />
+                    <button class="btn-quiet" type="submit" :disabled="busy">保存关键词</button>
+                  </form>
                 </details>
               </li>
             </ul>
