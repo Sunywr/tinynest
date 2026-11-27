@@ -141,7 +141,6 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
           <p class="credit-debt-tags">
             <span v-if="row.card.unbilled_minor > 0">未出账 {{ formatMinor(row.card.unbilled_minor) }}</span>
             <span v-if="row.card.credit_balance_minor > 0">溢缴款 {{ formatMinor(row.card.credit_balance_minor) }}</span>
-            <span v-if="row.card.total_debt_minor > 0">总欠款 {{ formatMinor(row.card.total_debt_minor) }}</span>
           </p>
         </template>
         <p v-else class="credit-debt-row-main">设置账单日与还款日后可计算到期金额。</p>

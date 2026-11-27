@@ -50,6 +50,11 @@ const assetsTotal = computed(() => cashTotal.value + investmentTotal.value)
 const liabilitiesTotal = computed(() => creditAccounts.value.reduce((sum, a) => sum + Math.max(-a.balance_minor, 0), 0))
 const netWorth = computed(() => assetsTotal.value - liabilitiesTotal.value)
 const investmentAccounts = computed(() => investments.value?.accounts ?? [])
+const investmentHoldings = computed(() => investmentAccounts.value.flatMap(account =>
+  account.holdings.map(holding => ({ key: `${account.id}:${holding.id}`, holding })),
+))
+const nextDueTotal = computed(() => plan.value?.cards.reduce((total, card) =>
+  total + (card.next_due_on ? card.next_due_minor : 0), 0) ?? 0)
 const hasAnyAsset = computed(() => active.value.length > 0 || creditAccounts.value.length > 0 || investmentAccounts.value.length > 0)
 const empty = computed(() => !loading.value && !error.value && !hasAnyAsset.value)
 const cashShare = computed(() => assetsTotal.value > 0 ? Math.round((cashTotal.value / assetsTotal.value) * 100) : 0)
@@ -229,6 +234,14 @@ onMounted(() => void load())
             <strong>{{ formatMinor(investments.total_return_minor) }}</strong></span>
           <span><span>股息</span><strong>{{ formatMinor(investments.total_dividends_minor) }}</strong></span>
         </span>
+        <span v-if="investmentHoldings.length" class="asset-detail-items">
+          <span v-for="{ key, holding } in investmentHoldings" :key="key" class="asset-detail-item">
+            <span><strong>{{ holding.name }}</strong><small>{{ holding.symbol }}</small></span>
+            <span><small>市值 / 净值</small><strong>{{ formatMinor(holding.market_value_minor) }}</strong></span>
+            <span><small>收益 · {{ formatBasisPoints(holding.total_return_bp) }}</small>
+              <strong>{{ formatMinor(holding.total_return_minor) }}</strong></span>
+          </span>
+        </span>
       </button>
       <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情">
         <form method="dialog" class="asset-detail-controls">
@@ -244,10 +257,18 @@ onMounted(() => void load())
         aria-label="查看信用卡债务详情" @click="debtDialog?.showModal()">
         <span class="asset-detail-heading">信用卡债务 <ChevronRight :size="18" aria-hidden="true" /></span>
         <span class="asset-detail-metrics">
-          <span><span>总欠款</span><strong>{{ formatMinor(plan.total_debt_minor) }}</strong></span>
+          <span><span>各卡下次应还合计</span><strong>{{ formatMinor(nextDueTotal) }}</strong></span>
           <span><span>{{ plan.complete || plan.cash_needed_minor === null ? '发薪日前需准备' : '发薪日前已知需准备' }}</span>
             <strong>{{ formatMinor(plan.cash_needed_minor) }}</strong></span>
           <span><span>可用现金</span><strong>{{ formatMinor(plan.cash_available_minor) }}</strong></span>
+        </span>
+        <span class="asset-detail-items">
+          <span v-for="card in plan.cards" :key="card.account_id" class="asset-detail-item repayment-item">
+            <span><strong>{{ card.name }}</strong></span>
+            <span v-if="card.next_due_on"><small>{{ dateLabel(card.next_due_on) }} 到期</small>
+              <strong>{{ formatMinor(card.next_due_minor) }}</strong></span>
+            <small v-else>{{ card.configured ? '暂无未到期应还' : '未设置账单日或还款日' }}</small>
+          </span>
         </span>
       </button>
       <dialog ref="debtDialog" class="asset-detail-dialog" aria-label="信用卡债务详情">
@@ -362,6 +383,21 @@ onMounted(() => void load())
 .asset-detail-metrics > span > span { color: var(--muted); font-size: 12px; }
 .asset-detail-metrics strong { font-size: 15px; font-variant-numeric: tabular-nums; }
 .asset-detail-metrics > span:first-child strong { font-size: 18px; }
+.asset-detail-items { display: grid; }
+.asset-detail-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-block: 8px;
+  font-size: 13px;
+}
+.asset-detail-item:last-child { padding-bottom: 0; }
+.asset-detail-item > span { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.asset-detail-item > :not(:first-child) { text-align: end; }
+.asset-detail-item small { color: var(--muted); font-size: 11px; }
+.asset-detail-item.repayment-item { grid-template-columns: minmax(0, 1fr) auto; }
 .asset-account-icons { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 4px; }
 .asset-detail-dialog {
   width: min(680px, calc(100% - 24px));
