@@ -4,6 +4,10 @@ import {
   type ETFResult, type MarketDetail, type MarketIndex, type Position, type Preferences, type Quote, type ResearchRow,
 } from '../services/stockMarket'
 
+const foregroundInterval = 15_000
+const backgroundInterval = 60_000
+const prefetchDetailLimit = 20
+
 export const positionCategories = ['永久', '长线', '中线', '短线', '观察']
 export const stockDefaults: Preferences = {
   yieldMin: 4, roeMin: 8, peMax: 15, pbMax: 2.5, capMin: 500, amountMin: 2,
@@ -72,12 +76,14 @@ export function useStockMonitor(scope: string, snapshot: () => Position[], activ
   const studyKey = storageKey(scope, 'study')
   const quotesKey = storageKey(scope, 'quotes')
   const indexKey = storageKey(scope, 'indices')
+  const detailKey = storageKey(scope, 'details')
   const positions = ref(read<Position[]>(positionsKey, []).flatMap(item => positionFrom(item) ?? []))
   const prefs = ref({ ...stockDefaults, ...read<Partial<Preferences>>(prefsKey, {}) })
   const study = ref({ ...emptyStudy(), ...read<Partial<Study>>(studyKey, {}) })
   const quoteMap = ref(read<Record<string, Quote>>(quotesKey, {}))
   const indexRows = ref(read<MarketIndex[]>(indexKey, []))
-  const details = ref<Record<string, MarketDetail>>({})
+  const details = ref(read<Record<string, MarketDetail>>(detailKey, {}))
+  const pendingDetails = new Map<string, Promise<MarketDetail>>()
   const quoteBusy = ref(false)
   const quoteNotice = ref('')
   const storageNotice = ref('')
@@ -101,8 +107,12 @@ export function useStockMonitor(scope: string, snapshot: () => Position[], activ
   })
   const codes = computed(() => allPositions.value.map(position => position.code))
   let timer: ReturnType<typeof setInterval>
+  const codeKey = computed(() => [...codes.value].sort().join(','))
   let lastRefresh = 0
+  let requestedCodeKey: string | undefined
   let detailBusy = false
+  let detailFollowUp = false
+  let detailCacheDirty = false
 
   function persist<T>(key: string, value: T) {
     try {
@@ -144,59 +154,100 @@ export function useStockMonitor(scope: string, snapshot: () => Position[], activ
     return savePositions(next)
   }
 
-  async function loadDetail(code: string, force = false, quote = quoteMap.value[code]) {
+  async function loadDetail(code: string, quote = quoteMap.value[code]) {
     const existing = details.value[code]
-    const hours = existing?.errors?.length ? 1 / 6 : 6
-    if (!force && existing?.fetchedAt && Date.now() - Date.parse(existing.fetchedAt) < hours * 3600000
-      && marketDate(new Date(existing.fetchedAt)) === marketDate()) return existing
-    const result = retainDetail(existing, await detail(code, quote))
-    if (mounted) details.value[code] = result
-    return result
+    const fetched = Date.parse(existing?.fetchedAt ?? '')
+    const lifetime = existing?.errors?.length ? 10 * 60_000 : 6 * 3600_000
+    if (Date.now() - fetched >= 0 && Date.now() - fetched < lifetime
+      && marketDate(new Date(fetched)) === marketDate()) return existing
+    const pending = pendingDetails.get(code)
+    if (pending) return pending
+    const request = detail(code, quote).then(incoming => {
+      const result = retainDetail(existing, incoming)
+      if (mounted) {
+        details.value[code] = result
+        detailCacheDirty = true
+      }
+      return result
+    }).finally(() => pendingDetails.delete(code))
+    pendingDetails.set(code, request)
+    return request
+  }
+
+  function canRefresh() {
+    return mounted && !document.hidden && navigator.onLine && (active() || codes.value.length > 0)
+  }
+
+  function storeMarketData() {
+    const tracked = codes.value
+    try {
+      localStorage.setItem(quotesKey, JSON.stringify(Object.fromEntries(tracked.filter(code => quoteMap.value[code]).map(code => [code, quoteMap.value[code]]))))
+      localStorage.setItem(indexKey, JSON.stringify(indexRows.value))
+    } catch {
+      // A full browser store does not prevent in-memory market updates.
+    }
   }
 
   async function refreshDetails() {
-    if (detailBusy) return
+    if (!canRefresh()) return
+    if (detailBusy) {
+      detailFollowUp = true
+      return
+    }
     detailBusy = true
     try {
       const scheduled = [...codes.value]
-      for (let start = 0; start < scheduled.length && mounted && active(); start += 4) {
+      for (let start = 0; start < scheduled.length && canRefresh(); start += 4) {
+        if (!active() && start >= prefetchDetailLimit) break
         await Promise.allSettled(scheduled.slice(start, start + 4).map(code => loadDetail(code)))
+      }
+      if (mounted && detailCacheDirty) {
+        detailCacheDirty = false
+        const cached = codes.value.filter(code => details.value[code]).slice(0, 100)
+        try {
+          localStorage.setItem(detailKey, JSON.stringify(Object.fromEntries(cached.map(code => [code, details.value[code]]))))
+        } catch {
+          // The in-memory results remain available if browser storage is full.
+        }
       }
     } finally {
       detailBusy = false
+      if (detailFollowUp) {
+        detailFollowUp = false
+        void refreshDetails()
+      }
     }
   }
 
   async function refresh() {
-    if (quoteBusy.value) return
+    if (quoteBusy.value || !canRefresh()) return
     quoteBusy.value = true
     lastRefresh = Date.now()
+    requestedCodeKey = codeKey.value
     const requested = [...codes.value]
-    try {
-      const batches = Array.from({ length: Math.ceil(requested.length / 50) }, (_, index) =>
-        quotes(requested.slice(index * 50, (index + 1) * 50)))
-      const [updatedIndices, batchesResult] = await Promise.all([
-        indices().catch(() => null), Promise.allSettled(batches),
-      ])
-      if (!mounted) return
-      if (updatedIndices) {
+    const updateIndices = indices().then(updated => {
+      if (mounted) {
         const combined = new Map(indexRows.value.map(index => [index.symbol, index]))
-        for (const index of updatedIndices) combined.set(index.symbol, index)
+        for (const index of updated) combined.set(index.symbol, index)
         indexRows.value = [...combined.values()]
       }
-      const updatedQuotes = batchesResult.flatMap(result => result.status === 'fulfilled' ? result.value : [])
-      Object.assign(quoteMap.value, Object.fromEntries(updatedQuotes.map(quote => [quote.code, quote])))
-      quoteNotice.value = !updatedIndices || updatedIndices.length < 3 || updatedQuotes.length < requested.length
+      return updated.length
+    }).catch(() => 0)
+    const batches = Array.from({ length: Math.ceil(requested.length / 50) }, (_, index) =>
+      quotes(requested.slice(index * 50, (index + 1) * 50)).then(updated => {
+        if (mounted) Object.assign(quoteMap.value, Object.fromEntries(updated.map(quote => [quote.code, quote])))
+        return updated.length
+      }).catch(() => 0))
+    try {
+      const [indexCount, ...quoteCounts] = await Promise.all([updateIndices, ...batches])
+      if (!mounted) return
+      quoteNotice.value = indexCount < 3 || quoteCounts.reduce((sum, count) => sum + count, 0) < requested.length
         ? '部分行情暂不可用，已显示可取得的报价。' : ''
-      try {
-        localStorage.setItem(quotesKey, JSON.stringify(Object.fromEntries(requested.filter(code => quoteMap.value[code]).map(code => [code, quoteMap.value[code]]))))
-        localStorage.setItem(indexKey, JSON.stringify(indexRows.value))
-      } catch {
-        // Research stays usable if the optional market cache cannot be saved.
-      }
+      storeMarketData()
       void refreshDetails()
     } finally {
       quoteBusy.value = false
+      if (requestedCodeKey !== codeKey.value) tick()
     }
   }
 
@@ -229,7 +280,7 @@ export function useStockMonitor(scope: string, snapshot: () => Position[], activ
     study.value.stocks = results
     for (let start = 0; start < raw.candidates.length && mounted; start += 6) {
       const batch = await Promise.all(raw.candidates.slice(start, start + 6).map(async q => {
-        const data = await loadDetail(q.code, false, q).catch(() => ({} as MarketDetail))
+        const data = await loadDetail(q.code, q).catch(() => ({} as MarketDetail))
         const result = screen.scanQualified(q, data)
         return { ...result, code: q.code, name: q.name, type: 'stocks' as const, q,
           checked: !screen.quoteUsable(q, 15 * 60000) && !!data.fetchedAt && !data.errors?.length &&
@@ -284,24 +335,42 @@ export function useStockMonitor(scope: string, snapshot: () => Position[], activ
   }
 
   function tick() {
-    if (!active() || document.hidden) return
     signalClock.value = Date.now()
-    if (Date.now() - lastRefresh >= 15000) void refresh()
-    void scanOpportunities()
+    if (!canRefresh()) return
+    const interval = active() ? foregroundInterval : backgroundInterval
+    if (requestedCodeKey !== codeKey.value || Date.now() - lastRefresh >= interval) void refresh()
+    if (active()) void scanOpportunities()
   }
 
   onMounted(() => {
-    timer = setInterval(tick, 15000)
+    timer = setInterval(tick, foregroundInterval)
     document.addEventListener('visibilitychange', tick)
+    window.addEventListener('online', tick)
+    // Reuse a complete recent snapshot even when returning to Assets from another route.
+    if (indexRows.value.length === 3) {
+      const fetched = [
+        ...indexRows.value.map(index => index.fetchedAt),
+        ...codes.value.map(code => quoteMap.value[code]?.fetchedAt),
+      ].map(timestamp => Date.parse(timestamp ?? ''))
+      if (fetched.every(time => Number.isFinite(time) && time <= Date.now())) {
+        requestedCodeKey = codeKey.value
+        lastRefresh = Math.min(...fetched)
+      }
+    }
     tick()
+    if (!quoteBusy.value) void refreshDetails()
   })
   onUnmounted(() => {
     mounted = false
     clearInterval(timer)
     document.removeEventListener('visibilitychange', tick)
+    window.removeEventListener('online', tick)
   })
-  watch(active, tick)
-  watch(() => codes.value.join(','), () => { if (active() && !document.hidden) void refresh() })
+  watch(active, open => {
+    tick()
+    if (open && !quoteBusy.value) void refreshDetails()
+  })
+  watch(codeKey, tick)
 
   return { positions, prefs, study, quoteMap, indexRows, details, quoteBusy, quoteNotice, storageNotice, signalClock,
     scanBusy, scanNotice, scanProgress, rules, allPositions, savePositions, savePreferences, addWatch,

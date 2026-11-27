@@ -42,6 +42,19 @@ const {
   refresh, scanOpportunities, markRead,
 } = monitor
 
+const manualRefreshing = ref(false)
+const showRefreshProgress = computed(() =>
+  manualRefreshing.value || (quoteBusy.value && !indexRows.value.length && !Object.keys(quoteMap.value).length),
+)
+async function refreshNow() {
+  manualRefreshing.value = true
+  try {
+    await refresh()
+  } finally {
+    manualRefreshing.value = false
+  }
+}
+
 const mode = ref('monitor')
 const search = ref('')
 const alertsOnly = ref(false)
@@ -233,7 +246,7 @@ function exportPositions(csv = false) {
         <button class="btn-quiet" type="button" :aria-pressed="prefs.hideTop" @click="savePreferences({ ...prefs, hideTop: !prefs.hideTop })">
           {{ prefs.hideTop ? '显示汇总' : '隐藏汇总' }}
         </button>
-        <button class="btn-quiet" type="button" :disabled="quoteBusy" @click="refresh">{{ quoteBusy ? '刷新中' : '刷新行情' }}</button>
+        <button class="btn-quiet" type="button" :disabled="quoteBusy" :aria-busy="quoteBusy" @click="refreshNow">{{ showRefreshProgress ? '刷新中' : '刷新行情' }}</button>
       </div>
     </header>
     <div v-if="indexRows.length" class="stock-grid stock-indices">

@@ -7,6 +7,7 @@ export type Quote = {
   pb?: number | null
   cap?: number | null
   ts: string | null
+  fetchedAt?: string
   source: string
 }
 

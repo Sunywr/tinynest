@@ -241,7 +241,7 @@ onMounted(() => void load())
 
     <template v-if="investments && !error">
       <button type="button" class="card asset-detail-trigger" aria-haspopup="dialog"
-        aria-label="查看投资详情" @click="openInvestments">
+        aria-label="查看投资详情" data-repeat-click @click="openInvestments">
         <span class="asset-detail-heading">投资资产 <ChevronRight :size="18" aria-hidden="true" /></span>
         <span v-if="investments.account_count" class="asset-detail-metrics">
           <span><span>总市值</span><strong>{{ formatMinor(investmentTotal) }}</strong></span>
@@ -259,10 +259,10 @@ onMounted(() => void load())
           </span>
         </span>
       </button>
-      <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情" @close="investmentOpen = false">
+      <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情" @close="investmentOpen = investmentDialog?.open ?? false">
         <header class="investment-dialog-head">
           <h2 class="section-title">投资详情</h2>
-          <div class="segmented investment-tabs" role="group" aria-label="投资视图">
+          <div class="segmented investment-tabs" role="group" aria-label="投资视图" data-repeat-click>
             <button type="button" class="segmented-btn" :class="{ active: investmentTab === 'overview' }"
               :aria-pressed="investmentTab === 'overview'" @click="investmentTab = 'overview'">总览</button>
             <button type="button" class="segmented-btn" :class="{ active: investmentTab === 'stocks' }"
@@ -273,7 +273,8 @@ onMounted(() => void load())
           </form>
         </header>
         <InvestmentPanel v-if="investmentTab === 'overview'" :overview="investments" />
-        <StockMonitor v-else-if="investmentOpen" :key="stockScope" :overview="investments" :scope="stockScope" :active="true" />
+        <StockMonitor v-show="investmentTab === 'stocks'" :key="stockScope" :overview="investments" :scope="stockScope"
+          :active="investmentOpen && investmentTab === 'stocks'" />
       </dialog>
     </template>
 

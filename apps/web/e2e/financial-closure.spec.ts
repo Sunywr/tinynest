@@ -1021,6 +1021,49 @@ test.describe('E 资产', () => {
     await expect(page.getByTestId('net-worth')).toHaveText('¥700.00')
   })
 
+  test('E08c 资产页提前获取行情，打开及重开股票浮窗复用同一次请求', async ({ page }) => {
+    await signIn(page)
+    await page.clock.setFixedTime(new Date('2026-11-27T08:00:00+08:00'))
+    await page.route(/\/api\/v1\/accounts\?include=credit_debt(,|%2C)investments/, route =>
+      route.fulfill({ json: { items: [], credit_debt: { cards: [] }, investments: sampleInvestmentOverview() } }))
+    let requests = 0
+    let releaseQuote!: () => void
+    const quoteGate = new Promise<void>(resolve => { releaseQuote = resolve })
+    await page.route('**/api/v1/stock-market?*', async route => {
+      const source = new URL(route.request().url()).searchParams.get('source') ?? ''
+      if (!source.includes('q=sh600900')) return route.fulfill({ status: 502 })
+      requests++
+      await quoteGate
+      const fields = Array(51).fill('')
+      Object.assign(fields, { 1: 'Test Holding', 3: '26.72', 30: '20261126150000', 32: '0.3' })
+      return route.fulfill({ body: `v_sh600900="${fields.join('~')}";` })
+    })
+    await page.goto('/assets')
+    const dialog = page.getByRole('dialog', { name: '投资详情' })
+    const stocks = dialog.getByRole('region', { name: '股票', exact: true })
+    async function open() {
+      await page.getByRole('button', { name: '查看投资详情' }).click()
+      await dialog.getByRole('button', { name: '股票', exact: true }).click()
+    }
+    try {
+      await expect.poll(() => requests).toBe(1)
+      await expect(dialog).toBeHidden()
+      await open()
+    } finally {
+      releaseQuote()
+    }
+    await expect(stocks).toContainText('26.72')
+    await expect(stocks.getByRole('button', { name: '刷新行情' })).toBeEnabled()
+    await dialog.getByRole('button', { name: '关闭投资详情' }).click()
+    await expect(dialog).toBeHidden()
+    await open()
+    await expect(stocks).toContainText('26.72')
+    await expect(stocks.getByRole('button', { name: '刷新行情' })).toBeEnabled()
+    expect(requests).toBe(1)
+    await stocks.getByRole('button', { name: '刷新行情' }).click()
+    await expect.poll(() => requests).toBe(2)
+  })
+
   test('E09 银行账单汇总与同账期账本并排展示，不计入还款计划', async ({ page }) => {
     const csrf = await signIn(page)
     const configured = await (await page.request.post('/api/v1/accounts', {
