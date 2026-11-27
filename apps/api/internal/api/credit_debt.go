@@ -63,9 +63,11 @@ type creditCardState struct {
 	configured   bool
 	charges      []creditCharge
 	reductions   money.Minor
+	payments     []creditCharge
 }
 
 type creditCharge struct {
+	placeholder bool
 	amount      money.Minor
 	occurredOn  time.Time
 	periodStart time.Time
@@ -101,6 +103,10 @@ func (a *API) creditDebtPlan(ctx context.Context, householdID, userID string, no
 		return creditDebtPlanResponse{}, err
 	}
 
+	forecasts, err := a.loadStatementForecasts(ctx, householdID, todayText)
+	if err != nil {
+		return creditDebtPlanResponse{}, err
+	}
 	var cashAvailable int64
 	if err := a.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(balance_minor),0)
@@ -138,6 +144,11 @@ func (a *API) creditDebtPlan(ctx context.Context, householdID, userID string, no
 	for _, id := range order {
 		card := cards[id]
 		buckets, unbilled, overdue, total, creditBalance := allocateCreditDebt(card, today)
+		_, hasBankStatement := forecasts[id]
+		if hasBankStatement {
+			projected := forecastCreditCard(card, forecasts[id])
+			buckets, _, _, _, _ = allocateCreditDebt(&projected, today)
+		}
 
 		row := creditDebtCard{
 			AccountID:          card.id,
@@ -158,6 +169,8 @@ func (a *API) creditDebtPlan(ctx context.Context, householdID, userID string, no
 				EndOn:   cycle.end.Format("2006-01-02"),
 				DueOn:   cycle.due.Format("2006-01-02"),
 			}
+		}
+		if card.configured || hasBankStatement {
 			if next, ok := firstFutureBucket(buckets, today); ok {
 				dueText := next.dueOn.Format("2006-01-02")
 				startText := next.periodStart.Format("2006-01-02")
@@ -291,7 +304,7 @@ func (a *API) loadCreditEvents(ctx context.Context, householdID, today string, c
 			return err
 		}
 		if delta > 0 {
-			charge := creditCharge{amount: money.Minor(delta), occurredOn: on}
+			charge := creditCharge{amount: money.Minor(delta), occurredOn: on, placeholder: placeholderEnd.Valid}
 			switch {
 			case placeholderEnd.Valid:
 				if charge.periodEnd, err = time.Parse("2006-01-02", placeholderEnd.String); err != nil {
@@ -323,6 +336,7 @@ func (a *API) loadCreditEvents(ctx context.Context, householdID, today string, c
 			card.charges = append(card.charges, charge)
 		} else {
 			card.reductions += money.Minor(-delta)
+			card.payments = append(card.payments, creditCharge{amount: money.Minor(-delta), occurredOn: on})
 		}
 	}
 	return rows.Err()

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ApiError, request } from '../services/api'
+import StatementDetailImport from './StatementDetailImport.vue'
+import { ApiError, api, request, type CardStatement } from '../services/api'
 import { formatMinor } from '../services/format'
 
 type MailboxConfig = {
@@ -22,6 +23,7 @@ type SyncItem = { statement_on: string; due_on: string; result: string }
 type SyncResult = {
   cardName: string
   since: string
+  cardId: string
   created: number
   linked: number
   conflicts: number
@@ -143,13 +145,48 @@ function updateBinding(card: BindingCard) {
   })
 }
 
+const ranges = ref([{ start: '', end: '' }])
+const rangeLabels = ref<string[]>([])
+const rangesReady = computed(() => ranges.value.every(({ start, end }) => start && end && start <= end))
+const upload = ref<{ cardId: string; cardName: string; statements: CardStatement[] } | null>(null)
+
+function statementQuery(version: number) {
+  const query = new URLSearchParams({ version: String(version), provider: props.provider })
+  rangeLabels.value = ranges.value.map(({ start, end }) => start + ' 至 ' + end)
+  for (const { start, end } of ranges.value) query.append('range', start + ',' + end)
+  return query
+}
+
+function openUpload(result: SyncResult) {
+  return run(async () => {
+    const { items } = await api.cardStatements()
+    const statements = items.filter(item => item.account_id === result.cardId)
+    if (!statements.length) {
+      message.value = '这张卡暂无已同步的账单期，明细需要关联到账单期。'
+      return
+    }
+    upload.value = { cardId: result.cardId, cardName: result.cardName, statements }
+  })
+}
+
+async function refreshUploadStatements() {
+  const current = upload.value
+  if (!current) return
+  await run(async () => {
+    const { items } = await api.cardStatements()
+    if (upload.value === current) {
+      current.statements = items.filter(item => item.account_id === current.cardId)
+    }
+  })
+}
+
 function previewStatements(card: BindingCard) {
   const current = config.value
-  if (!current?.enabled || !card.bound || card.status !== 'active') return
+  if (!rangesReady.value || !current?.enabled || !card.bound || card.status !== 'active') return
   return run(async () => {
     preview.value = null
     sync.value = null
-    const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
+    const query = statementQuery(current.version)
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-preview?${query}`
     const result = await request<{ since: string; items: MailPreview[] }>(endpoint, { method: 'POST' })
     preview.value = { cardName: card.name, ...result }
@@ -160,15 +197,15 @@ function previewStatements(card: BindingCard) {
 // journal entries, so the repayment plan on the assets page stays untouched.
 function syncStatements(card: BindingCard) {
   const current = config.value
-  if (!current?.enabled || !card.bound || card.status !== 'active') return
+  if (!rangesReady.value || !current?.enabled || !card.bound || card.status !== 'active') return
   return run(async () => {
     preview.value = null
     sync.value = null
-    const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
+    const query = statementQuery(current.version)
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-sync?${query}`
-    const result = await request<Omit<SyncResult, 'cardName'>>(endpoint, { method: 'POST' })
-    sync.value = { cardName: card.name, ...result }
-    message.value = providerName + ' 账单已同步（搜索自 ' + result.since + '），未新增流水。'
+    const result = await request<Omit<SyncResult, 'cardName' | 'cardId'>>(endpoint, { method: 'POST' })
+    sync.value = { cardName: card.name, cardId: card.id, ...result }
+    message.value = providerName + ' 账单同步已完成。'
   })
 }
 
@@ -200,6 +237,16 @@ onMounted(refresh)
       <div v-if="cards" class="binding-cards">
         <p v-if="!cards.length" class="form-hint">暂无可绑定的信用卡。</p>
         <template v-else>
+          <fieldset :disabled="busy">
+            <legend>目标账单日期范围</legend>
+            <div v-for="(range, index) in ranges" :key="index" class="mailbox-actions">
+              <label>起始日期 <input v-model="range.start" type="date" /></label>
+              <label>结束日期 <input v-model="range.end" type="date" :min="range.start" /></label>
+              <button v-if="ranges.length > 1" type="button" class="btn-quiet" @click="ranges.splice(index, 1)">移除此范围</button>
+            </div>
+            <button type="button" class="btn-quiet" :disabled="ranges.length >= 12"
+              @click="ranges.push({ start: '', end: '' })">添加日期范围</button>
+          </fieldset>
           <section v-for="group in cardGroups" :key="group.label" class="binding-group">
             <h3>{{ group.label }}</h3>
             <p v-if="!group.items.length" class="form-hint">暂无{{ group.label }}。</p>
@@ -209,9 +256,9 @@ onMounted(refresh)
                 <small v-if="card.taken">已绑定其他邮箱</small>
                 <div v-else class="mailbox-actions card-actions">
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
-                    :disabled="busy" @click="syncStatements(card)">同步账单</button>
+                    :disabled="busy || !rangesReady" @click="syncStatements(card)">同步账单</button>
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
-                    :disabled="busy" @click="previewStatements(card)">预览账单</button>
+                    :disabled="busy || !rangesReady" @click="previewStatements(card)">预览账单</button>
                   <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
                     :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
                 </div>
@@ -222,7 +269,7 @@ onMounted(refresh)
       </div>
       <section v-if="preview" class="mailbox-preview" aria-label="账单预览" aria-live="polite">
         <h3>{{ preview.cardName }} · 账单预览</h3>
-        <p class="form-hint">搜索范围从 {{ preview.since }} 开始。预览不会新增流水。</p>
+        <p class="form-hint">{{ rangeLabels.join("、") }}</p>
         <p v-if="!preview.items.length">没有找到符合条件的邮件。</p>
         <ul v-else>
           <li v-for="(item, index) in preview.items" :key="index">
@@ -241,8 +288,14 @@ onMounted(refresh)
         <ul v-else>
           <li v-for="(item, index) in sync.items" :key="index">{{ syncLine(item) }}</li>
         </ul>
-        <p class="form-hint">同步只记录银行报送的账单汇总，不会新增流水或改变还款计划。</p>
+        <p class="form-hint">{{ rangeLabels.join("、") }}</p>
+        <template v-if="sync.created + sync.linked + sync.conflicts > 0">
+          <p class="form-hint">邮件同步仅取得账单汇总。可上传银行导出的消费明细进行核对。</p>
+          <button type="button" class="btn-quiet" :disabled="busy" @click="openUpload(sync)">上传 XLS 账单明细</button>
+        </template>
       </section>
+      <StatementDetailImport v-if="upload" :account-id="upload.cardId" :card-name="upload.cardName"
+        :statements="upload.statements" @close="upload = null" @imported="refreshUploadStatements" />
       <form :key="config.version" class="mailbox-form" @submit.prevent="save">
         <label><span>{{ providerName }} 邮箱</span><input v-model="email" type="email" maxlength="254" required :disabled="busy" @input="message = ''" /></label>
         <label><span>邮箱授权码</span><input v-model="authCode" type="password" autocomplete="off" maxlength="128" required :disabled="busy" /></label>

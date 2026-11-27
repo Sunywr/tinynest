@@ -158,7 +158,15 @@ type detailPlaceholder struct {
 	dueOn         string
 }
 
+type unmatchedLedgerCharge struct {
+	ID     string `json:"id"`
+	On     string `json:"occurred_on"`
+	Note   string `json:"note"`
+	Amount int64  `json:"amount_minor"`
+}
+
 type statementDetailBatch struct {
+	unmatched      []unmatchedLedgerCharge
 	accountID      string
 	lines          []statementDetailLine
 	digest         string
@@ -203,7 +211,7 @@ func (a *API) handleStatementDetailImport(w http.ResponseWriter, r *http.Request
 	// Booking real details in a cycle the placeholder still reserves would count
 	// the same bill twice, and reversing the placeholder is the household's call.
 	// So the import refuses, names the placeholder and writes nothing.
-	if batch.hasPlaceholder && batch.bookedMinor > 0 {
+	if batch.hasPlaceholder && (batch.window.statementID != "" || batch.bookedMinor > 0) {
 		writeDetailPlaceholderConflict(w, batch.placeholder)
 		return
 	}
@@ -328,6 +336,7 @@ func (a *API) analyseStatementDetails(ctx context.Context, q db.Queryer, househo
 	if err != nil {
 		return nil, err
 	}
+	claimed := map[string]*statementDetailLine{}
 	for i := range batch.lines {
 		line := &batch.lines[i]
 		if line.Kind == detailKindCharge {
@@ -366,11 +375,50 @@ func (a *API) analyseStatementDetails(ctx context.Context, q db.Queryer, househo
 			batch.missingMinor += line.AmountMinor
 			batch.bookedMinor += line.AmountMinor
 		case 1:
-			line.State = detailStateMatched
-			line.LedgerTransaction = match.transactionID
+			if first, exists := claimed[match.transactionID]; exists {
+				first.State, first.LedgerTransaction = detailStateHeld, ""
+				first.Reason = "多条银行明细可能对应同一笔流水，请人工核对"
+				line.State, line.Reason = detailStateHeld, first.Reason
+			} else {
+				claimed[match.transactionID] = line
+				line.State = detailStateMatched
+				line.LedgerTransaction = match.transactionID
+			}
 		default:
 			line.State = detailStateHeld
 			line.Reason = "同一天同金额已有多笔流水，无法唯一对应，请人工核对"
+		}
+	}
+	if window.startOn != "" {
+		rows, err := q.QueryContext(ctx, `SELECT t.id,t.occurred_on,COALESCE(t.note,''),t.amount_minor
+   FROM transactions t
+   WHERE t.household_id=? AND t.account_id=? AND t.status='posted' AND t.type='expense'
+     AND t.occurred_on BETWEEN ? AND ?
+     AND NOT EXISTS (SELECT 1 FROM statement_placeholders p
+       WHERE p.household_id=t.household_id AND p.transaction_id=t.id)
+   ORDER BY t.occurred_on,t.id`, householdID, account.ID, window.startOn, window.endOn)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		matched := map[string]bool{}
+		for _, line := range batch.lines {
+			if line.LedgerTransaction != "" {
+				matched[line.LedgerTransaction] = true
+			}
+		}
+		batch.unmatched = []unmatchedLedgerCharge{}
+		for rows.Next() {
+			var item unmatchedLedgerCharge
+			if err := rows.Scan(&item.ID, &item.On, &item.Note, &item.Amount); err != nil {
+				return nil, err
+			}
+			if !matched[item.ID] {
+				batch.unmatched = append(batch.unmatched, item)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 	}
 	return batch, nil
@@ -693,7 +741,7 @@ func (b *statementDetailBatch) response(written bool, booked []string) map[strin
 	out := map[string]any{
 		"counts": counts, "items": items, "account_id": b.accountID,
 		"statement_id": nullableText(b.window.statementID),
-		"charge_minor": b.chargeMinor, "missing_minor": b.missingMinor,
+		"charge_minor": b.chargeMinor, "missing_minor": b.missingMinor, "unmatched_ledger": b.unmatched,
 	}
 	if written {
 		out["created"] = int64(len(booked))

@@ -37,9 +37,25 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const selected = computed(() => props.statements.find(item => item.id === statementId.value) ?? null)
 const bookable = computed(() => (preview.value?.counts.missing ?? 0) > 0)
 // Once a report is booked, the same file must not be confirmed twice in one sheet.
-const canImport = computed(() => !!preview.value && !result.value && bookable.value)
-const items = computed(() => (result.value ?? preview.value)?.items ?? [])
+const canImport = computed(() => !!preview.value && !result.value && (bookable.value || !!preview.value.statement_id))
+const onlyDifferences = ref(false)
+const items = computed(() => {
+  const rows = shown.value?.items ?? []
+  return onlyDifferences.value ? rows.filter(item => item.kind === 'charge'
+    && (item.state === 'missing' || item.state === 'held')) : rows
+})
 const shown = computed(() => result.value ?? preview.value)
+
+const periodCharge = computed(() => {
+  const statement = selected.value
+  if (!statement?.period_start_on) return null
+  const start = statement.period_start_on
+  return (shown.value?.items ?? []).reduce((total, item) => {
+    const day = item.txn_on
+    return item.kind === 'charge' && day && day >= start && day <= statement.period_end_on
+      ? total + item.amount_minor : total
+  }, 0)
+})
 
 function statementLabel(item: CardStatement): string {
   const start = item.period_start_on ? `${item.period_start_on} 至` : '截至'
@@ -183,6 +199,10 @@ function tailMismatch(item: StatementDetailItem): boolean {
         <p v-if="notice" class="inline-notice" role="status">{{ notice }}</p>
 
         <template v-if="shown">
+          <p v-if="periodCharge !== null && selected && typeof selected.ledger_charge_minor === 'number'" class="form-hint">
+            同账期账本消费 {{ formatMinor(selected.ledger_charge_minor) }}，
+            文件内同账期消费 {{ formatMinor(periodCharge) }}，差额 {{ formatMinor(periodCharge - selected.ledger_charge_minor) }}。
+          </p>
           <ul class="detail-counts" data-testid="detail-counts">
             <li>明细 {{ shown.counts.rows }} 行</li>
             <li>消费 {{ shown.counts.charges }} 笔 {{ formatMinor(shown.charge_minor) }}</li>
@@ -195,6 +215,15 @@ function tailMismatch(item: StatementDetailItem): boolean {
             该账期已有 {{ formatMinor(shown.placeholder.amount_minor) }} 的待补明细流水（截止
             {{ shown.placeholder.due_on || shown.placeholder.period_end_on }}），确认入账前需先冲正它。
           </p>
+          <label><input v-model="onlyDifferences" type="checkbox" /> 只看未匹配的消费</label>
+          <details v-if="shown.unmatched_ledger?.length">
+            <summary>对账 · {{ shown.unmatched_ledger.length }} 笔账本消费未匹配</summary>
+            <ul>
+              <li v-for="entry in shown.unmatched_ledger" :key="entry.id">
+                {{ entry.occurred_on }} · {{ formatMinor(entry.amount_minor) }} · {{ entry.note || '无备注' }}
+              </li>
+            </ul>
+          </details>
           <ul class="detail-list" data-testid="detail-list">
             <li v-for="item in items" :key="`${item.row_no}-${item.seq}`" class="detail-row"
               :class="`is-${item.state}`">
@@ -212,7 +241,7 @@ function tailMismatch(item: StatementDetailItem): boolean {
                 <em v-if="item.currency !== 'CNY'">{{ item.currency }}</em>
               </span>
             </li>
-            <li v-if="!items.length" class="form-hint">这份文件没有可识别的明细行。</li>
+            <li v-if="!items.length" class="form-hint">{{ onlyDifferences ? "没有未匹配的消费。" : "这份文件没有可识别的明细行。" }}</li>
           </ul>
         </template>
       </div>

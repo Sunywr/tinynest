@@ -191,12 +191,12 @@ func TestStatementDetailPreviewClassifiesWithoutWrites(t *testing.T) {
 	}
 	for description, want := range map[string][2]string{
 		"支付宝－某商户": {"charge", "missing"},
-		"某商户退款":     {"refund", "held"},
-		"自助还款":      {"payment", "held"},
-		"年费":        {"fee", "held"},
-		"神秘交易":      {"review", "held"},
-		"境外消费":      {"review", "held"},
-		"别人卡的消费":    {"review", "held"},
+		"某商户退款":   {"refund", "held"},
+		"自助还款":    {"payment", "held"},
+		"年费":      {"fee", "held"},
+		"神秘交易":    {"review", "held"},
+		"境外消费":    {"review", "held"},
+		"别人卡的消费":  {"review", "held"},
 	} {
 		item := findDetailItem(t, body, description)
 		if item["kind"] != want[0] || item["state"] != want[1] {
@@ -411,7 +411,7 @@ func TestStatementDetailImportRefusesLivePlaceholderCycle(t *testing.T) {
 	// user's call. So the import refuses, names the placeholder, and writes nothing:
 	// the UI offers the existing 冲正 and the household re-uploads afterwards.
 	status, body = fixture.importDetails(map[string]any{
-		"rows": spdbMatrix(spdbRow("20261020", "20261021", "某商户", "4321", "人民币", "50.00")),
+		"rows":      spdbMatrix(spdbRow("20261020", "20261021", "某商户", "4321", "人民币", "50.00")),
 		"card_tail": "4321", "statement_id": statement["id"]})
 	if status != http.StatusConflict || placeholderError(body) != "placeholder_not_reversed" {
 		t.Fatalf("import over a live placeholder = %d %v, want 409 placeholder_not_reversed", status, body)
@@ -433,7 +433,7 @@ func TestStatementDetailImportRefusesLivePlaceholderCycle(t *testing.T) {
 	// Once the household reverses the placeholder themselves, the same upload books.
 	fixture.client.mustOK("DELETE", "/api/v1/transactions/"+placeholderID, map[string]any{})
 	if status, body = fixture.importDetails(map[string]any{
-		"rows": spdbMatrix(spdbRow("20261020", "20261021", "某商户", "4321", "人民币", "50.00")),
+		"rows":      spdbMatrix(spdbRow("20261020", "20261021", "某商户", "4321", "人民币", "50.00")),
 		"card_tail": "4321", "statement_id": statement["id"]}); status != http.StatusOK || number(body["created"]) != 1 {
 		t.Fatalf("import after reversal = %d %v, want the line booked", status, body)
 	}
@@ -581,5 +581,26 @@ func TestStatementDetailImportIgnoresClientCategory(t *testing.T) {
 		if name := fmt.Sprint(row["category_name"]); name != "账单补录" {
 			t.Fatalf("category_id=%s booked under %q, want 账单补录", category, name)
 		}
+	}
+}
+
+func TestStatementSummaryReplacesCoveredCardExpense(t *testing.T) {
+	fixture := newStatementSyncFixture(t)
+	statement := fixture.postedStatement(t, "2026-11-01", "2026-11-25", 120000)
+	fixture.expense(7000, "2026-10-21")
+	fixture.expense(3000, "2026-10-01")
+	input := map[string]any{"rows": spdbMatrix(spdbRow("20261020", "20261021", "某商户", "4321", "人民币", "50.00")),
+		"card_tail": "4321", "statement_id": statement["id"].(string)}
+	status, preview := fixture.preview(input)
+	unmatched, _ := preview["unmatched_ledger"].([]any)
+	if status != http.StatusOK || len(unmatched) != 1 {
+		t.Fatalf("preview should flag the unmatched in-period ledger charge: %d %v", status, preview)
+	}
+	if status, body := fixture.importDetails(input); status != http.StatusOK {
+		t.Fatalf("import: %d %v", status, body)
+	}
+	status, summary := fixture.client.do("GET", "/api/v1/stats/summary?from=2026-10-01&to=2026-10-31", nil)
+	if status != http.StatusOK || number(summary["expense_minor"]) != 8000 || number(summary["booked_expense_minor"]) != 15000 {
+		t.Fatalf("want 5000 bank expense + 3000 uncovered expense; booked total 15000: %d %v", status, summary)
 	}
 }

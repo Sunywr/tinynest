@@ -21,9 +21,13 @@ var statementFetchLiteral = regexp.MustCompile(`(?i)^\* [0-9]+ FETCH \((?:UID ([
 // every message the parser recognised. The preview endpoint reports the result
 // and the sync endpoint stores it; neither may write to the mailbox.
 func readStatementInbox(ctx context.Context, email, code, sender, bank, tail string, since time.Time) ([]statementMailPreview, error) {
+	return readStatementInboxWindow(ctx, email, code, sender, bank, tail, statementDateRange{start: since})
+}
+
+func readStatementInboxWindow(ctx context.Context, email, code, sender, bank, tail string, period statementDateRange) ([]statementMailPreview, error) {
 	items := []statementMailPreview{}
 	err := withStatementInbox(ctx, email, code, 15*time.Second, func(conn io.Writer, reader *bufio.Reader) error {
-		uids, err := searchStatementMail(conn, reader, sender, since)
+		uids, err := searchStatementMail(conn, reader, sender, period.start, period.end)
 		if err != nil {
 			return err
 		}
@@ -42,8 +46,14 @@ func readStatementInbox(ctx context.Context, email, code, sender, bank, tail str
 	return items, err
 }
 
-func searchStatementMail(conn io.Writer, reader *bufio.Reader, sender string, since time.Time) ([]uint32, error) {
-	if _, err := fmt.Fprintf(conn, "S1 UID SEARCH SINCE %s FROM %q\r\n", since.Format("02-Jan-2006"), sender); err != nil {
+func searchStatementMail(conn io.Writer, reader *bufio.Reader, sender string, since time.Time, end ...time.Time) ([]uint32, error) {
+	before := ""
+	limit := 8
+	if len(end) > 0 && !end[0].IsZero() {
+		before = " BEFORE " + end[0].AddDate(0, 0, 8).Format("02-Jan-2006")
+		limit = 64
+	}
+	if _, err := fmt.Fprintf(conn, "S1 UID SEARCH SINCE %s%s FROM %q\r\n", since.Format("02-Jan-2006"), before, sender); err != nil {
 		return nil, err
 	}
 	uids := []uint32{}
@@ -55,8 +65,8 @@ func searchStatementMail(conn io.Writer, reader *bufio.Reader, sender string, si
 		line := string(raw)
 		if imapStatus(line, "S1", "OK") {
 			sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
-			if len(uids) > 8 {
-				uids = uids[:8]
+			if len(uids) > limit {
+				uids = uids[:limit]
 			}
 			return uids, nil
 		}

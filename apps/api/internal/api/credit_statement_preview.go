@@ -93,14 +93,39 @@ func reserveStatementSlot(w http.ResponseWriter) bool {
 // mailbox version and the binding still hold before anything is reported.
 func (a *API) readStatementMails(w http.ResponseWriter, r *http.Request, target statementReadTarget,
 	failedCode, failedMessage string, since time.Time) ([]statementMailPreview, bool) {
-	fetch := a.opts.StatementMailboxFetch
-	if fetch == nil {
-		fetch = readStatementInbox
-	}
-	items, err := fetch(r.Context(), target.email, target.authCode, target.sender, target.bank, target.tail, since)
-	if err != nil {
-		writeErr(w, 502, failedCode, failedMessage)
+	ranges, ok := requestedStatementRanges(w, r)
+	if !ok {
 		return nil, false
+	}
+	items := []statementMailPreview{}
+	seen := map[uint32]bool{}
+	explicit := len(ranges) > 0
+	if !explicit {
+		ranges = []statementDateRange{{start: since}}
+	}
+	for _, period := range ranges {
+		var batch []statementMailPreview
+		var err error
+		if fetch := a.opts.StatementMailboxFetch; fetch != nil {
+			batch, err = fetch(r.Context(), target.email, target.authCode, target.sender, target.bank, target.tail, period.start)
+		} else {
+			batch, err = readStatementInboxWindow(r.Context(), target.email, target.authCode, target.sender, target.bank, target.tail, period)
+		}
+		if err != nil {
+			writeErr(w, 502, failedCode, failedMessage)
+			return nil, false
+		}
+		for _, item := range batch {
+			date := item.StatementOn
+			if date == "" {
+				date = item.ReceivedOn
+			}
+			if explicit && !period.includes(date) || item.UID != 0 && seen[item.UID] {
+				continue
+			}
+			seen[item.UID] = true
+			items = append(items, item)
+		}
 	}
 	current, err := loadStatementMailbox(r.Context(), a.DB, principalOf(target), target.provider)
 	if err != nil {

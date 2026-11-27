@@ -260,7 +260,10 @@ onBeforeUnmount(() => {
         <span aria-hidden="true">·</span>
         结余 <strong>{{ formatMinor(balance) }}</strong>
       </p>
-      <BudgetBar :budget="budget" :spent-minor="expense" :editable="canWrite" @edit="budgetEditor = true" />
+      <p v-if="summary?.statement_adjustment_minor" class="summary-sub">
+        含银行账单消费调整 {{ formatMinor(summary.statement_adjustment_minor) }}
+      </p>
+      <BudgetBar :budget="budget" :spent-minor="summary?.booked_expense_minor ?? expense" :editable="canWrite" @edit="budgetEditor = true" />
     </section>
 
     <div class="bills-toolbar">

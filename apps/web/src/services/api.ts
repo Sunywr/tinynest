@@ -260,6 +260,7 @@ export type StatementDetailSummary = {
   items: StatementDetailItem[]
   charge_minor: number
   missing_minor: number
+  unmatched_ledger?: { id: string; occurred_on: string; note: string; amount_minor: number }[] | null
   created?: number
   matched?: number
   held?: number
@@ -427,7 +428,7 @@ export type TransactionInput = {
   member_id?: string | null
   note?: string | null
 }
-export type Summary = { from: string; to: string; income_minor: number; expense_minor: number; balance_minor: number }
+export type Summary = { from: string; to: string; income_minor: number; expense_minor: number; balance_minor: number; booked_expense_minor?: number; statement_adjustment_minor?: number }
 export type CategoryStat = { category_id: string; name: string; emoji: string; color?: string; amount_minor: number; share_bp: number }
 export type DailyStat = { day: string; expense_minor: number; income_minor: number }
 export type MonthlyStat = { month: string; income_minor: number; expense_minor: number }

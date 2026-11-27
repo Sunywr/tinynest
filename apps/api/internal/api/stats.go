@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"context"
@@ -65,6 +65,17 @@ func (a *API) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
+	bookedExpense := expense
+	adjustment, err := a.statementExpenseAdjustment(r.Context(), p.HouseholdID, from, to)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	expense, err = money.Add(expense, adjustment)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
 	balance, err := money.Sub(income, expense)
 	if err != nil {
 		internalErr(w, err)
@@ -73,6 +84,7 @@ func (a *API) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"from": from, "to": to,
 		"income_minor": income, "expense_minor": expense, "balance_minor": balance,
+		"booked_expense_minor": bookedExpense, "statement_adjustment_minor": adjustment,
 	})
 }
 

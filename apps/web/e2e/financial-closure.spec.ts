@@ -1450,6 +1450,9 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await page.route('**/api/v1/accounts/fixture-card/credit-statement-preview?*', route => route.fulfill({
       json: { since: '2026-10-26', items: [{ statement_on: '2026-11-01', due_on: '2026-11-25', amount_due_minor: 12345 }] },
     }))
+    await expect(linked.getByRole('button', { name: '预览账单' })).toBeDisabled()
+    await card.getByLabel('起始日期').fill('2026-11-01')
+    await card.getByLabel('结束日期').fill('2026-11-30')
     await linked.getByRole('button', { name: '预览账单' }).click()
     await expect(card.getByRole('region', { name: '账单预览' })).toContainText('应还 ¥123.45')
     await unbindButton.click()
@@ -1499,6 +1502,9 @@ test.describe('G 成员 / 分类 / 管理', () => {
       expect(req.headers()['x-csrf-token']).toBeTruthy()
       expect(new URL(req.url()).searchParams.get('version')).toBe('3')
       expect(new URL(req.url()).searchParams.get('provider')).toBe('qq')
+      expect(new URL(req.url()).searchParams.getAll('range')).toEqual([
+        '2026-09-01,2026-09-30', '2026-10-01,2026-11-30',
+      ])
       syncCalls++
       if (syncCalls > 1) {
         await route.fulfill({ status: 409, json: { error: { code: 'conflict', message: '邮箱配置已变化，请刷新后重试' } } })
@@ -1520,6 +1526,12 @@ test.describe('G 成员 / 分类 / 管理', () => {
     const card = page.getByRole('region', { name: '信用卡账单邮箱' })
     await card.getByRole('button', { name: '信用卡绑定' }).click()
     const linked = card.getByRole('list', { name: '已绑定信用卡', exact: true })
+    await expect(linked.getByRole('button', { name: '同步账单' })).toBeDisabled()
+    await card.getByLabel('起始日期').fill('2026-09-01')
+    await card.getByLabel('结束日期').fill('2026-09-30')
+    await card.getByRole('button', { name: '添加日期范围' }).click()
+    await card.getByLabel('起始日期').nth(1).fill('2026-10-01')
+    await card.getByLabel('结束日期').nth(1).fill('2026-11-30')
     await linked.getByRole('button', { name: '同步账单' }).click()
 
     const result = card.getByRole('region', { name: '账单同步结果' })
@@ -1528,8 +1540,7 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await expect(result).toContainText('2026-10-01 期已存在，仅新增邮件来源')
     await expect(result).toContainText('2026-09-01 期金额与已记录不一致，保留首次金额')
     await expect(result).toContainText('有邮件未能识别，未入库')
-    await expect(card.getByRole('status')).toContainText('搜索自 2026-10-11')
-    await expect(card.getByRole('status')).toContainText('未新增流水')
+    await expect(result.getByRole('button', { name: '上传 XLS 账单明细' })).toBeVisible()
 
     // 同一控件 450ms 内的重复点击会被防重复提交拦截，等过窗口再点。
     await page.waitForTimeout(500)
