@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/htmlindex"
@@ -39,7 +40,7 @@ var (
 	statementDateLayout   = `([0-9]{4}(?:[-/][0-9]{1,2}[-/][0-9]{1,2}|年[0-9]{1,2}月[0-9]{1,2}日))(?:[^0-9]|$)`
 	statementClosingLabel = regexp.MustCompile(`(?:账单日期|账单日)\s*[:：]?\s*` + statementDateLayout)
 	statementDueDateLabel = regexp.MustCompile(`(?:到期还款日|最后还款日|还款到期日)\s*[:：]?\s*` + statementDateLayout)
-	statementCITICRow     = regexp.MustCompile(`[0-9]{4}-[0-9]{2}[*＊]{2}-[*＊]{4}-([0-9]{4})\s+CNY\s+(?:[-+0-9,.]+\s+){4}([-+0-9,.]+)(?:\s|$)`)
+	statementCITICRow     = regexp.MustCompile(`[0-9]{4}-[0-9]{2}[*＊]{2}-[*＊]{4}-([0-9]{4})\s+CNY\s+(?:[-+0-9,.]+\s+){3}([-+0-9,.]+)\s+[-+0-9,.]+(?:\s|$)`)
 )
 
 func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bool) {
@@ -72,6 +73,13 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 		out.NeedsReview = "邮件正文无法识别"
 		return out, true
 	}
+	body = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, body)
+	unattributed := !statementCardTail.MatchString(body)
 	out.StatementOn = statementFindDate(statementClosingLabel, body)
 	out.DueOn = statementFindDate(statementDueDateLabel, body)
 	if bank == "citic" && (strings.Contains(body, "本期新增金额") || strings.Contains(body, "New Charge")) {
@@ -84,8 +92,9 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 		}
 		if len(matches) == 1 {
 			out.AmountDue = statementMinor(matches[0][2])
+			unattributed = false
 		}
-	} else if statementHasOnlyCard(body, tail) &&
+	} else if (statementHasOnlyCard(body, tail) || unattributed) &&
 		!strings.ContainsAny(body, "$€") &&
 		!strings.Contains(body, "美元") && !strings.Contains(strings.ToUpper(body), "USD") &&
 		!strings.Contains(body, "港币") && !strings.Contains(strings.ToUpper(body), "HKD") && !strings.Contains(strings.ToUpper(body), "EUR") {
@@ -98,7 +107,9 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 			out.AmountDue = value
 		}
 	}
-	if out.AmountDue == nil || out.StatementOn == "" {
+	if unattributed && out.AmountDue != nil {
+		out.NeedsReview = "邮件已读出应还金额，但正文未列出卡号末四位，无法确认归属账单"
+	} else if out.AmountDue == nil || out.StatementOn == "" {
 		out.NeedsReview = "请核对卡号、账单日期和人民币应还金额"
 	}
 	return out, true

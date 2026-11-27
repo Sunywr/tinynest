@@ -52,9 +52,9 @@ func readStatementInboxWindow(ctx context.Context, email, code, sender, bank, ta
 		if err := read(uids); err != nil {
 			return err
 		}
-		// 163 can omit SPDB messages when UID SEARCH includes FROM.
-		// The parser still checks the exact official sender on every candidate.
-		if len(items) == 0 && bank == "spdb" && strings.HasSuffix(strings.ToLower(email), "@163.com") {
+		// A provider can omit genuine messages from UID SEARCH with FROM.
+		// Date-only fallback remains bounded and uses the same sender checks.
+		if len(items) == 0 && (!period.end.IsZero() || (bank == "spdb" && strings.HasSuffix(strings.ToLower(email), "@163.com"))) {
 			fallbackStart := period.start
 			if !period.end.IsZero() {
 				fallbackStart = period.end
