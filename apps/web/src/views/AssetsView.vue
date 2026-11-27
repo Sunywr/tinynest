@@ -12,7 +12,7 @@ import InvestmentPanel from '../components/InvestmentPanel.vue'
 import StatementDetailImport from '../components/StatementDetailImport.vue'
 import TransferForm from '../components/TransferForm.vue'
 import { api, type Account, type CardStatement, type CreditDebtPlan, type InvestmentOverview } from '../services/api'
-import { formatMinor, dateLabel } from '../services/format'
+import { formatBasisPoints, formatMinor, dateLabel } from '../services/format'
 import { useSession } from '../composables/useSession'
 import { useToast } from '../composables/useToast'
 
@@ -54,7 +54,6 @@ const hasAnyAsset = computed(() => active.value.length > 0 || creditAccounts.val
 const empty = computed(() => !loading.value && !error.value && !hasAnyAsset.value)
 const cashShare = computed(() => assetsTotal.value > 0 ? Math.round((cashTotal.value / assetsTotal.value) * 100) : 0)
 const investmentShare = computed(() => assetsTotal.value > 0 ? Math.round((investmentTotal.value / assetsTotal.value) * 100) : 0)
-const memberName = (id?: string | null) => session.members.value.find(m => m.id === id)?.name
 
 async function loadStatements(hasCards: boolean) {
   if (!hasCards) {
@@ -223,9 +222,13 @@ onMounted(() => void load())
     <template v-if="investments && investments.account_count && !error">
       <button type="button" class="card asset-detail-trigger" aria-haspopup="dialog"
         aria-label="查看投资详情" @click="investmentDialog?.showModal()">
-        <span>投资资产</span>
-        <strong>{{ formatMinor(investmentTotal) }}</strong>
-        <ChevronRight :size="18" aria-hidden="true" />
+        <span class="asset-detail-heading">投资资产 <ChevronRight :size="18" aria-hidden="true" /></span>
+        <span class="asset-detail-metrics">
+          <span><span>总市值</span><strong>{{ formatMinor(investmentTotal) }}</strong></span>
+          <span><span>累计收益 · {{ formatBasisPoints(investments.total_return_bp) }}</span>
+            <strong>{{ formatMinor(investments.total_return_minor) }}</strong></span>
+          <span><span>股息</span><strong>{{ formatMinor(investments.total_dividends_minor) }}</strong></span>
+        </span>
       </button>
       <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情">
         <form method="dialog" class="asset-detail-controls">
@@ -239,9 +242,13 @@ onMounted(() => void load())
     <template v-if="plan && plan.cards.length && !error">
       <button type="button" class="card asset-detail-trigger" aria-haspopup="dialog"
         aria-label="查看信用卡债务详情" @click="debtDialog?.showModal()">
-        <span>信用卡债务</span>
-        <strong>{{ formatMinor(plan.total_debt_minor) }}</strong>
-        <ChevronRight :size="18" aria-hidden="true" />
+        <span class="asset-detail-heading">信用卡债务 <ChevronRight :size="18" aria-hidden="true" /></span>
+        <span class="asset-detail-metrics">
+          <span><span>总欠款</span><strong>{{ formatMinor(plan.total_debt_minor) }}</strong></span>
+          <span><span>{{ plan.complete || plan.cash_needed_minor === null ? '发薪日前需准备' : '发薪日前已知需准备' }}</span>
+            <strong>{{ formatMinor(plan.cash_needed_minor) }}</strong></span>
+          <span><span>可用现金</span><strong>{{ formatMinor(plan.cash_available_minor) }}</strong></span>
+        </span>
       </button>
       <dialog ref="debtDialog" class="asset-detail-dialog" aria-label="信用卡债务详情">
         <form method="dialog" class="asset-detail-controls">
@@ -269,15 +276,19 @@ onMounted(() => void load())
       <div class="assets-group-grid">
         <section class="card assets-group" aria-label="现金账户">
           <header class="group-head"><h2>现金账户</h2><span>{{ cashAccounts.length }} 个</span></header>
-          <AccountRow data-repeat-click :disabled="journalLoading" v-for="account in cashAccounts" :key="account.id" :account="account"
-            :member-name="memberName(account.owner_member_id)" @select="openJournal(account)" />
+          <div v-if="cashAccounts.length" class="asset-account-icons">
+            <AccountRow v-for="account in cashAccounts" :key="account.id" :account="account"
+              data-repeat-click :disabled="journalLoading" @select="openJournal(account)" />
+          </div>
           <p v-if="!cashAccounts.length" class="group-empty">还没有现金账户</p>
         </section>
 
         <section class="card assets-group" aria-label="信用卡账户">
           <header class="group-head"><h2>信用卡（负债）</h2><span>{{ creditAccounts.length }} 个</span></header>
-          <AccountRow data-repeat-click :disabled="journalLoading" v-for="account in creditAccounts" :key="account.id" :account="account"
-            :member-name="memberName(account.owner_member_id)" @select="openJournal(account)" />
+          <div v-if="creditAccounts.length" class="asset-account-icons">
+            <AccountRow v-for="account in creditAccounts" :key="account.id" :account="account"
+              data-repeat-click :disabled="journalLoading" @select="openJournal(account)" />
+          </div>
           <p v-if="!creditAccounts.length" class="group-empty">还没有信用卡账户</p>
         </section>
       </div>
@@ -328,16 +339,30 @@ onMounted(() => void load())
 <style scoped>
 .asset-detail-trigger {
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: grid;
+  gap: 12px;
   padding: 14px 16px;
   font: inherit;
   color: inherit;
   text-align: left;
   cursor: pointer;
 }
-.asset-detail-trigger strong { margin-inline-start: auto; }
+.asset-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+}
+.asset-detail-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+.asset-detail-metrics > span { display: grid; flex: 1 1 90px; gap: 4px; }
+.asset-detail-metrics > span > span { color: var(--muted); font-size: 12px; }
+.asset-detail-metrics strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.asset-detail-metrics > span:first-child strong { font-size: 18px; }
+.asset-account-icons { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 4px; }
 .asset-detail-dialog {
   width: min(680px, calc(100% - 24px));
   max-height: calc(100dvh - 24px);
