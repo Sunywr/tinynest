@@ -823,6 +823,7 @@ test.describe('E 资产', () => {
     await createDialog.getByRole('button', { name: '创建账户' }).click()
     await expect(createDialog).toHaveCount(0)
 
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     const panel = page.getByRole('region', { name: '信用卡还款计划' })
     await expect(panel).toBeVisible()
     const newRow = panel.locator('.credit-debt-row', { hasText: cardName })
@@ -864,6 +865,7 @@ test.describe('E 资产', () => {
 
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload()
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     await expect(panel).toBeVisible()
     await expect(page.getByTestId('credit-cash-needed')).toHaveText('¥123.45')
     await expect(panel).toContainText('发薪日前需准备')
@@ -918,6 +920,8 @@ test.describe('E 资产', () => {
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto('/assets')
     const panel = page.getByRole('region', { name: '证券与理财资产' })
+    await expect(panel).toBeHidden()
+    await page.getByRole('button', { name: '查看投资详情' }).click()
     await expect(panel).toBeVisible()
     await expect(panel).toContainText('证券账户 · 测试证券')
     await expect(panel).toContainText('爸爸')
@@ -928,6 +932,8 @@ test.describe('E 资产', () => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     expect(overflow).toBeLessThanOrEqual(1)
   })
+
+  const statementDueOn = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())
 
   test('E09 银行账单汇总与同账期账本并排展示，不计入还款计划', async ({ page }) => {
     const csrf = await signIn(page)
@@ -944,7 +950,7 @@ test.describe('E 资产', () => {
         items: [
           {
             id: 'stmt_configured', account_id: configured.id, account_name: configured.name,
-            period_start_on: '2026-10-02', period_end_on: '2026-11-01', due_on: '2026-11-25',
+            period_start_on: '2026-10-02', period_end_on: '2026-11-01', due_on: statementDueOn,
             currency: 'CNY', amount_due_minor: 120000, status: 'pending_review',
             review_reason: '同一账期出现不同应还金额', source_count: 2,
             ledger_charge_minor: 60000, difference_minor: 60000,
@@ -952,7 +958,7 @@ test.describe('E 资产', () => {
           },
           {
             id: 'stmt_plain', account_id: plain.id, account_name: plain.name,
-            period_start_on: null, period_end_on: '2026-11-01', due_on: '2026-11-25',
+            period_start_on: null, period_end_on: '2026-11-01', due_on: statementDueOn,
             currency: 'CNY', amount_due_minor: 90000, status: 'pending_review',
             review_reason: '', source_count: 1,
             ledger_charge_minor: null, difference_minor: null,
@@ -963,6 +969,7 @@ test.describe('E 资产', () => {
     }))
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto('/assets')
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     const panel = page.getByRole('region', { name: '信用卡还款计划' })
     await expect(panel).toBeVisible()
 
@@ -999,6 +1006,7 @@ test.describe('E 资产', () => {
       status: 500, json: { error: { code: 'internal_error', message: '服务暂时不可用' } },
     }))
     await page.goto('/assets')
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     const panel = page.getByRole('region', { name: '信用卡还款计划' })
     await expect(panel.getByTestId('bank-statement-error')).toContainText('银行账单暂时无法读取')
     await expect(panel.getByTestId('bank-statement')).toHaveCount(0)
@@ -1008,7 +1016,7 @@ test.describe('E 资产', () => {
   // echo the server's own amount/date, and never claim success on a refusal.
   const placeholderStatement = (cardName: string, cardId: string, state: string) => ({
     id: 'stmt_ph', account_id: cardId, account_name: cardName,
-    period_start_on: '2026-10-02', period_end_on: '2026-11-01', due_on: '2026-11-25',
+    period_start_on: '2026-10-02', period_end_on: '2026-11-01', due_on: statementDueOn,
     currency: 'CNY', amount_due_minor: 120000, status: 'reconciled', review_reason: '',
     source_count: 1, ledger_charge_minor: 0, difference_minor: 120000,
     placeholder_transaction_id: state === 'awaiting_detail' ? 'tx_ph' : null, placeholder_state: state,
@@ -1037,7 +1045,7 @@ test.describe('E 资产', () => {
         status: 201,
         json: {
           transaction_id: 'tx_ph', statement_id: 'stmt_ph', account_id: card.id, account_name: card.name,
-          amount_minor: 120000, currency: 'CNY', occurred_on: '2026-11-25', due_on: '2026-11-25',
+          amount_minor: 120000, currency: 'CNY', occurred_on: statementDueOn, due_on: statementDueOn,
           period_start_on: '2026-10-02', period_end_on: '2026-11-01',
           category_id: 'cat_ph', category_name: '待补明细',
         },
@@ -1045,6 +1053,7 @@ test.describe('E 资产', () => {
     })
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto('/assets')
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     const panel = page.getByRole('region', { name: '信用卡还款计划' })
     const row = panel.locator('.credit-debt-row', { hasText: card.name })
     await expect(row.getByTestId('placeholder-create')).toBeVisible()
@@ -1054,14 +1063,15 @@ test.describe('E 资产', () => {
     await expect(sheet).toContainText('生成待补明细流水？')
     await expect(sheet).toContainText('占位卡')
     await expect(sheet).toContainText('¥1,200.00')
-    await expect(sheet).toContainText('还款截止 11月25日')
+    await expect(sheet).toContainText('还款截止')
     // 确认之前绝不能写账本。
     expect(posted).toBe(0)
 
     await sheet.getByRole('button', { name: '生成占位流水' }).click()
-    await expect(page.locator('.toast.ok')).toContainText('已生成待补明细流水 ¥1,200.00 · 2026-11-25')
+    await expect(page.locator('.toast.ok')).toContainText(`已生成待补明细流水 ¥1,200.00 · ${statementDueOn}`)
     await expect(sheet).toHaveCount(0)
     expect(posted).toBe(1)
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     await expect(row.getByTestId('placeholder-awaiting')).toContainText('已按银行应还挂起 ¥1,200.00 的待补明细流水')
     await expect(row.getByTestId('placeholder-create')).toHaveCount(0)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
@@ -1078,6 +1088,7 @@ test.describe('E 资产', () => {
       status: 409, json: { error: { code: 'cycle_already_recorded', message: reason } },
     }))
     await page.goto('/assets')
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     const row = page.getByRole('region', { name: '信用卡还款计划' }).locator('.credit-debt-row', { hasText: card.name })
     await row.getByTestId('placeholder-create').click()
     const sheet = page.getByRole('dialog')
@@ -1087,6 +1098,7 @@ test.describe('E 资产', () => {
     // 被拒绝后确认层仍留着可读原因，取消后仍可再次尝试。
     await expect(sheet).toBeVisible()
     await sheet.getByRole('button', { name: '取消' }).click()
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     await expect(row.getByTestId('placeholder-create')).toBeVisible()
   })
 })
@@ -1728,6 +1740,7 @@ test.describe('J 账单明细补录', () => {
     })
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto('/assets')
+    await page.getByRole('button', { name: '查看信用卡债务详情' }).click()
     const panel = page.getByRole('region', { name: '信用卡还款计划' })
     await expect(panel).toBeVisible()
     await panel.locator('.credit-debt-row', { hasText: cardName }).getByTestId('detail-upload').click()

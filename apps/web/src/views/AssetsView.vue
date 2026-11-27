@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import SurfaceTransition from "../components/SurfaceTransition.vue"
 import { computed, onMounted, ref } from 'vue'
-import { ArrowLeftRight, Plus, X } from 'lucide-vue-next'
+import { ArrowLeftRight, ChevronRight, Plus, X } from 'lucide-vue-next'
 import AccountForm from '../components/AccountForm.vue'
 import AccountRow from '../components/AccountRow.vue'
 import AppSkeleton from '../components/AppSkeleton.vue'
@@ -32,6 +32,8 @@ const formAccount = ref<Account | null>(null)
 const transferOpen = ref(false)
 const placeholderFor = ref<CardStatement | null>(null)
 const placeholderBusy = ref(false)
+const investmentDialog = ref<HTMLDialogElement | null>(null)
+const debtDialog = ref<HTMLDialogElement | null>(null)
 const detailCard = ref<{ id: string; name: string } | null>(null)
 const journalFor = ref<Account | null>(null)
 const journal = ref<JournalRow[]>([])
@@ -96,6 +98,7 @@ function openConfigure(accountId: string) {
     void load()
     return
   }
+  debtDialog.value?.close()
   formAccount.value = account
   formOpen.value = true
 }
@@ -112,6 +115,7 @@ function askPlaceholder(accountId: string, statementId: string) {
     void loadStatements(creditAccounts.value.length > 0)
     return
   }
+  debtDialog.value?.close()
   placeholderFor.value = statement
 }
 
@@ -129,6 +133,7 @@ function openDetails(accountId: string) {
     void load()
     return
   }
+  debtDialog.value?.close()
   detailCard.value = { id: accountId, name: card?.name ?? account?.name ?? '信用卡' }
 }
 
@@ -215,19 +220,44 @@ onMounted(() => void load())
       <p class="networth-note">投资是导入的估值快照，不是复式账余额。</p>
     </section>
 
-    <InvestmentPanel v-if="investments && investments.account_count && !error" :overview="investments" />
+    <template v-if="investments && investments.account_count && !error">
+      <button type="button" class="card asset-detail-trigger" aria-haspopup="dialog"
+        aria-label="查看投资详情" @click="investmentDialog?.showModal()">
+        <span>投资资产</span>
+        <strong>{{ formatMinor(investmentTotal) }}</strong>
+        <ChevronRight :size="18" aria-hidden="true" />
+      </button>
+      <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情">
+        <form method="dialog" class="asset-detail-controls">
+          <button type="submit" aria-label="关闭投资详情"><X :size="20" aria-hidden="true" /></button>
+        </form>
+        <InvestmentPanel :overview="investments" />
+        <p class="info-line">证券/理财账户为只读估值快照，不写分录、不参与转账；其市值计入本页净资产，但不等同于账本余额。</p>
+      </dialog>
+    </template>
 
-    <CreditDebtPanel v-if="plan && plan.cards.length && !error" :plan="plan" :can-write="canWrite"
-      :statements="statements" :statements-failed="statementsFailed" :placeholder-busy="placeholderBusy"
-      @configure="openConfigure" @placeholder="askPlaceholder" @details="openDetails" />
-
-    <p class="info-line" role="note">
-      现金与信用卡仍按复式记账；信用卡是负债账户，支出增加欠款、还款按账户转账处理。可为信用卡设置账单日与还款日，
-      页面按已入账流水估算发薪日前需准备的现金；不提供分期、利息、最低还款或自动扣款。
-      账单已出但明细没上传时，可按银行报出的应还金额生成一笔「待补明细」支出，记在还款截止日，让还款计划先把这笔现金占住；补录明细后删除这笔占位即可。
-      「上传账单明细」读取银行导出的 XLS/XLSX：只有识别为消费的行会入账，退款、还款或转入、费用利息与未识别行只记录不记账；同一行重复上传不会双计。
-      证券/理财账户为只读估值快照，不写分录、不参与转账；其市值计入本页净资产，但不等同于账本余额。
-    </p>
+    <template v-if="plan && plan.cards.length && !error">
+      <button type="button" class="card asset-detail-trigger" aria-haspopup="dialog"
+        aria-label="查看信用卡债务详情" @click="debtDialog?.showModal()">
+        <span>信用卡债务</span>
+        <strong>{{ formatMinor(plan.total_debt_minor) }}</strong>
+        <ChevronRight :size="18" aria-hidden="true" />
+      </button>
+      <dialog ref="debtDialog" class="asset-detail-dialog" aria-label="信用卡债务详情">
+        <form method="dialog" class="asset-detail-controls">
+          <button type="submit" aria-label="关闭信用卡债务详情"><X :size="20" aria-hidden="true" /></button>
+        </form>
+        <CreditDebtPanel :plan="plan" :can-write="canWrite"
+          :statements="statements" :statements-failed="statementsFailed" :placeholder-busy="placeholderBusy"
+          @configure="openConfigure" @placeholder="askPlaceholder" @details="openDetails" />
+        <p class="info-line">
+          现金与信用卡仍按复式记账；信用卡是负债账户，支出增加欠款、还款按账户转账处理。可为信用卡设置账单日与还款日，
+          页面按已入账流水估算发薪日前需准备的现金；不提供分期、利息、最低还款或自动扣款。
+          账单已出但明细没上传时，可按银行报出的应还金额生成一笔「待补明细」支出，记在还款截止日，让还款计划先把这笔现金占住；补录明细后删除这笔占位即可。
+          「上传账单明细」读取银行导出的 XLS/XLSX：只有识别为消费的行会入账，退款、还款或转入、费用利息与未识别行只记录不记账；同一行重复上传不会双计。
+        </p>
+      </dialog>
+    </template>
 
     <p v-if="error" class="inline-error" role="alert">
       {{ error }}
@@ -294,3 +324,50 @@ onMounted(() => void load())
       :busy="placeholderBusy" @confirm="confirmPlaceholder" @cancel="placeholderFor = null" />
   </section>
 </template>
+
+<style scoped>
+.asset-detail-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.asset-detail-trigger strong { margin-inline-start: auto; }
+.asset-detail-dialog {
+  width: min(680px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  box-sizing: border-box;
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  color: inherit;
+  background: var(--surface, #fffaf4);
+  overflow: auto;
+}
+.asset-detail-dialog .info-line { margin: 0; padding: 12px 16px; }
+.asset-detail-dialog::backdrop { background: rgb(45 32 24 / 45%); }
+.asset-detail-controls {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  background: inherit;
+}
+.asset-detail-controls button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+</style>
