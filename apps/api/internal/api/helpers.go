@@ -30,7 +30,7 @@ const principalKey contextKey = 1
 // statement preview, the read-only statement sync plus its list, the
 // 待补明细 placeholder and the 账单明细 preview plus import. The route-count test
 // asserts Register never exceeds it.
-const maxRoutes = 75
+const maxRoutes = 76
 
 // Principal is the authenticated caller resolved from the session cookie.
 type Principal struct {

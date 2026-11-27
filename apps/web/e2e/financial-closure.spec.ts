@@ -961,6 +961,52 @@ test.describe('E 资产', () => {
 
   const statementDueOn = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())
 
+  test('E08b 股票页保留资产快照，观察仓持久化且旧行情不触发提醒', async ({ page }) => {
+    await signIn(page)
+    await page.clock.setFixedTime(new Date('2026-11-27T08:00:00+08:00'))
+    await page.route(/\/api\/v1\/accounts\?include=credit_debt(,|%2C)investments/, route =>
+      route.fulfill({ json: { items: [], credit_debt: { cards: [] }, investments: sampleInvestmentOverview() } }))
+    await page.route('**/api/v1/stock-market?*', route => {
+      const source = new URL(route.request().url()).searchParams.get('source') ?? ''
+      if (!source.includes('q=sh600900')) return route.fulfill({ status: 502 })
+      const fields = Array(51).fill('')
+      Object.assign(fields, { 1: 'Test Holding', 3: '26.72', 30: '20261126150000', 32: '0.3', 39: '12', 46: '2' })
+      return route.fulfill({ body: `v_sh600900="${fields.join('~')}";` })
+    })
+    await page.setViewportSize({ width: 390, height: 844 })
+    async function openStocks() {
+      await page.goto('/assets')
+      await page.getByRole('button', { name: '查看投资详情' }).click()
+      await page.getByRole('button', { name: '股票', exact: true }).click()
+      return page.getByRole('region', { name: '股票', exact: true })
+    }
+    const stocks = await openStocks()
+    await expect(stocks).toContainText('26.72')
+    await expect(stocks).toContainText('非今日行情')
+    await stocks.getByRole('checkbox', { name: '只看提醒' }).check()
+    await expect(stocks).toContainText('当前无有效提醒')
+    await stocks.getByRole('checkbox', { name: '只看提醒' }).uncheck()
+    await stocks.getByRole('button', { name: '添加', exact: true }).click()
+    await stocks.getByLabel('代码', { exact: true }).fill('510300')
+    await stocks.getByLabel('名称', { exact: true }).fill('观察 ETF')
+    await stocks.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(stocks).toContainText('观察 ETF')
+    await stocks.getByRole('button', { name: '隐藏汇总' }).click()
+    await expect(stocks.getByRole('button', { name: '显示汇总' })).toHaveAttribute('aria-pressed', 'true')
+    await openStocks()
+    await expect(stocks).toContainText('观察 ETF')
+    await stocks.getByLabel('持仓分类').selectOption('watch')
+    await stocks.getByRole('button', { name: '清空观察池' }).click()
+    await stocks.getByRole('button', { name: '确认清空' }).click()
+    await expect(stocks).not.toContainText('观察 ETF')
+    await stocks.getByLabel('持仓分类').selectOption('monitor')
+    await expect(stocks).toContainText('600900')
+    const overflow = await page.getByRole('dialog', { name: '投资详情' }).evaluate(node => node.scrollWidth - node.clientWidth)
+    expect(overflow).toBeLessThanOrEqual(1)
+    await page.getByRole('button', { name: '关闭投资详情' }).click()
+    await expect(page.getByTestId('net-worth')).toHaveText('¥700.00')
+  })
+
   test('E09 银行账单汇总与同账期账本并排展示，不计入还款计划', async ({ page }) => {
     const csrf = await signIn(page)
     const configured = await (await page.request.post('/api/v1/accounts', {

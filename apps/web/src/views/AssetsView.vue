@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import SurfaceTransition from "../components/SurfaceTransition.vue"
-import { computed, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { ArrowLeftRight, ChevronRight, Plus, X } from 'lucide-vue-next'
 import AccountForm from '../components/AccountForm.vue'
 import AccountRow from '../components/AccountRow.vue'
@@ -33,6 +33,10 @@ const transferOpen = ref(false)
 const placeholderFor = ref<CardStatement | null>(null)
 const placeholderBusy = ref(false)
 const investmentDialog = ref<HTMLDialogElement | null>(null)
+const StockMonitor = defineAsyncComponent(() => import('../components/StockMonitor.vue'))
+const investmentTab = ref<'overview' | 'stocks'>('overview')
+const investmentOpen = ref(false)
+const stockScope = computed(() => JSON.stringify([session.me.value?.household_id, session.me.value?.user_id]))
 const debtDialog = ref<HTMLDialogElement | null>(null)
 const detailCard = ref<{ id: string; name: string } | null>(null)
 const journalFor = ref<Account | null>(null)
@@ -99,6 +103,12 @@ async function load() {
 function openCreate() {
   formAccount.value = null
   formOpen.value = true
+}
+
+function openInvestments() {
+  investmentTab.value = investmentAccounts.value.length ? 'overview' : 'stocks'
+  investmentDialog.value?.showModal()
+  investmentOpen.value = true
 }
 
 function openConfigure(accountId: string) {
@@ -229,11 +239,11 @@ onMounted(() => void load())
       <p class="networth-note">投资是导入的估值快照，不是复式账余额。</p>
     </section>
 
-    <template v-if="investments && investments.account_count && !error">
+    <template v-if="investments && !error">
       <button type="button" class="card asset-detail-trigger" aria-haspopup="dialog"
-        aria-label="查看投资详情" @click="investmentDialog?.showModal()">
+        aria-label="查看投资详情" @click="openInvestments">
         <span class="asset-detail-heading">投资资产 <ChevronRight :size="18" aria-hidden="true" /></span>
-        <span class="asset-detail-metrics">
+        <span v-if="investments.account_count" class="asset-detail-metrics">
           <span><span>总市值</span><strong>{{ formatMinor(investmentTotal) }}</strong></span>
           <span><span>累计收益 · <b :class="returnTone(investments.total_return_minor)">{{ formatBasisPoints(investments.total_return_bp) }}</b></span>
             <strong :class="returnTone(investments.total_return_minor)">{{ formatMinor(investments.total_return_minor) }}</strong></span>
@@ -249,12 +259,16 @@ onMounted(() => void load())
           </span>
         </span>
       </button>
-      <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情">
+      <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情" @close="investmentOpen = false">
         <form method="dialog" class="asset-detail-controls">
           <button type="submit" aria-label="关闭投资详情"><X :size="20" aria-hidden="true" /></button>
         </form>
-        <InvestmentPanel :overview="investments" />
-        <p class="info-line">证券/理财账户为只读估值快照，不写分录、不参与转账；其市值计入本页净资产，但不等同于账本余额。</p>
+        <div class="investment-tabs" aria-label="投资视图">
+          <button type="button" class="btn" :aria-pressed="investmentTab === 'overview'" @click="investmentTab = 'overview'">总览</button>
+          <button type="button" class="btn" :aria-pressed="investmentTab === 'stocks'" @click="investmentTab = 'stocks'">股票</button>
+        </div>
+        <InvestmentPanel v-if="investmentTab === 'overview'" :overview="investments" />
+        <StockMonitor v-else-if="investmentOpen" :key="stockScope" :overview="investments" :scope="stockScope" :active="true" />
       </dialog>
     </template>
 
@@ -362,6 +376,11 @@ onMounted(() => void load())
       :busy="placeholderBusy" @confirm="confirmPlaceholder" @cancel="placeholderFor = null" />
   </section>
 </template>
+
+<style scoped>
+.investment-tabs { display: flex; gap: 8px; margin: 0 0 10px; }
+.investment-tabs [aria-pressed="true"] { color: var(--primary-deep); background: var(--soft); font-weight: 700; }
+</style>
 
 <style scoped>
 .asset-detail-trigger {

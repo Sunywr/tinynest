@@ -33,7 +33,7 @@
 
 1. `README.md`（产品定位与当前状态）、`docs/project-status.md`（进度与实测数字）、`docs/DEVELOPMENT.md`（启动与验证）。
 2. `docs/plans/v2-bookkeeping-reset.md`（P0–P5 总计划）、`docs/plans/v2-bookkeeping-module-spec.md`（模块与 API 契约冻结稿）、`docs/plans/v2-platform-optimization.md`（三端优化计划）。
-3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（**75 条**业务路由契约）、`docs/er-v2.md`（**39 张**表与冲正不变量）。
+3. `docs/accounting-rules-v2.md`（V2 账务规则与统计口径）、`docs/api-v2.md`（**76 条**业务路由契约）、`docs/er-v2.md`（表结构与冲正不变量）。
 4. `docs/plans/v2-prod-purge-runbook.md`（生产清理）、`docs/plans/v2-cutover-runbook.md`（新库切换）；执行前逐条核对。
 5. `docs/architecture.md`（双服务器边界）、`docs/security.md`（安全底线）、`docs/deployment.md`（部署与迁移）、`docs/acceptance.md`（验收清单）。
 6. 仍然有效：`docs/design-system.md`（**A · 奶油团子**，唯一主题，不得提供其他风格）、`assets/brand/README.md`（唯一批准原图 SHA-256，严禁改绘/重新生成图标）、`docs/reviews/v2-baseline.md`（V2 基线与 P5 结果）。
@@ -111,6 +111,7 @@
 | 保留 | 初始化与认证、会话/CSRF、家庭成员与邀请审批、管理员与审计日志、托管邮箱 SMTP 与邮箱验证/找回、站点管理员 |
 | 保留 | 复式记账内核、`categories`、`accounts`（`cash` / `credit`，含可空账单日/还款日配置）、`transactions`（支出/收入/转账）、`stats`（summary / categories / daily / monthly）、`budgets`、信用卡还款计划（`GET /accounts?include=credit_debt` 只读派生） |
 | 保留 | 只读证券/理财估值快照：`investment_accounts` / `investment_holdings`，经 `GET /accounts?include=investments` 投影；不写分录、不参与转账 |
+| 保留 | 资产 → 投资 → 股票：静观沪深证券行情、持仓核验、观察池及红利／ETF 研究。行情经登录后的同源接口读取，个人观察记录和设置保存在本浏览器，独立于账本和 pfm 快照。 |
 | 保留 | 项目预算 `project-budgets`（`project_budgets` + `transaction_budget_links`，只做额度统计）、流水来源元数据 `transaction_source_metadata`、持久化登录风控 `auth_login_locks` |
 | 保留 | 信用卡账单邮箱与只读对账（`/api/v1/credit-statement-mailbox*`、`/api/v1/accounts/{id}/credit-statement-{preview,sync,binding}`、`GET /api/v1/credit-statements`）：只读 IMAP 取银行发的账单汇总，密文存授权码，落 `card_statements` / `card_statement_sources` 只做只读比对，不写分录、不参与还款计划 |
 | 保留 | 待补明细占位 `POST /accounts/{id}/credit-statement-placeholder`（`statement_placeholders`，迁移 013）：账单已出、明细未上传时，按银行报出的应还生成一笔「待补明细」信用卡支出（`occurred_on`=还款截止日），关联表只存账单 ↔ 流水与银行账期日期；金额由服务端取自已落库账单、不接受客户端提交，重复请求 409，明细补录后冲正归零 |

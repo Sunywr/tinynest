@@ -10,6 +10,7 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 | 项 | 状态 |
 | --- | --- |
 | V2 代码（后端 / 前端 / 迁移 / 运维 CLI） | 已完成，代码可清点（见 §3） |
+| 股票盯盘与研究（2026-11-27） | 资产 → 投资 → 股票。沿用 pfm 持仓快照，支持静观行情、常态分红和价值／趋势核验、观察池、红利／ETF 扫描、导入导出和本浏览器保存。行情独立展示，净资产仍采用 pfm 快照。 |
 | 信用卡还款计划（2026-11-22 增补） | 已完成：信用卡账户账单日/还款日配置 + `GET /accounts?include=credit_debt` 只读派生；不新增路由/表，不恢复 V1 信用账单模块 |
 | 信用卡还款计划生产发布（2026-11-22） | **已完成**：后端/前端 `v2-9fc30b1` 上线；生产迁移 1–4；`healthz`/`readyz` 200；静态资源哈希与前后端 release 核对通过；登录后真实账本冒烟待用户验证。见 [发布证据](reviews/v2-credit-plan-deployment-evidence.md) |
 | 证券/理财估值快照（2026-11-22 增补） | **已完成并发布**：2 张只读表、`GET /accounts?include=investments`、资产页投资面板与图表投资视图；生产迁移 1–5，导入 pfm 4 账户/30 持仓（总市值 ¥535,406.71），生产 API 与 390×844 真实页面验证通过。见 [发布证据](reviews/v2-investment-snapshot-deployment-evidence.md) |
@@ -53,7 +54,7 @@ V2 的核心目标是收敛而不是扩张：把 V1 的 140 条路由、55 张�
 
 | 维度 | 实测值 | 复核位置 |
 | --- | --- | --- |
-| HTTP 业务路由 | **75** 条（`Register` 内按「方法 + 路径」计，含账单邮箱 5 + 绑卡 2 + 预览/同步 2 + 账单列表 1 + 待补明细占位 1 + 明细预览/入账 2 共 13 条；另有 `/api/v1/healthz`、`/api/v1/readyz` 2 条在 `internal/server`，不计入 75）；还款计划/投资快照仍为 `GET /accounts?include=credit_debt`、`?include=investments` 投影而非新路由 | `apps/api/internal/api/setup.go`、`credit_statements.go`、`credit_statement_placeholder.go`、`statement_details.go`；`TestRouteBudget` 断言 `≤ 75`，实测 `Register wired 75 routes (budget 75)` |
+| HTTP 业务路由 | **76** 条，含信用卡对账相关 13 条及股票行情 1 条。另有 `/api/v1/healthz`、`/api/v1/readyz`；还款计划及投资快照仍使用 `GET /accounts` 的可选投影。 | `TestRouteBudget` 实测 `Register wired 76 routes (budget 76)` |
 | 数据库表 | 空库迁移后 **39** 张（含 `schema_meta`），加迁移账本 `schema_migrations` MySQL 运行时 **40** 张，SQLite 另因 `AUTOINCREMENT` 多出 `sqlite_sequence` 为 **41** 张；两方言业务表集一致 | 2026-11-26 逐张清点：SQLite 临时库 41 项、隔离 MySQL 8.4.7 `information_schema.tables` 40 项；`internal/db/migrations/`（001 计 21、002 计 4、005 计 2、006 计 1、007 计 2、008 计 1、009–012 计 6、013 计 1、014 计 1）；明细见 `docs/er-v2.md` §1 |
 | 迁移 | SQLite 与 MySQL 各 **14** 个版本文件（001–014），不再有 V1 的 21 / 14 个版本；011 复制 009/010 数据但保留旧表；`014_statement_details.sql` 的 MySQL 版在隔离实例上重跑三次退出码 `0 0 0`、行数不变 | `internal/db/migrations/`、`internal/db/mysql/`；`internal/db/migrate.go` 的 `//go:embed`；`TestMigrationsAreIdempotent` |
 | 前端应用壳 | `App.vue` **117 行**（非空行 107；脚本与模板之外只剩样式） | `apps/web/src/App.vue` |

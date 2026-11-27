@@ -1,8 +1,7 @@
 # TinyNest V2 · API 契约
 
 > 依据：`apps/api/internal/api/setup.go` 的 `Register` 路由注册、各 handler 实现与 `internal/api/*_test.go`。
-> 契约范围：**75 条业务路由**（按「方法 + 路径」计，2026-11-26 在当前工作树以 `TestRouteBudget` 实测：`Register wired 75 routes (budget 75)`）；另有 `/api/v1/healthz`、`/api/v1/readyz` 两条健康检查由 `internal/server` 注册，不计入 75。
-> 路由总数由 `TestRouteBudget` 冻结为 ≤75；包括注册及登录使用的图形验证码入口。
+> 契约范围为 **76 条业务路由**（按「方法 + 路径」计，`TestRouteBudget` 实测 `Register wired 76 routes (budget 76)`）。`internal/server` 另注册 `/api/v1/healthz` 与 `/api/v1/readyz`。
 > 信用卡还款计划与投资估值不是新路由，而是 `GET /accounts?include=credit_debt,investments` 的可选投影；`include` 接受空值、`credit_debt`、`investments` 或逗号组合。
 > 账单邮箱、绑卡、预览、同步、只读对账、待补明细占位与账单明细补录共 13 条路由见 §11：其中 11 条只读账本、不写分录，只有 `POST /accounts/{id}/credit-statement-placeholder`（生成「待补明细」占位流水）与 `POST /accounts/{id}/statement-detail-import`（把银行明细里的消费行入账）会写入账本。
 
@@ -182,6 +181,10 @@
 
 另返回 `by_owner[]`、`by_kind[]`、`by_asset_class[]`（含 `share_bp`/`weight_bp`）与按累计收益排序的 `top_holdings[]`。收益率均为基点，分母为对应成本；`last_trade_on` 来自 pfm 最近一次交易快照，不是完整买卖流水。
 
+### 7.3 股票行情与研究数据
+
+`GET /api/v1/stock-market?source=<URL 编码后的公开数据源>` 需要登录。接口只读取固定白名单中的行情、日线、财务分红、指数估值及政策新闻路径。成功返回二进制数据供页面按来源解析，响应使用 `Cache-Control: no-store`。URL 校验失败返回 400 `invalid_market_source`，繁忙返回 429 `market_busy`，上游请求失败返回 502 `market_unavailable`。
+
 ## 8. 流水（5 条）
 
 鉴权：会话；`viewer` 只允许 GET。
@@ -303,7 +306,7 @@
 - 来源追溯：`digest = SHA-256("card="+账户ID, "tail="+卡尾, 每行单元格)`，命中 `UNIQUE(household_id, digest)` 时不重复写来源行——同一份文件重传算一次，改用修正后的导出算新来源。
 - 单次上限 3000 行（超出 400 `too_many_rows`），请求体上限 1 MiB（`decode` 统一限制）。
 
-## 12. 健康检查（2 条，不计入 75）
+## 12. 健康检查（2 条）
 
 | 方法 | 路径 | 鉴权 | 响应 | 失败 |
 | --- | --- | --- | --- | --- |

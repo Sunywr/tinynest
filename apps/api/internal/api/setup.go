@@ -82,6 +82,7 @@ func (a *API) registerBookkeeping(mux *http.ServeMux) {
 
 	// Accounts
 	a.route(mux, "GET /api/v1/accounts", a.handleListAccounts)
+	a.route(mux, "GET /api/v1/stock-market", a.handleStockMarket)
 	a.route(mux, "POST /api/v1/accounts", a.handleCreateAccount)
 	a.route(mux, "GET /api/v1/accounts/{id}", a.handleGetAccount)
 	a.route(mux, "PATCH /api/v1/accounts/{id}", a.handleUpdateAccount)
