@@ -80,11 +80,19 @@ func parseStatementMail(raw []byte, bank, tail string, subjectKeywords ...string
 		return out, true
 	}
 	parts := 32
+	fields := map[string]string{}
+	var inspectHTML func(string)
+	if bank == "cmb" {
+		inspectHTML = func(source string) { collectCMBSummaryFields(fields, source) }
+	}
 	body, err := statementMIMEText(msg.Header.Get("Content-Type"), msg.Header.Get("Content-Disposition"),
-		msg.Header.Get("Content-Transfer-Encoding"), msg.Body, 0, &parts)
+		msg.Header.Get("Content-Transfer-Encoding"), msg.Body, 0, &parts, inspectHTML)
 	if err != nil || body == "" {
 		out.NeedsReview = "邮件正文无法识别"
 		return out, true
+	}
+	if len(fields) > 0 {
+		return parseCMBHTMLSummary(fields, out), true
 	}
 	body = strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
@@ -249,7 +257,7 @@ func statementCharsetReader(charset string, input io.Reader) (io.Reader, error) 
 	return encoding.NewDecoder().Reader(input), nil
 }
 
-func statementMIMEText(contentType, disposition, transfer string, src io.Reader, depth int, parts *int) (string, error) {
+func statementMIMEText(contentType, disposition, transfer string, src io.Reader, depth int, parts *int, inspectHTML ...func(string)) (string, error) {
 	*parts--
 	if depth > 6 || *parts < 0 {
 		return "", errors.New("statement MIME limit exceeded")
@@ -275,7 +283,7 @@ func statementMIMEText(contentType, disposition, transfer string, src io.Reader,
 				return "", err
 			}
 			text, err := statementMIMEText(part.Header.Get("Content-Type"), part.Header.Get("Content-Disposition"),
-				part.Header.Get("Content-Transfer-Encoding"), part, depth+1, parts)
+				part.Header.Get("Content-Transfer-Encoding"), part, depth+1, parts, inspectHTML...)
 			if err != nil {
 				return "", err
 			}
@@ -306,6 +314,9 @@ func statementMIMEText(contentType, disposition, transfer string, src io.Reader,
 	text := string(body)
 	if kind == "text/html" {
 		text = statementHTMLHidden.ReplaceAllString(text, "")
+		if len(inspectHTML) > 0 && inspectHTML[0] != nil {
+			inspectHTML[0](text)
+		}
 		text = statementHTMLBreak.ReplaceAllString(text, "\n")
 		text = html.UnescapeString(statementHTMLTag.ReplaceAllString(text, ""))
 	}

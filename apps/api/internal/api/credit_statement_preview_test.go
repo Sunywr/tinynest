@@ -204,3 +204,20 @@ func TestStatementSubjectKeywordSavedAndCleared(t *testing.T) {
 		}
 	}
 }
+
+func TestCMBHTMLSummaryUsesNamedFields(t *testing.T) {
+	raw := []byte("From: statement@message.cmbchina.com\r\nSubject: " +
+		mime.BEncoding.Encode("UTF-8", "招商银行信用卡电子账单") +
+		"\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+		`<div id="statementCycle"><font>2026/10/17-2026/11/16</font></div>
+  <span id="L1rmbLcurrBal">¥&nbsp;123.45</span><span id="L1rmbLdueAmt">¥ 6.17</span>
+  <div id='paymentDueDate'><font>2026/12/04</font></div><div id="D1rmbLcurrBal"><font>¥ 123.45</font></div>`)
+	item, ok := parseStatementMail(raw, "cmb", "4321")
+	if !ok || item.AmountDue == nil || *item.AmountDue != 12345 ||
+		item.PeriodStart != "2026-10-17" || item.StatementOn != "2026-11-16" || item.DueOn != "2026-12-04" {
+		t.Fatalf("unexpected named summary: %+v", item)
+	}
+	if item.NeedsReview == "" || statementSummaryReady(item) {
+		t.Fatal("account-wide amount without explicit card identification must remain review-only")
+	}
+}
