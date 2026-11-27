@@ -10,6 +10,7 @@ const uid = nextUid()
 interface Option { id: string; name: string; hint?: string; emoji?: string; badge?: string }
 const props = defineProps<{
   modelValue: string
+  selectedValues?: string[]
   options: Option[]
   placeholder?: string
   disabled?: boolean
@@ -18,6 +19,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
+  (e: 'update:selectedValues', v: string[]): void
   (e: 'create', q: string): void
 }>()
 
@@ -28,7 +30,13 @@ const searchInput = ref<HTMLInputElement>()
 const highlighted = ref(0)
 
 const selected = computed(() => props.options.find(o => o.id === props.modelValue))
-const selectedName = computed(() => selected.value?.name ?? '')
+const selectedName = computed(() => props.selectedValues
+  ? (props.selectedValues.length ? `已选 ${props.selectedValues.length} 项` : '')
+  : selected.value?.name ?? '')
+
+function isSelected(id: string): boolean {
+  return props.selectedValues?.includes(id) ?? props.modelValue === id
+}
 
 const filtered = computed(() => {
   const kw = query.value.trim().toLocaleLowerCase()
@@ -71,6 +79,14 @@ function closeMenu() {
 function toggle() { isOpen.value ? closeMenu() : openMenu() }
 
 function selectOption(o: Option) {
+  if (props.disabled) return
+  if (props.selectedValues) {
+    const next = isSelected(o.id)
+      ? props.selectedValues.filter(id => id !== o.id)
+      : [...props.selectedValues, o.id]
+    emit('update:selectedValues', next)
+    return
+  }
   emit('update:modelValue', o.id)
   closeMenu()
 }
@@ -107,7 +123,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 <template>
   <div ref="root" class="smart-select" :class="{ open: isOpen }">
     <button type="button" class="ss-trigger" :class="{ placeholder: !selectedName }"
-      :disabled="disabled" @click.stop="toggle()">
+      :disabled="disabled" :aria-expanded="isOpen" aria-haspopup="listbox" @click.stop="toggle()">
       <CategoryIcon v-if="selected?.emoji" class="ss-emoji" :value="selected.emoji" />
       <span class="ss-value">{{ selectedName || placeholder || '请选择' }}</span>
       <span v-if="selected?.badge" class="ss-badge" :class="{ income: selected.badge === '收入' }">{{ selected.badge }}</span>
@@ -119,17 +135,17 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           :placeholder="placeholder || '搜索…'" @input="onInput"
           @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)"
           @keydown.enter.prevent="onEnter" @keydown.esc.prevent="closeMenu()" />
-        <ul class="ss-list" role="listbox">
+        <ul class="ss-list" role="listbox" :aria-multiselectable="selectedValues ? true : undefined">
           <li v-if="!rows.length" class="ss-empty">无匹配项</li>
           <template v-for="(r, i) in rows" :key="i">
-            <li v-if="r.kind === 'option'" class="ss-option" :class="{ hl: i === highlighted, sel: r.option.id === modelValue }"
-              role="option" :aria-selected="r.option.id === modelValue"
+            <li v-if="r.kind === 'option'" class="ss-option" :class="{ hl: i === highlighted, sel: isSelected(r.option.id) }"
+              role="option" :aria-selected="isSelected(r.option.id)"
               @mouseenter="highlighted = i" @mousedown.prevent="selectOption(r.option)">
               <CategoryIcon v-if="r.option.emoji" class="ss-emoji" :value="r.option.emoji" />
               <span class="ss-name">{{ r.option.name }}</span>
               <span v-if="r.option.badge" class="ss-badge" :class="{ income: r.option.badge === '收入' }">{{ r.option.badge }}</span>
               <span v-if="r.option.hint" class="ss-hint">{{ r.option.hint }}</span>
-              <span v-if="r.option.id === modelValue" class="ss-check">✓</span>
+              <span v-if="isSelected(r.option.id)" class="ss-check">✓</span>
             </li>
             <li v-else class="ss-option ss-create" :class="{ hl: i === highlighted }"
               role="option" @mouseenter="highlighted = i" @mousedown.prevent="emitCreate()">

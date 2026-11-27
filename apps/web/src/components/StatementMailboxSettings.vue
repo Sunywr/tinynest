@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import SmartSelect from './SmartSelect.vue'
 import StatementDetailImport from './StatementDetailImport.vue'
 import { ApiError, api, request, type CardStatement } from '../services/api'
 import { formatMinor } from '../services/format'
@@ -275,16 +276,13 @@ onMounted(refresh)
                   <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
                     :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
                 </div>
-                <details v-if="card.bound && card.status === 'active'" class="card-periods">
+                <SmartSelect v-if="card.bound && card.status === 'active' && card.billing_periods?.length"
+                  class="card-period-dropdown" model-value="" v-model:selected-values="selections[card.id]"
+                  :options="card.billing_periods.map(period => ({ id: periodValue(period), name: period.start + ' 至 ' + period.end }))"
+                  placeholder="搜索并选择账期" :disabled="busy" />
+                <details v-else-if="card.bound && card.status === 'active'" class="card-periods">
                   <summary>选择账期<span v-if="rangesReady(card)"> · 已选 {{ selectedRanges(card).length }} 期</span></summary>
-                  <fieldset v-if="card.billing_periods?.length" :disabled="busy" class="billing-period-options">
-                    <legend>已结束的账期</legend>
-                    <label v-for="period in card.billing_periods" :key="period.end">
-                      <input type="checkbox" v-model="selections[card.id]" :value="periodValue(period)" />
-                      {{ period.start }} 至 {{ period.end }}
-                    </label>
-                  </fieldset>
-                  <fieldset v-else :disabled="busy">
+                  <fieldset :disabled="busy">
                     <legend>自选账期</legend>
                     <div v-for="(range, index) in rangesFor(card)" :key="index" class="mailbox-actions">
                       <label>起始日期 <input v-model="range.start" type="date" /></label>
@@ -369,7 +367,7 @@ onMounted(refresh)
 .binding-cards {
   margin-top: 12px;
 }
-.binding-cards ul {
+.binding-group > ul {
   list-style: none;
   margin: 0 0 12px;
   padding: 0;
@@ -382,7 +380,7 @@ onMounted(refresh)
   font-size: 1rem;
   margin: 0 0 6px;
 }
-.binding-cards li {
+.binding-group > ul > li {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
@@ -390,12 +388,12 @@ onMounted(refresh)
   gap: 8px;
   padding-block: 4px;
 }
-.binding-cards li span {
+.binding-group > ul > li > span {
   overflow-wrap: anywhere;
 }
 .card-periods { flex-basis: 100%; }
 .card-periods summary { cursor: pointer; }
-.billing-period-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.card-period-dropdown { flex-basis: 100%; max-width: 380px; }
 .card-actions {
   justify-content: flex-end;
 }
