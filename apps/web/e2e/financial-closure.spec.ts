@@ -762,12 +762,20 @@ test.describe('E 资产', () => {
   })
 
   test('E03 信用卡分组如实标注还款计划与未提供能力', async ({ page }) => {
-    await signIn(page)
+    const csrf = await signIn(page)
+    await ensureAccount(page.request, csrf, 'credit')
     await page.goto('/assets')
-    const note = page.getByRole('note')
+    const trigger = page.getByRole('button', { name: '查看信用卡债务详情' })
+    const dialog = page.getByRole('dialog', { name: '信用卡债务详情' })
+    await expect(dialog).toBeHidden()
+    await trigger.click()
+    const note = dialog.getByText('现金与信用卡仍按复式记账', { exact: false })
     await expect(note).toContainText('账单日')
     await expect(note).toContainText('还款日')
     await expect(note).toContainText('分期')
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(trigger).toBeFocused()
     await expect(page.getByRole('region', { name: '信用卡账户' })).toBeVisible()
   })
 
