@@ -25,6 +25,7 @@ type statementMailPreview struct {
 	// carried to the sync path for source traceability and never serialised.
 	UID         uint32       `json:"-"`
 	ReceivedOn  string       `json:"received_on,omitempty"`
+	PeriodStart string       `json:"period_start_on,omitempty"`
 	StatementOn string       `json:"statement_on,omitempty"`
 	DueOn       string       `json:"due_on,omitempty"`
 	AmountDue   *money.Minor `json:"amount_due_minor,omitempty"`
@@ -41,6 +42,10 @@ var (
 	statementClosingLabel = regexp.MustCompile(`(?:账单日期|账单日)\s*[:：]?\s*` + statementDateLayout)
 	statementDueDateLabel = regexp.MustCompile(`(?:到期还款日|最后还款日|还款到期日)\s*[:：]?\s*` + statementDateLayout)
 	statementCITICRow     = regexp.MustCompile(`[0-9]{4}-[0-9]{2}[*＊]{2}-[*＊]{4}-([0-9]{4})\s+CNY\s+(?:[-+0-9,.]+\s+){3}([-+0-9,.]+)\s+[-+0-9,.]+(?:\s|$)`)
+	statementCommCard     = regexp.MustCompile(`交通银行个人信用卡\s*([0-9]{6}[*＊]{6}([0-9]{4}))(?:[^0-9]|$)`)
+	statementCommCycle    = regexp.MustCompile(`账单周期\s*(?:Statement Cycle\s*)?([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})\s*[-–至]\s*` + statementDateLayout)
+	statementCommDue      = regexp.MustCompile(`到期还款日\s*[:：]?\s*(?:Payment Due Date\s*)?` + statementDateLayout)
+	statementCommAmount   = regexp.MustCompile(`本期应还款\s*[:：]?\s*[￥¥]\s*([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?)(?:\s|$)`)
 )
 
 func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bool) {
@@ -79,6 +84,9 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 		}
 		return r
 	}, body)
+	if bank == "comm" && strings.Contains(body, "账单周期") && statementCommCard.MatchString(body) {
+		return parseCommSummary(out, body, tail), true
+	}
 	unattributed := !statementCardTail.MatchString(body)
 	out.StatementOn = statementFindDate(statementClosingLabel, body)
 	out.DueOn = statementFindDate(statementDueDateLabel, body)
@@ -113,6 +121,30 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 		out.NeedsReview = "请核对卡号、账单日期和人民币应还金额"
 	}
 	return out, true
+}
+
+func parseCommSummary(out statementMailPreview, body, tail string) statementMailPreview {
+	out.NeedsReview = "请核对交行卡尾、账单周期、还款日和人民币应还金额"
+	cards := statementCommCard.FindAllStringSubmatch(body, -1)
+	cycles := statementCommCycle.FindAllStringSubmatch(body, -1)
+	amounts := statementCommAmount.FindAllStringSubmatch(body, -1)
+	if len(cards) != 1 || cards[0][2] != tail || len(cycles) != 1 || len(amounts) != 1 {
+		return out
+	}
+	start, startErr := time.Parse("2006/1/2", cycles[0][1])
+	endText := strings.NewReplacer("/", "-", "年", "-", "月", "-", "日", "").Replace(cycles[0][2])
+	end, endErr := time.Parse("2006-1-2", endText)
+	if startErr != nil || endErr != nil || end.Before(start) {
+		return out
+	}
+	out.PeriodStart = start.Format(time.DateOnly)
+	out.StatementOn = end.Format(time.DateOnly)
+	out.DueOn = statementFindDate(statementCommDue, body)
+	out.AmountDue = statementMinor(amounts[0][1])
+	if out.DueOn != "" && out.DueOn >= out.StatementOn && out.AmountDue != nil {
+		out.NeedsReview = ""
+	}
+	return out
 }
 
 func statementSenderMatches(from, bank string) bool {

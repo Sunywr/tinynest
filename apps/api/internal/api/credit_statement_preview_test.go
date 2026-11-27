@@ -150,3 +150,23 @@ func TestBankSummaryWithoutCardIdentityIsPreviewOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestCommBilingualStatementSummary(t *testing.T) {
+	body := `<h3><span>交通银行个人信用卡</span><span>123456******4321</span></h3>
+ <table><tr><td>账单周期<br><span>Statement Cycle</span></td><td>2026/10/23-2026/11/22</td></tr>
+ <tr><td>到期还款日<br><span>Payment Due Date</span></td><td>2026-12-16</td></tr>
+ <tr><td>本期应还款</td><td>￥123.45</td><td>＄---</td></tr>
+ <tr><td>最低应还款</td><td>￥10.00</td></tr></table><p>美元账户：$0.00</p>`
+	raw := []byte("From: statement@bocomcc.com\r\nSubject: " +
+		mime.BEncoding.Encode("UTF-8", "交通银行信用卡电子账单") +
+		"\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + body)
+	item, ok := parseStatementMail(raw, "comm", "4321")
+	if !ok || !statementSummaryReady(item) || item.StatementOn != "2026-11-22" ||
+		item.PeriodStart != "2026-10-23" || item.DueOn != "2026-12-16" || *item.AmountDue != 12345 {
+		t.Fatalf("unexpected summary: %+v", item)
+	}
+	wrong, _ := parseStatementMail(raw, "comm", "9876")
+	if statementSummaryReady(wrong) || wrong.AmountDue != nil {
+		t.Fatal("must not use another card's balance")
+	}
+}

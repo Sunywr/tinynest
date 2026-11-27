@@ -228,6 +228,10 @@ func (a *API) storeStatementSummary(ctx context.Context, tx *sql.Tx, target stat
 		return "needs_review", nil
 	}
 	amount := int64(*item.AmountDue)
+	periodStart := item.PeriodStart
+	if periodStart == "" {
+		periodStart = statementPeriodStart(item.StatementOn, statementDay)
+	}
 	var statementID string
 	var recordedAmount int64
 	created := false
@@ -240,7 +244,7 @@ func (a *API) storeStatementSummary(ctx context.Context, tx *sql.Tx, target stat
 			(id,household_id,account_id,period_start_on,period_end_on,due_on,currency,
 			 amount_due_minor,status,review_reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 			statementID, target.householdID, target.accountID,
-			nullableText(statementPeriodStart(item.StatementOn, statementDay)),
+			nullableText(periodStart),
 			item.StatementOn, nullableText(item.DueOn), "CNY", amount,
 			"pending_review", "", a.nowUTC(), a.nowUTC()); err != nil {
 			return "", err
