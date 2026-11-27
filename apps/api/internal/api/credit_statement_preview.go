@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -40,15 +41,20 @@ func (a *API) prepareStatementRead(w http.ResponseWriter, r *http.Request, provi
 		return target, false
 	}
 	var bank, sender string
-	switch {
-	case statementBankMatches(cardName, "spdb") && !statementBankMatches(cardName, "citic"):
-		bank, sender = "spdb", "estmtservice"
-	case statementBankMatches(cardName, "citic") && !statementBankMatches(cardName, "spdb"):
-		bank, sender = "citic", "citic"
+	for _, issuer := range statementBanks {
+		if !statementBankMatches(cardName, issuer.bank) {
+			continue
+		}
+		if bank != "" {
+			bank = ""
+			break
+		}
+		bank, sender = issuer.bank, issuer.sender
 	}
-	tail := statementAccountTail.FindStringSubmatch(cardName)
+	cardNameForTail := strings.TrimSpace(cardName)
+	tail := statementAccountTail.FindStringSubmatch(cardNameForTail)
 	if bank == "" || tail == nil {
-		writeErr(w, 400, "unsupported_statement_card", "目前支持浦发和中信，信用卡名称末尾须有括号及四位卡号")
+		writeErr(w, 400, "unsupported_statement_card", "目前支持浦发、中信、交行、广发、光大和招行，信用卡名称末尾须有括号及四位卡号")
 		return target, false
 	}
 	target.cardName, target.bank, target.sender, target.tail = cardName, bank, sender, tail[1]

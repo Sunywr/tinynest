@@ -187,7 +187,7 @@ onMounted(refresh)
 <template>
   <section class="card settings-card" aria-label="信用卡账单邮箱">
     <h2>信用卡账单邮箱</h2>
-    <p class="form-hint">浦发和中信账单支持只读预览。</p>
+    <p class="form-hint">支持浦发、中信、交行、广发、光大和招行的电子账单。</p>
     <template v-if="config">
       <p v-if="config.enabled">已启用 · {{ config.masked_email }}</p>
       <p v-else>尚未启用</p>

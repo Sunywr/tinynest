@@ -35,7 +35,7 @@ var (
 	statementHTMLBreak    = regexp.MustCompile(`(?i)</(?:td|th|tr|p|div)>|<br\s*/?>`)
 	statementHTMLTag      = regexp.MustCompile(`(?s)<[^>]*>`)
 	statementCardTail     = regexp.MustCompile(`(?:卡尾号|卡号(?:后|末)(?:四|4)位|卡号\s*[:：]\s*[0-9]{0,6}[*＊]{4,12})\s*[:：]?\s*([0-9]{4})(?:[^0-9]|$)`)
-	statementDueLabel     = regexp.MustCompile(`(?:本期应还(?:款)?总(?:金)?额|本期应还款金额|本期账单应还金额)\s*[:：]?\s*(?:人民币\s*|CNY\s*|[¥￥]\s*)?([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?)(?:\s|$)`)
+	statementDueLabel     = regexp.MustCompile(`(?:本期应还(?:款)?总(?:金)?额|本期应还款?金额|本期账单应还金额)\s*[:：]?\s*(?:人民币\s*|CNY\s*|[¥￥]\s*)?([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?)(?:\s|$)`)
 	statementDateLayout   = `([0-9]{4}(?:[-/][0-9]{1,2}[-/][0-9]{1,2}|年[0-9]{1,2}月[0-9]{1,2}日))(?:[^0-9]|$)`
 	statementClosingLabel = regexp.MustCompile(`(?:账单日期|账单日)\s*[:：]?\s*` + statementDateLayout)
 	statementDueDateLabel = regexp.MustCompile(`(?:到期还款日|最后还款日|还款到期日)\s*[:：]?\s*` + statementDateLayout)
@@ -105,22 +105,53 @@ func statementSenderMatches(from, bank string) bool {
 		return false
 	}
 	address := strings.ToLower(addr.Address)
-	if bank == "spdb" {
+	switch bank {
+	case "spdb":
 		return address == "estmtservice@eb.spdbccc.com.cn" || address == "estmtservice@eb.spdb.com.cn"
+	case "gdb":
+		return address == "creditcardbill@cgbchina.com.cn" || address == "creditcard@cgbchina.com.cn"
 	}
 	_, domain, _ := strings.Cut(address, "@")
-	switch domain {
-	case "bill.citiccard.com", "citiccard.com", "citicibank.com", "ecitic.com", "citicbank.com":
-		return bank == "citic"
+	switch bank {
+	case "citic":
+		switch domain {
+		case "bill.citiccard.com", "citiccard.com", "citicibank.com", "ecitic.com", "citicbank.com":
+			return true
+		}
+	case "comm":
+		return domain == "bocomcc.com"
+	case "ceb":
+		return domain == "cardcenter.cebbank.com"
+	case "cmb":
+		return domain == "message.cmbchina.com"
 	}
 	return false
 }
 
+var statementBanks = []struct {
+	bank, sender string
+	names        []string
+}{
+	{"spdb", "estmtservice", []string{"浦发", "浦东发展"}},
+	{"citic", "citic", []string{"中信"}},
+	{"comm", "bocomcc.com", []string{"交通银行", "交通信用卡", "交行"}},
+	{"gdb", "cgbchina.com.cn", []string{"广发"}},
+	{"ceb", "cardcenter.cebbank.com", []string{"光大"}},
+	{"cmb", "message.cmbchina.com", []string{"招商", "招行"}},
+}
+
 func statementBankMatches(text, bank string) bool {
-	if bank == "spdb" {
-		return strings.Contains(text, "浦发") || strings.Contains(text, "浦东发展")
+	for _, issuer := range statementBanks {
+		if issuer.bank == bank {
+			for _, name := range issuer.names {
+				if strings.Contains(text, name) {
+					return true
+				}
+			}
+			return false
+		}
 	}
-	return bank == "citic" && strings.Contains(text, "中信")
+	return false
 }
 
 func statementHasOnlyCard(text, tail string) bool {

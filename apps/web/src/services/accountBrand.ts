@@ -5,7 +5,7 @@ const brands: Record<string, string> = {
   ccb: '建设银行 建行',
   comm: '交通银行 交行',
   psbc: '邮政储蓄 邮储 邮政银行',
-  cmb: '招商银行 招行',
+  cmb: '招商银行 招商信用卡 招行',
   spdb: '浦发银行 浦发 浦东发展银行',
   citic: '中信银行 中信信用卡',
   ceb: '光大银行 光大信用卡',

@@ -19,6 +19,10 @@ func TestStatementMailPreviewParsesBankSummaries(t *testing.T) {
 		{"spdb", "estmtservice@eb.spdbccc.com.cn", "浦发信用卡电子账单", `<table><tr><td>账单日期</td><td>2026年11月1日</td></tr>
 		<tr><td>到期还款日</td><td>2026/11/25</td></tr><tr><td>卡号末四位</td><td>4321</td></tr>
 		<tr><td>本期应还总额</td><td>人民币 1,234.56</td></tr></table>`},
+		{"comm", "statement@bocomcc.com", "交通银行信用卡电子账单", `账单日: 2026-11-01<br>最后还款日: 2026-11-25<br>卡号末四位: 4321<br>本期应还金额: 人民币 1,234.56`},
+		{"gdb", "creditcardbill@cgbchina.com.cn", "广发银行信用卡电子账单", `账单日: 2026-11-01<br>最后还款日: 2026-11-25<br>卡号末四位: 4321<br>本期应还金额: 人民币 1,234.56`},
+		{"ceb", "statement@cardcenter.cebbank.com", "光大银行信用卡电子账单", `账单日: 2026-11-01<br>最后还款日: 2026-11-25<br>卡号末四位: 4321<br>本期应还金额: 人民币 1,234.56`},
+		{"cmb", "statement@message.cmbchina.com", "招商银行信用卡电子账单", `账单日: 2026-11-01<br>最后还款日: 2026-11-25<br>卡号末四位: 4321<br>本期应还金额: 人民币 1,234.56`},
 		{"citic", "statement@bill.citiccard.com", "中信信用卡电子账单", `账单日: 2026-11-01<br>最后还款日: 2026-11-25<br>
 		本期新增金额 <table><tr><td>1234-56**-****-4321</td><td>CNY</td><td>50</td><td>20</td><td>10</td><td>100</td><td>1234.56</td></tr></table>`},
 	} {
