@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { dismissNativeDialog, isOutsideDialog } from './nativeDialogMotion'
 import SmartSelect from './SmartSelect.vue'
 import StatementDetailImport from './StatementDetailImport.vue'
 import { ApiError, api, request, type CardStatement } from '../services/api'
@@ -127,26 +128,45 @@ function disable() {
   })
 }
 
-const subjectDrafts = ref<Record<string, string>>({})
+const subjectDialog = ref<HTMLDialogElement | null>(null)
+const editingSubject = ref<BindingCard | null>(null)
+const subjectDraft = ref('')
+
+function openSubjectKeyword(card: BindingCard) {
+  editingSubject.value = card
+  subjectDraft.value = card.subject_keyword ?? ''
+  error.value = ''
+  subjectDialog.value?.showModal()
+}
+
+async function closeSubjectKeyword() {
+  if (!busy.value) await dismissNativeDialog(subjectDialog.value)
+}
+
+function onSubjectBackdrop(event: MouseEvent) {
+  if (isOutsideDialog(event)) void closeSubjectKeyword()
+}
 
 async function loadCards() {
   const result = await request<{ items: BindingCard[] }>(path + '/cards' + providerQuery)
   for (const card of result.items) {
     selections.value[card.id] ??= []
-    subjectDrafts.value[card.id] = card.subject_keyword ?? ""
     manualRanges.value[card.id] ??= [{ start: '', end: '' }]
   }
   cards.value = result.items
 }
 
-function saveSubjectKeyword(card: BindingCard) {
+function saveSubjectKeyword() {
+  const card = editingSubject.value
   const current = config.value
-  if (!current?.enabled || !card.bound) return
+  if (!current?.enabled || !card?.bound) return
   return run(async () => {
     const query = new URLSearchParams({ version: String(current.version), provider: props.provider })
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-binding?${query}`
-    await request(endpoint, { method: 'PUT', body: jsonBody({ subject_keyword: subjectDrafts.value[card.id].trim() }) })
-    await loadCards()
+    const keyword = subjectDraft.value.trim()
+    await request(endpoint, { method: 'PUT', body: jsonBody({ subject_keyword: keyword }) })
+    card.subject_keyword = keyword
+    await dismissNativeDialog(subjectDialog.value)
     preview.value = null
     sync.value = null
     message.value = '账单邮件标题关键词已保存。'
@@ -290,6 +310,8 @@ onMounted(refresh)
                     :disabled="busy || !rangesReady(card)" @click="syncStatements(card)">同步账单</button>
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
                     :disabled="busy || !rangesReady(card)" @click="previewStatements(card)">预览账单</button>
+                  <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
+                    :disabled="busy" @click="openSubjectKeyword(card)">标题关键词</button>
                   <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
                     :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
                 </div>
@@ -309,15 +331,6 @@ onMounted(refresh)
                     <button type="button" class="btn-quiet" :disabled="rangesFor(card).length >= 12"
                       @click="rangesFor(card).push({ start: '', end: '' })">添加日期范围</button>
                   </fieldset>
-                </details>
-                <details v-if="card.bound && card.status === 'active'" class="card-periods">
-                  <summary>邮件标题关键词</summary>
-                  <form class="mailbox-actions" @submit.prevent="saveSubjectKeyword(card)">
-                    <label :for="'statement-subject-' + card.id">标题关键词</label>
-                    <input :id="'statement-subject-' + card.id" v-model="subjectDrafts[card.id]" type="text"
-                      maxlength="80" placeholder="留空使用银行默认规则" :disabled="busy" />
-                    <button class="btn-quiet" type="submit" :disabled="busy">保存关键词</button>
-                  </form>
                 </details>
               </li>
             </ul>
@@ -365,6 +378,22 @@ onMounted(refresh)
     <button v-else class="btn-quiet" type="button" :disabled="busy" @click="refresh">{{ busy ? '读取中…' : '刷新邮箱配置' }}</button>
     <p v-if="message" role="status">{{ message }}</p>
     <p v-if="error" class="err" role="alert">{{ error }}</p>
+    <dialog ref="subjectDialog" class="subject-dialog" aria-label="邮件标题关键词"
+      @cancel.self.prevent="closeSubjectKeyword" @click.self="onSubjectBackdrop" @close="editingSubject = null">
+      <h3>邮件标题关键词</h3>
+      <p>{{ editingSubject?.name }}</p>
+      <form class="mailbox-form" @submit.prevent="saveSubjectKeyword">
+        <label>标题关键词
+          <input v-model="subjectDraft" type="text" maxlength="80" placeholder="留空使用银行默认规则"
+            autofocus :disabled="busy" />
+        </label>
+        <p v-if="error && editingSubject" role="alert">{{ error }}</p>
+        <div class="mailbox-actions">
+          <button class="btn-quiet" type="button" :disabled="busy" @click="closeSubjectKeyword">取消</button>
+          <button class="btn-primary" type="submit" :disabled="busy">保存关键词</button>
+        </div>
+      </form>
+    </dialog>
   </section>
 </template>
 
@@ -434,4 +463,16 @@ onMounted(refresh)
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
+.subject-dialog {
+  width: min(420px, calc(100% - 32px));
+  box-sizing: border-box;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.subject-dialog h3 { margin: 0; }
+.subject-dialog::backdrop { background: rgba(62, 48, 40, .34); }
 </style>

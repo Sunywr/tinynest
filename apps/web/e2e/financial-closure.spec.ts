@@ -1403,14 +1403,19 @@ test.describe('G 成员 / 分类 / 管理', () => {
     let version = 0
     let enabled = false
     let bound = false
+    let subjectKeyword = '电子账单'
     await page.route('**/api/v1/credit-statement-mailbox/cards', route => route.fulfill({
-      json: { items: [{ id: 'fixture-card', name: '测试信用卡', status: 'active', bound, taken: false, billing_periods: [{ start: '2026-10-05', end: '2026-11-04' }] }] },
+      json: { items: [{ id: 'fixture-card', name: '测试信用卡', status: 'active', bound, taken: false, subject_keyword: subjectKeyword, billing_periods: [{ start: '2026-10-05', end: '2026-11-04' }] }] },
     }))
     await page.route('**/api/v1/accounts/fixture-card/credit-statement-binding?*', async route => {
       const req = route.request()
       expect(new URL(req.url()).searchParams.get('version')).toBe(String(version))
       expect(req.headers()['x-csrf-token']).toBeTruthy()
-      bound = req.method() === 'PUT'
+      if (req.postData()) {
+        subjectKeyword = req.postDataJSON().subject_keyword
+      } else {
+        bound = req.method() === 'PUT'
+      }
       await route.fulfill({ status: 204 })
     })
     await page.route('**/api/v1/credit-statement-mailbox', async route => {
@@ -1447,6 +1452,26 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await bindButton.click()
     const unbindButton = linked.getByRole('button', { name: '解绑' })
     await expect(unbindButton).toHaveClass('btn-danger')
+    const keywordButton = linked.getByRole('button', { name: '标题关键词' })
+    await keywordButton.click()
+    const keywordDialog = page.getByRole('dialog', { name: '邮件标题关键词' })
+    const keywordInput = keywordDialog.getByLabel('标题关键词')
+    await expect(keywordInput).toHaveValue('电子账单')
+    await keywordInput.fill('取消的改动')
+    await keywordInput.press('Escape')
+    await expect(keywordDialog).toBeHidden()
+    await page.waitForTimeout(500)
+    await keywordButton.click()
+    await expect(keywordInput).toHaveValue('电子账单')
+    await keywordInput.fill('新的电子账单')
+    await keywordDialog.getByRole('button', { name: '保存关键词' }).click()
+    await expect(keywordDialog).toBeHidden()
+    expect(subjectKeyword).toBe('新的电子账单')
+    await page.waitForTimeout(500)
+    await keywordButton.click()
+    await expect(keywordInput).toHaveValue('新的电子账单')
+    await keywordDialog.getByRole('button', { name: '取消' }).click()
+    await expect(keywordDialog).toBeHidden()
     await page.route('**/api/v1/accounts/fixture-card/credit-statement-preview?*', route => route.fulfill({
       json: { since: '2026-10-26', items: [{ statement_on: '2026-11-01', due_on: '2026-11-25', amount_due_minor: 12345 }] },
     }))
