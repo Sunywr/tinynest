@@ -79,3 +79,24 @@ func TestStatementPreviewRequiresOwnedBinding(t *testing.T) {
 		t.Fatalf("unbound preview got HTTP %d, want 404", status)
 	}
 }
+
+func TestSPDBGenericStatementNoticeRemainsVisibleAfterClosingDate(t *testing.T) {
+	raw := []byte("From: estmtservice@eb.spdb.com.cn\r\nSubject: " +
+		mime.BEncoding.Encode("UTF-8", "您的电子账单已出") +
+		"\r\nDate: Sun, 08 Nov 2026 09:00:00 +0800\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n请验证后查看账单详情")
+	item, ok := parseStatementMail(raw, "spdb", "5296")
+	if !ok || item.NeedsReview == "" || item.AmountDue != nil {
+		t.Fatalf("expected review-only official notice: %+v, %v", item, ok)
+	}
+	period := statementDateRange{
+		start: time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC),
+		end:   time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC),
+	}
+	if !period.matchesMail(item) {
+		t.Fatal("an unparsed notice delivered just after closing should remain visible")
+	}
+	item.StatementOn = "2026-11-08"
+	if period.matchesMail(item) {
+		t.Fatal("known statement date cannot be assigned to an adjacent period")
+	}
+}

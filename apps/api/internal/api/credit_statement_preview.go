@@ -116,11 +116,7 @@ func (a *API) readStatementMails(w http.ResponseWriter, r *http.Request, target 
 			return nil, false
 		}
 		for _, item := range batch {
-			date := item.StatementOn
-			if date == "" {
-				date = item.ReceivedOn
-			}
-			if explicit && !period.includes(date) || item.UID != 0 && seen[item.UID] {
+			if (explicit && !period.matchesMail(item)) || (item.UID != 0 && seen[item.UID]) {
 				continue
 			}
 			seen[item.UID] = true

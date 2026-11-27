@@ -50,7 +50,12 @@ func parseStatementMail(raw []byte, bank, tail string) (statementMailPreview, bo
 	}
 	decoder := mime.WordDecoder{CharsetReader: statementCharsetReader}
 	subject, err := decoder.DecodeHeader(msg.Header.Get("Subject"))
-	if err != nil || !strings.Contains(subject, "账单") || !statementBankMatches(subject, bank) {
+	if err != nil || !strings.Contains(subject, "账单") {
+		return out, false
+	}
+	// The verified sender identifies SPDB even when a generic credit-card
+	// statement notice omits the bank name from its subject.
+	if bank != "spdb" && !statementBankMatches(subject, bank) {
 		return out, false
 	}
 	if received, err := msg.Header.Date(); err == nil {

@@ -14,6 +14,16 @@ func (period statementDateRange) includes(date string) bool {
 	return date >= period.start.Format(time.DateOnly) && date <= period.end.Format(time.DateOnly)
 }
 
+const statementDeliveryGraceDays = 7
+
+func (period statementDateRange) matchesMail(item statementMailPreview) bool {
+	if item.StatementOn != "" {
+		return period.includes(item.StatementOn)
+	}
+	return item.ReceivedOn >= period.start.Format(time.DateOnly) &&
+		item.ReceivedOn <= period.end.AddDate(0, 0, statementDeliveryGraceDays).Format(time.DateOnly)
+}
+
 func requestedStatementRanges(w http.ResponseWriter, r *http.Request) ([]statementDateRange, bool) {
 	values := r.URL.Query()["range"]
 	if len(values) <= 12 {

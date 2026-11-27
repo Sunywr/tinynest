@@ -50,7 +50,7 @@ func searchStatementMail(conn io.Writer, reader *bufio.Reader, sender string, si
 	before := ""
 	limit := 8
 	if len(end) > 0 && !end[0].IsZero() {
-		before = " BEFORE " + end[0].AddDate(0, 0, 8).Format("02-Jan-2006")
+		before = " BEFORE " + end[0].AddDate(0, 0, statementDeliveryGraceDays+1).Format("02-Jan-2006")
 		limit = 64
 	}
 	if _, err := fmt.Fprintf(conn, "S1 UID SEARCH SINCE %s%s FROM %q\r\n", since.Format("02-Jan-2006"), before, sender); err != nil {
