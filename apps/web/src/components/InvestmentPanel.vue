@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { formatBasisPoints, formatMinor } from '../services/format'
+import AnnualReturnTrend from './AnnualReturnTrend.vue'
 import type { InvestmentOverview } from '../services/api'
 
 const props = defineProps<{ overview: InvestmentOverview }>()
@@ -89,7 +90,7 @@ function tone(value: number): string {
         <details v-if="account.holdings.length" class="investment-holdings">
           <summary>持仓 {{ account.holding_count }} 项 <span>展开明细</span></summary>
           <ul class="holding-list">
-            <li v-for="holding in account.holdings" :key="holding.id" class="holding-row">
+            <li v-for="holding in [...account.holdings].sort((a, b) => b.total_return_bp - a.total_return_bp || b.total_return_minor - a.total_return_minor)" :key="holding.id" class="holding-row">
               <div class="holding-main">
                 <span class="holding-name">{{ holding.name }}</span>
                 <span class="holding-symbol">{{ holding.symbol }} · {{ holding.asset_label }}</span>
@@ -108,6 +109,7 @@ function tone(value: number): string {
                   上次交易快照 {{ holding.last_trade_on }} · {{ signedBasisPoints(holding.last_trade_return_bp) }}
                 </span>
               </div>
+              <AnnualReturnTrend v-if="account.kind === 'wealth'" :points="holding.annual_returns ?? []" />
             </li>
           </ul>
         </details>
@@ -132,8 +134,8 @@ function tone(value: number): string {
 .investment-summary span { color: var(--muted); font-size: 10px; }
 .investment-summary strong { font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .investment-summary small { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-.positive { color: #47705a; }
-.negative { color: #a04e43; }
+.positive { color: #a04e43; }
+.negative { color: #47705a; }
 .flat { color: var(--muted); }
 .investment-accounts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .investment-account { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); display: grid; gap: 9px; }

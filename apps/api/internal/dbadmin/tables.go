@@ -68,7 +68,7 @@ var PurgeGroups = []Group{
 	{
 		Name:   "投资估值快照",
 		Note:   "迁移 005 从 pfm 导入的只读市值，不写分录",
-		Tables: []string{"investment_holdings", "investment_accounts"},
+		Tables: []string{"investment_annual_returns", "investment_holdings", "investment_accounts"},
 	},
 	{
 		Name:   "信用卡账单邮件",
@@ -165,6 +165,7 @@ var deleteOrder = []string{
 	"card_statements",
 	"statement_mailbox_card_links",
 	"credit_statement_bindings",
+	"investment_annual_returns",
 	"investment_holdings",
 	"investment_accounts",
 	"statement_import_rows",

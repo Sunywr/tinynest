@@ -1,0 +1,13 @@
+[Unit]
+Description=Copy PFM annualized wealth returns to TinyNest
+After=mysql.service tinynest-api.service
+Requires=mysql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mysql --defaults-extra-file=/etc/mysql/debian.cnf --database=tinynest_v2
+StandardInput=file:/projects/tinynest/api/ops/pfm-sync-annual-returns.mysql.sql
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

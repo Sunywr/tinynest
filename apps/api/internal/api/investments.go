@@ -11,26 +11,32 @@ import (
 // no journal lines are written for market values, and the Assets page labels
 // the resulting net-worth figure accordingly.
 
+type annualReturnPoint struct {
+	On string `json:"on"`
+	BP int64  `json:"bp"`
+}
+
 type investmentHoldingDTO struct {
-	ID                 string  `json:"id"`
-	Symbol             string  `json:"symbol"`
-	Name               string  `json:"name"`
-	AssetClass         string  `json:"asset_class"`
-	AssetLabel         string  `json:"asset_label"`
-	QuantityMicros     int64   `json:"quantity_micros"`
-	PriceMicros        int64   `json:"price_micros"`
-	CostMinor          int64   `json:"cost_minor"`
-	MarketValueMinor   int64   `json:"market_value_minor"`
-	UnrealizedPNLMinor int64   `json:"unrealized_pnl_minor"`
-	ReturnBP           int64   `json:"return_bp"`
-	DividendsMinor     int64   `json:"dividends_minor"`
-	TotalReturnMinor   int64   `json:"total_return_minor"`
-	TotalReturnBP      int64   `json:"total_return_bp"`
-	DividendYieldBP    int64   `json:"dividend_yield_bp"`
-	LastTradeOn        *string `json:"last_trade_on"`
-	LastTradePNLMinor  int64   `json:"last_trade_pnl_minor"`
-	LastTradeReturnBP  int64   `json:"last_trade_return_bp"`
-	WeightBP           int64   `json:"weight_bp"`
+	AnnualReturns      []annualReturnPoint `json:"annual_returns,omitempty"`
+	ID                 string              `json:"id"`
+	Symbol             string              `json:"symbol"`
+	Name               string              `json:"name"`
+	AssetClass         string              `json:"asset_class"`
+	AssetLabel         string              `json:"asset_label"`
+	QuantityMicros     int64               `json:"quantity_micros"`
+	PriceMicros        int64               `json:"price_micros"`
+	CostMinor          int64               `json:"cost_minor"`
+	MarketValueMinor   int64               `json:"market_value_minor"`
+	UnrealizedPNLMinor int64               `json:"unrealized_pnl_minor"`
+	ReturnBP           int64               `json:"return_bp"`
+	DividendsMinor     int64               `json:"dividends_minor"`
+	TotalReturnMinor   int64               `json:"total_return_minor"`
+	TotalReturnBP      int64               `json:"total_return_bp"`
+	DividendYieldBP    int64               `json:"dividend_yield_bp"`
+	LastTradeOn        *string             `json:"last_trade_on"`
+	LastTradePNLMinor  int64               `json:"last_trade_pnl_minor"`
+	LastTradeReturnBP  int64               `json:"last_trade_return_bp"`
+	WeightBP           int64               `json:"weight_bp"`
 }
 
 type investmentAccountDTO struct {
@@ -217,6 +223,32 @@ func (a *API) investmentOverview(ctx context.Context, householdID string) (*inve
 		return nil, err
 	}
 
+	annualRows, err := a.DB.QueryContext(ctx, `
+		SELECT r.holding_id, r.observed_on, r.annual_return_bp
+		FROM investment_annual_returns r
+		JOIN investment_holdings h ON h.id=r.holding_id
+		JOIN investment_accounts ia ON ia.id=h.account_id AND ia.household_id=h.household_id
+		WHERE h.household_id=? AND h.status<>'deleted' AND ia.status<>'deleted' AND ia.kind='wealth'
+		  AND r.observed_on>=?
+		ORDER BY r.holding_id, r.observed_on`, householdID,
+		a.businessToday().AddDate(0, 0, -89).Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer annualRows.Close()
+	annualByHolding := make(map[string][]annualReturnPoint)
+	for annualRows.Next() {
+		var id string
+		var point annualReturnPoint
+		if err := annualRows.Scan(&id, &point.On, &point.BP); err != nil {
+			return nil, err
+		}
+		annualByHolding[id] = append(annualByHolding[id], point)
+	}
+	if err := annualRows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Attach holdings and compute account-level aggregates.
 	for i := range holdings {
 		idx, ok := accountIndex[holder[i]]
@@ -225,6 +257,7 @@ func (a *API) investmentOverview(ctx context.Context, householdID string) (*inve
 		}
 		acc := &accounts[idx]
 		h := holdings[i]
+		h.AnnualReturns = annualByHolding[h.ID]
 		if h.MarketValueMinor > 0 {
 			// Weight is filled after the account total is known below.
 			h.WeightBP = 0

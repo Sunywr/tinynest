@@ -282,6 +282,7 @@ export type StatementDetailInput = {
   statement_id?: string
 }
 export type InvestmentHolding = {
+  annual_returns?: { on: string; bp: number }[]
   id: string
   symbol: string
   name: string

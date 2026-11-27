@@ -6,7 +6,7 @@ import (
 )
 
 func TestInvestmentOverviewTotalsAndIsolation(t *testing.T) {
-	ts, c, database := newTestServer(t)
+	ts, c, database := newTestServerWithOptions(t, Options{Clock: fixedBusinessClock()})
 	defer database.Close()
 	defer ts.Close()
 	ctx := context.Background()
@@ -48,8 +48,14 @@ func TestInvestmentOverviewTotalsAndIsolation(t *testing.T) {
 		(id,household_id,account_id,symbol,name,asset_class,asset_label,quantity_micros,price_micros,
 		 cost_minor,market_value_minor,unrealized_pnl_minor,dividends_minor)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		newID("hold"), householdID, wealthID, "133042A", "招银理财", "wealth", "理财", 0, 0,
+		"wealth-test", householdID, wealthID, "133042A", "招银理财", "wealth", "理财", 0, 0,
 		50000, 40000, -10000, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := database.ExecContext(ctx, `INSERT INTO investment_annual_returns
+		(holding_id,observed_on,annual_return_bp) VALUES ('wealth-test','2026-11-21',-85),
+		('wealth-test','2026-11-20',140), ('wealth-test','2026-01-01',900)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,6 +149,16 @@ func TestInvestmentOverviewTotalsAndIsolation(t *testing.T) {
 	}
 	if holding["last_trade_on"] != "2026-11-01" {
 		t.Fatalf("last_trade_on = %v", holding["last_trade_on"])
+	}
+
+	if _, present := holding["annual_returns"]; present {
+		t.Fatal("security holding should not have annual returns")
+	}
+	wealth := accounts[1].(map[string]any)["holdings"].([]any)[0].(map[string]any)
+	points := wealth["annual_returns"].([]any)
+	if len(points) != 2 || points[0].(map[string]any)["on"] != "2026-11-20" ||
+		number(points[1].(map[string]any)["bp"]) != -85 {
+		t.Fatalf("unexpected annual trend: %v", points)
 	}
 
 	byKind, _ := inv["by_kind"].([]any)

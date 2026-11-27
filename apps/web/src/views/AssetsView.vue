@@ -11,7 +11,7 @@ import EmptyState from '../components/EmptyState.vue'
 import InvestmentPanel from '../components/InvestmentPanel.vue'
 import StatementDetailImport from '../components/StatementDetailImport.vue'
 import TransferForm from '../components/TransferForm.vue'
-import { api, type Account, type CardStatement, type CreditDebtPlan, type InvestmentOverview } from '../services/api'
+import { api, type Account, type CardStatement, type CreditDebtPlan, type InvestmentOverview, type InvestmentHolding } from '../services/api'
 import { formatBasisPoints, formatMinor, dateLabel } from '../services/format'
 import { useSession } from '../composables/useSession'
 import { useToast } from '../composables/useToast'
@@ -50,9 +50,14 @@ const assetsTotal = computed(() => cashTotal.value + investmentTotal.value)
 const liabilitiesTotal = computed(() => creditAccounts.value.reduce((sum, a) => sum + Math.max(-a.balance_minor, 0), 0))
 const netWorth = computed(() => assetsTotal.value - liabilitiesTotal.value)
 const investmentAccounts = computed(() => investments.value?.accounts ?? [])
+const byReturn = (a: InvestmentHolding, b: InvestmentHolding) =>
+  b.total_return_bp - a.total_return_bp || b.total_return_minor - a.total_return_minor
 const investmentHoldings = computed(() => investmentAccounts.value.flatMap(account =>
-  account.holdings.map(holding => ({ key: `${account.id}:${holding.id}`, holding })),
-))
+  account.holdings.map(holding => ({ key: `${account.id}:${holding.id}`, holding, wealth: account.kind === 'wealth' })),
+).sort((a, b) => byReturn(a.holding, b.holding)))
+const repaymentCards = computed(() => [...(plan.value?.cards ?? [])].sort((a, b) =>
+  (a.next_due_on ?? '9999-12-31').localeCompare(b.next_due_on ?? '9999-12-31')))
+const returnTone = (value: number) => value > 0 ? 'return-positive' : value < 0 ? 'return-negative' : undefined
 const nextDueTotal = computed(() => plan.value?.cards.reduce((total, card) =>
   total + (card.next_due_on ? card.next_due_minor : 0), 0) ?? 0)
 const hasAnyAsset = computed(() => active.value.length > 0 || creditAccounts.value.length > 0 || investmentAccounts.value.length > 0)
@@ -230,16 +235,17 @@ onMounted(() => void load())
         <span class="asset-detail-heading">投资资产 <ChevronRight :size="18" aria-hidden="true" /></span>
         <span class="asset-detail-metrics">
           <span><span>总市值</span><strong>{{ formatMinor(investmentTotal) }}</strong></span>
-          <span><span>累计收益 · {{ formatBasisPoints(investments.total_return_bp) }}</span>
-            <strong>{{ formatMinor(investments.total_return_minor) }}</strong></span>
+          <span><span>累计收益 · <b :class="returnTone(investments.total_return_minor)">{{ formatBasisPoints(investments.total_return_bp) }}</b></span>
+            <strong :class="returnTone(investments.total_return_minor)">{{ formatMinor(investments.total_return_minor) }}</strong></span>
           <span><span>股息</span><strong>{{ formatMinor(investments.total_dividends_minor) }}</strong></span>
         </span>
         <span v-if="investmentHoldings.length" class="asset-detail-items">
-          <span v-for="{ key, holding } in investmentHoldings" :key="key" class="asset-detail-item">
+          <span v-for="{ key, holding, wealth } in investmentHoldings" :key="key" class="asset-detail-item">
             <span><strong>{{ holding.name }}</strong><small>{{ holding.symbol }}</small></span>
             <span><small>市值 / 净值</small><strong>{{ formatMinor(holding.market_value_minor) }}</strong></span>
-            <span><small>收益 · {{ formatBasisPoints(holding.total_return_bp) }}</small>
-              <strong>{{ formatMinor(holding.total_return_minor) }}</strong></span>
+            <span><small>收益 · <b :class="returnTone(holding.total_return_minor)">{{ formatBasisPoints(holding.total_return_bp) }}</b></small>
+              <strong :class="returnTone(holding.total_return_minor)">{{ formatMinor(holding.total_return_minor) }}</strong>
+              <small v-if="wealth">30 日年化 {{ formatBasisPoints(holding.annual_returns?.at(-1)?.bp) }}</small></span>
           </span>
         </span>
       </button>
@@ -263,7 +269,7 @@ onMounted(() => void load())
           <span><span>可用现金</span><strong>{{ formatMinor(plan.cash_available_minor) }}</strong></span>
         </span>
         <span class="asset-detail-items">
-          <span v-for="card in plan.cards" :key="card.account_id" class="asset-detail-item repayment-item">
+          <span v-for="card in repaymentCards" :key="card.account_id" class="asset-detail-item repayment-item">
             <span><strong>{{ card.name }}</strong></span>
             <span v-if="card.next_due_on"><small>{{ dateLabel(card.next_due_on) }} 到期</small>
               <strong>{{ formatMinor(card.next_due_minor) }}</strong></span>
@@ -275,7 +281,7 @@ onMounted(() => void load())
         <form method="dialog" class="asset-detail-controls">
           <button type="submit" aria-label="关闭信用卡债务详情"><X :size="20" aria-hidden="true" /></button>
         </form>
-        <CreditDebtPanel :plan="plan" :can-write="canWrite"
+        <CreditDebtPanel :plan="{ ...plan, cards: repaymentCards }" :can-write="canWrite"
           :statements="statements" :statements-failed="statementsFailed" :placeholder-busy="placeholderBusy"
           @configure="openConfigure" @placeholder="askPlaceholder" @details="openDetails" />
         <p class="info-line">
@@ -398,6 +404,8 @@ onMounted(() => void load())
 .asset-detail-item > :not(:first-child) { text-align: end; }
 .asset-detail-item small { color: var(--muted); font-size: 11px; }
 .asset-detail-item.repayment-item { grid-template-columns: minmax(0, 1fr) auto; }
+.return-positive { color: #a04e43; }
+.return-negative { color: #47705a; }
 .asset-account-icons { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 4px; }
 .asset-detail-dialog {
   width: min(680px, calc(100% - 24px));

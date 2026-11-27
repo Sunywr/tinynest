@@ -56,9 +56,11 @@ func seedStatementRows(t *testing.T, admin *Admin, f fixture) {
 		"sd2", f.household, "acctcc", "cs1", "tx2", "rowkey2", 4, 0, "4321",
 		"charge", "matched", "2026-11-02", "2026-11-02", "自助还款", 2000, "CNY", "", "filedigest1", "2026-11-01T00:00:00Z")
 	mustExec(t, admin, `INSERT INTO investment_accounts (id, household_id, kind, name, cash_minor) VALUES (?,?,?,?,?)`,
-		"inv1", f.household, "security", "证券账户", 500000)
+		"inv1", f.household, "wealth", "理财账户", 500000)
 	mustExec(t, admin, `INSERT INTO investment_holdings (id, household_id, account_id, symbol, name, market_value_minor)
 		VALUES (?,?,?,?,?,?)`, "invh1", f.household, "inv1", "600900", "长江电力", 120000)
+	mustExec(t, admin, `INSERT INTO investment_annual_returns (holding_id, observed_on, annual_return_bp)
+		VALUES (?,?,?)`, "invh1", "2026-11-23", 150)
 }
 
 // A purge must be able to empty the credit-card statement chain. card_statements// and statement_mailbox_card_links both reference accounts, so if they are in
@@ -73,7 +75,7 @@ func TestPurgeClearsCardStatementTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("purge with synced statements: %v (committed=%v)", err, result.Committed)
 	}
-	for _, table := range []string{"statement_placeholders", "statement_details", "card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts", "investment_holdings"} {
+	for _, table := range []string{"statement_placeholders", "statement_details", "card_statements", "card_statement_sources", "statement_mailbox_card_links", "credit_statement_bindings", "investment_accounts", "investment_holdings", "investment_annual_returns"} {
 		var rows int
 		if err := admin.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&rows); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -145,6 +147,7 @@ func TestStatementTablesSortBeforeTheirParentsInDeleteOrder(t *testing.T) {
 		"card_statement_sources":       {"card_statements"},
 		"statement_mailbox_card_links": {"accounts"},
 		"credit_statement_bindings":    {"accounts"},
+		"investment_annual_returns":    {"investment_holdings"},
 		"investment_holdings":          {"investment_accounts"},
 	}
 	for child, parents := range childBefore {

@@ -172,6 +172,8 @@
 
 `GET /accounts?include=investments` 追加 `investments` 对象。它是 pfm 导入的只读快照，不写分录、不参与转账；`accounts.items` 仍只含 `cash` / `credit`。
 
+理财持仓可包含 `annual_returns: [{on, bp}]`。按上海业务日返回最近 90 天实际存在的 PFM 30 日年化观测值，以日期升序排列，整数基点。观测值由迁移 015 的 `investment_annual_returns` 表记录，由后端运维定时任务按持仓与日期同步。缺失观测时省略该字段。
+
 顶层字段：`total_cost_minor`、`total_holdings_value_minor`、`total_cash_minor`、`total_market_value_minor`（= 持仓 + 现金）、`total_unrealized_pnl_minor`、`total_dividends_minor`、`total_return_minor`（= 未实现 + 股息）、`total_return_bp`、`total_dividend_yield_bp`、`holding_count`、`account_count`。
 
 `accounts[]`：`id`、`kind`（`security` / `wealth`）、`name`、`institution`、`owner_member_id`、`owner_name`、`cash_minor`、`holdings_value_minor`、`market_value_minor`、`cost_minor`、`unrealized_pnl_minor`、`dividends_minor`、`return_minor`、`return_bp`、`dividend_yield_bp`、`holding_count`、`holdings[]`。
