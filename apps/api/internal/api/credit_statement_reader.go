@@ -31,15 +31,39 @@ func readStatementInboxWindow(ctx context.Context, email, code, sender, bank, ta
 		if err != nil {
 			return err
 		}
-		for _, uid := range uids {
-			raw, err := fetchStatementMail(conn, reader, uid)
+		seen := make(map[uint32]bool)
+		read := func(ids []uint32) error {
+			for _, uid := range ids {
+				if seen[uid] {
+					continue
+				}
+				seen[uid] = true
+				raw, err := fetchStatementMail(conn, reader, uid)
+				if err != nil {
+					return err
+				}
+				if item, ok := parseStatementMail(raw, bank, tail); ok {
+					item.UID = uid
+					items = append(items, item)
+				}
+			}
+			return nil
+		}
+		if err := read(uids); err != nil {
+			return err
+		}
+		// 163 can omit SPDB messages when UID SEARCH includes FROM.
+		// The parser still checks the exact official sender on every candidate.
+		if len(items) == 0 && bank == "spdb" && strings.HasSuffix(strings.ToLower(email), "@163.com") {
+			fallbackStart := period.start
+			if !period.end.IsZero() {
+				fallbackStart = period.end
+			}
+			ids, err := searchStatementMail(conn, reader, "", fallbackStart, period.end)
 			if err != nil {
 				return err
 			}
-			if item, ok := parseStatementMail(raw, bank, tail); ok {
-				item.UID = uid
-				items = append(items, item)
-			}
+			return read(ids)
 		}
 		return nil
 	})
@@ -53,7 +77,11 @@ func searchStatementMail(conn io.Writer, reader *bufio.Reader, sender string, si
 		before = " BEFORE " + end[0].AddDate(0, 0, statementDeliveryGraceDays+1).Format("02-Jan-2006")
 		limit = 64
 	}
-	if _, err := fmt.Fprintf(conn, "S1 UID SEARCH SINCE %s%s FROM %q\r\n", since.Format("02-Jan-2006"), before, sender); err != nil {
+	from := ""
+	if sender != "" {
+		from = fmt.Sprintf(" FROM %q", sender)
+	}
+	if _, err := fmt.Fprintf(conn, "S1 UID SEARCH SINCE %s%s%s\r\n", since.Format("02-Jan-2006"), before, from); err != nil {
 		return nil, err
 	}
 	uids := []uint32{}

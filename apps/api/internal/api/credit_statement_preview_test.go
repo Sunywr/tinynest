@@ -100,3 +100,13 @@ func TestSPDBGenericStatementNoticeRemainsVisibleAfterClosingDate(t *testing.T) 
 		t.Fatal("known statement date cannot be assigned to an adjacent period")
 	}
 }
+
+func TestStatementSearchCanOmitSenderForDateFallback(t *testing.T) {
+	var command strings.Builder
+	reader := bufio.NewReader(strings.NewReader("* SEARCH 12\r\nS1 OK search complete\r\n"))
+	day := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	ids, err := searchStatementMail(&command, reader, "", day, day)
+	if err != nil || len(ids) != 1 || strings.Contains(command.String(), "FROM") {
+		t.Fatalf("expected date-only lookup, got %q, %v, %v", command.String(), ids, err)
+	}
+}
