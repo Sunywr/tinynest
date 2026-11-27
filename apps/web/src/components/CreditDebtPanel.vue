@@ -22,7 +22,10 @@ const router = useRouter()
 // latest bank report. A bank report never joins the ledger-derived plan below.
 const cardRows = computed(() => {
   const latest = new Map<string, CardStatement>()
-  for (const item of props.statements ?? []) if (!latest.has(item.account_id)) latest.set(item.account_id, item)
+  for (const item of props.statements ?? []) {
+    if (item.due_on && item.due_on < props.plan.today) continue
+    if (!latest.has(item.account_id)) latest.set(item.account_id, item)
+  }
   return props.plan.cards.map(card => ({ card, bank: latest.get(card.account_id) ?? null }))
 })
 
@@ -127,8 +130,7 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
           <p class="credit-debt-row-main">
             <span v-if="!paydayMissing">发薪日前 {{ cardNeeded(row.card) }}</span>
             <span v-if="row.card.next_due_on">下次还款 {{ dateLabel(row.card.next_due_on) }} · {{ formatMinor(row.card.next_due_minor) }}</span>
-            <span v-else-if="row.card.overdue_minor > 0">已逾期 {{ formatMinor(row.card.overdue_minor) }}</span>
-            <span v-else>暂无应还</span>
+            <span v-else>暂无未到期账单</span>
           </p>
           <p v-if="row.card.next_due_on && periodText(row.card)" class="credit-debt-period">
             {{ periodText(row.card) }}
@@ -137,7 +139,6 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
             本期 {{ dateLabel(row.card.current_cycle.start_on) }}~{{ dateLabel(row.card.current_cycle.end_on) }} · 还款日 {{ dateLabel(row.card.current_cycle.due_on) }}
           </p>
           <p class="credit-debt-tags">
-            <span v-if="row.card.overdue_minor > 0" class="credit-debt-overdue">逾期 {{ formatMinor(row.card.overdue_minor) }}</span>
             <span v-if="row.card.unbilled_minor > 0">未出账 {{ formatMinor(row.card.unbilled_minor) }}</span>
             <span v-if="row.card.credit_balance_minor > 0">溢缴款 {{ formatMinor(row.card.credit_balance_minor) }}</span>
             <span v-if="row.card.total_debt_minor > 0">总欠款 {{ formatMinor(row.card.total_debt_minor) }}</span>
@@ -220,7 +221,6 @@ function requestPlaceholder(card: CreditDebtCard, bank: CardStatement | null) {
 .credit-debt-row-main { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .credit-debt-period { margin: 0; color: var(--muted); font-size: 11px; }
 .credit-debt-tags { margin: 0; display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.credit-debt-overdue { color: #a04e43; font-weight: 700; }
 .credit-debt-bank { margin: 0; padding: 8px 10px; border-radius: 12px; background: var(--soft); color: var(--ink); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .credit-debt-bank-status { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--primary-pale); color: var(--primary-deep); font-weight: 650; }
 .credit-debt-review { margin: 0; color: #8a5a4c; font-size: 11px; overflow-wrap: anywhere; }
