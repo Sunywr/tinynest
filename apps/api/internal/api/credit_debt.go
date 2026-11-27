@@ -103,11 +103,16 @@ func (a *API) creditDebtPlan(ctx context.Context, householdID, userID string, no
 
 	var cashAvailable int64
 	if err := a.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(l.debit_minor-l.credit_minor),0)
-		FROM accounts a
-		JOIN journal_lines l ON l.account_code=a.ledger_code
-		JOIN journal_entries e ON e.id=l.entry_id AND e.household_id=a.household_id
-		WHERE a.household_id=? AND a.kind='cash' AND a.status='active' AND e.occurred_on<=?`,
+		SELECT COALESCE(SUM(balance_minor),0)
+		FROM (
+			SELECT SUM(l.debit_minor-l.credit_minor) AS balance_minor
+			FROM accounts a
+			JOIN journal_lines l ON l.account_code=a.ledger_code
+			JOIN journal_entries e ON e.id=l.entry_id AND e.household_id=a.household_id
+			WHERE a.household_id=? AND a.kind='cash' AND a.status='active' AND e.occurred_on<=?
+			GROUP BY a.id
+			HAVING SUM(l.debit_minor-l.credit_minor)>0
+		) available`,
 		householdID, todayText).Scan(&cashAvailable); err != nil {
 		return creditDebtPlanResponse{}, err
 	}
@@ -164,7 +169,7 @@ func (a *API) creditDebtPlan(ctx context.Context, householdID, userID string, no
 			}
 			configuredCount++
 			if validPayday {
-				needed := neededBefore(buckets, nextPayday)
+				needed := neededBefore(buckets, today, nextPayday)
 				row.CashNeededMinor = &needed
 				totalNeeded += needed
 			}
@@ -396,12 +401,11 @@ func totalCharges(card *creditCardState) money.Minor {
 	return total
 }
 
-// neededBefore sums every outstanding bucket whose due date is on or before the
-// next payday. Overdue buckets are included because the cash is still needed.
-func neededBefore(buckets []creditDueBucket, nextPayday time.Time) int64 {
+// neededBefore sums unpaid bills due from today through the next payday.
+func neededBefore(buckets []creditDueBucket, today, nextPayday time.Time) int64 {
 	var total int64
 	for _, bucket := range buckets {
-		if !bucket.dueOn.After(nextPayday) {
+		if !bucket.dueOn.Before(today) && !bucket.dueOn.After(nextPayday) {
 			total += int64(bucket.amount)
 		}
 	}

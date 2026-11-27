@@ -348,3 +348,40 @@ func TestCreditDebtPlanHouseholdIsolation(t *testing.T) {
 		t.Fatalf("household card lists leaked: A=%v B=%v", planA["cards"], planB["cards"])
 	}
 }
+func TestCreditDebtPlanUsesUpcomingBillsAndAvailableBalances(t *testing.T) {
+	ts, c, database := newTestServerWithOptions(t, Options{Clock: fixedBusinessClock()})
+	defer database.Close()
+	defer ts.Close()
+
+	mustSetPayday(t, c, 25)
+	c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "Available", "opening_minor": 20000,
+	})
+	negative := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "cash", "name": "Negative",
+	})
+	card := c.mustOK("POST", "/api/v1/accounts", map[string]any{
+		"kind": "credit", "name": "Card", "statement_day": 5, "due_day": 23,
+	})
+	category := c.firstCategory("expense")
+	for _, tx := range []struct {
+		account any
+		on      string
+		minor   int
+	}{
+		{negative["id"], "2026-11-01", 3000},
+		{card["id"], "2026-09-20", 4000},
+		{card["id"], "2026-10-20", 7000},
+		{card["id"], "2026-11-10", 9000},
+	} {
+		c.mustOK("POST", "/api/v1/transactions", map[string]any{
+			"type": "expense", "category_id": category, "account_id": tx.account,
+			"occurred_on": tx.on, "amount_minor": tx.minor,
+		})
+	}
+	plan := getCreditDebtPlan(t, c)
+	if number(plan["cash_needed_minor"]) != 7000 || number(plan["cash_available_minor"]) != 20000 ||
+		number(plan["overdue_minor"]) != 4000 || number(plan["total_debt_minor"]) != 20000 {
+		t.Fatalf("unexpected aggregates: %v", plan)
+	}
+}
