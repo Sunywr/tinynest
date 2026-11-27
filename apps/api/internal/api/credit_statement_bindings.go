@@ -5,14 +5,38 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type statementBindingCard struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Bound  bool   `json:"bound"`
-	Taken  bool   `json:"taken"`
+	ID      string                 `json:"id"`
+	Name    string                 `json:"name"`
+	Status  string                 `json:"status"`
+	Bound   bool                   `json:"bound"`
+	Taken   bool                   `json:"taken"`
+	Periods []mailboxBillingPeriod `json:"billing_periods,omitempty"`
+}
+
+type mailboxBillingPeriod struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+func mailboxBillingPeriods(today time.Time, day int64) []mailboxBillingPeriod {
+	if day < 1 || day > 31 {
+		return nil
+	}
+	periods := make([]mailboxBillingPeriod, 0, 12)
+	end := previousStatementCloseOnOrBefore(today, int(day))
+	for range 12 {
+		previous := previousStatementClose(end, int(day))
+		periods = append(periods, mailboxBillingPeriod{
+			Start: previous.AddDate(0, 0, 1).Format(time.DateOnly),
+			End:   end.Format(time.DateOnly),
+		})
+		end = previous
+	}
+	return periods
 }
 
 func (a *API) handleStatementBindingCards(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +46,7 @@ func (a *API) handleStatementBindingCards(w http.ResponseWriter, r *http.Request
 	}
 	p, _ := principal(r)
 	rows, err := a.DB.QueryContext(r.Context(), `
-		SELECT a.id,a.name,a.status,b.user_id,b.provider
+		SELECT a.id,a.name,a.status,b.user_id,b.provider,a.statement_day
 		FROM accounts a LEFT JOIN statement_mailbox_card_links b
 		  ON b.household_id=a.household_id AND b.account_id=a.id
 		WHERE a.household_id=? AND a.kind='credit'
@@ -34,15 +58,20 @@ func (a *API) handleStatementBindingCards(w http.ResponseWriter, r *http.Request
 	}
 	defer rows.Close()
 	cards := []statementBindingCard{}
+	today := a.businessToday()
 	for rows.Next() {
 		var card statementBindingCard
 		var owner, boundProvider sql.NullString
-		if err := rows.Scan(&card.ID, &card.Name, &card.Status, &owner, &boundProvider); err != nil {
+		var statementDay sql.NullInt64
+		if err := rows.Scan(&card.ID, &card.Name, &card.Status, &owner, &boundProvider, &statementDay); err != nil {
 			internalErr(w, err)
 			return
 		}
 		card.Bound = owner.Valid && owner.String == p.UserID && boundProvider.String == provider
 		card.Taken = owner.Valid && !card.Bound
+		if card.Bound && card.Status == "active" {
+			card.Periods = mailboxBillingPeriods(today, statementDay.Int64)
+		}
 		cards = append(cards, card)
 	}
 	if err := rows.Err(); err != nil {

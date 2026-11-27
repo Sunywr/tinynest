@@ -11,7 +11,8 @@ type MailboxConfig = {
   key_ready: boolean
 }
 
-type BindingCard = { id: string; name: string; status: string; bound: boolean; taken: boolean }
+type BillingPeriod = { start: string; end: string }
+type BindingCard = { id: string; name: string; status: string; bound: boolean; taken: boolean; billing_periods?: BillingPeriod[] }
 type MailPreview = {
   received_on?: string
   statement_on?: string
@@ -127,6 +128,10 @@ function disable() {
 
 async function loadCards() {
   const result = await request<{ items: BindingCard[] }>(path + '/cards' + providerQuery)
+  for (const card of result.items) {
+    selections.value[card.id] ??= []
+    manualRanges.value[card.id] ??= [{ start: '', end: '' }]
+  }
   cards.value = result.items
 }
 
@@ -145,15 +150,33 @@ function updateBinding(card: BindingCard) {
   })
 }
 
-const ranges = ref([{ start: '', end: '' }])
+const manualRanges = ref<Record<string, BillingPeriod[]>>({})
+const selections = ref<Record<string, string[]>>({})
 const rangeLabels = ref<string[]>([])
-const rangesReady = computed(() => ranges.value.every(({ start, end }) => start && end && start <= end))
+function rangesFor(card: BindingCard): BillingPeriod[] {
+  return manualRanges.value[card.id] ?? []
+}
+
+function periodValue(period: BillingPeriod): string {
+  return period.start + ',' + period.end
+}
+
+function selectedRanges(card: BindingCard): BillingPeriod[] {
+  if (!card.billing_periods?.length) return rangesFor(card)
+  return card.billing_periods.filter(period => selections.value[card.id]?.includes(periodValue(period)))
+}
+
+function rangesReady(card: BindingCard): boolean {
+  const periods = selectedRanges(card)
+  return periods.length > 0 && periods.every(({ start, end }) => !!start && !!end && start <= end)
+}
 const upload = ref<{ cardId: string; cardName: string; statements: CardStatement[] } | null>(null)
 
-function statementQuery(version: number) {
+function statementQuery(version: number, card: BindingCard) {
   const query = new URLSearchParams({ version: String(version), provider: props.provider })
-  rangeLabels.value = ranges.value.map(({ start, end }) => start + ' 至 ' + end)
-  for (const { start, end } of ranges.value) query.append('range', start + ',' + end)
+  const ranges = selectedRanges(card)
+  rangeLabels.value = ranges.map(({ start, end }) => start + ' 至 ' + end)
+  for (const { start, end } of ranges) query.append('range', start + ',' + end)
   return query
 }
 
@@ -182,11 +205,11 @@ async function refreshUploadStatements() {
 
 function previewStatements(card: BindingCard) {
   const current = config.value
-  if (!rangesReady.value || !current?.enabled || !card.bound || card.status !== 'active') return
+  if (!rangesReady(card) || !current?.enabled || !card.bound || card.status !== 'active') return
   return run(async () => {
     preview.value = null
     sync.value = null
-    const query = statementQuery(current.version)
+    const query = statementQuery(current.version, card)
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-preview?${query}`
     const result = await request<{ since: string; items: MailPreview[] }>(endpoint, { method: 'POST' })
     preview.value = { cardName: card.name, ...result }
@@ -197,11 +220,11 @@ function previewStatements(card: BindingCard) {
 // journal entries, so the repayment plan on the assets page stays untouched.
 function syncStatements(card: BindingCard) {
   const current = config.value
-  if (!rangesReady.value || !current?.enabled || !card.bound || card.status !== 'active') return
+  if (!rangesReady(card) || !current?.enabled || !card.bound || card.status !== 'active') return
   return run(async () => {
     preview.value = null
     sync.value = null
-    const query = statementQuery(current.version)
+    const query = statementQuery(current.version, card)
     const endpoint = `/accounts/${encodeURIComponent(card.id)}/credit-statement-sync?${query}`
     const result = await request<Omit<SyncResult, 'cardName' | 'cardId'>>(endpoint, { method: 'POST' })
     sync.value = { cardName: card.name, cardId: card.id, ...result }
@@ -237,16 +260,6 @@ onMounted(refresh)
       <div v-if="cards" class="binding-cards">
         <p v-if="!cards.length" class="form-hint">暂无可绑定的信用卡。</p>
         <template v-else>
-          <fieldset :disabled="busy">
-            <legend>目标账单日期范围</legend>
-            <div v-for="(range, index) in ranges" :key="index" class="mailbox-actions">
-              <label>起始日期 <input v-model="range.start" type="date" /></label>
-              <label>结束日期 <input v-model="range.end" type="date" :min="range.start" /></label>
-              <button v-if="ranges.length > 1" type="button" class="btn-quiet" @click="ranges.splice(index, 1)">移除此范围</button>
-            </div>
-            <button type="button" class="btn-quiet" :disabled="ranges.length >= 12"
-              @click="ranges.push({ start: '', end: '' })">添加日期范围</button>
-          </fieldset>
           <section v-for="group in cardGroups" :key="group.label" class="binding-group">
             <h3>{{ group.label }}</h3>
             <p v-if="!group.items.length" class="form-hint">暂无{{ group.label }}。</p>
@@ -256,12 +269,32 @@ onMounted(refresh)
                 <small v-if="card.taken">已绑定其他邮箱</small>
                 <div v-else class="mailbox-actions card-actions">
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
-                    :disabled="busy || !rangesReady" @click="syncStatements(card)">同步账单</button>
+                    :disabled="busy || !rangesReady(card)" @click="syncStatements(card)">同步账单</button>
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
-                    :disabled="busy || !rangesReady" @click="previewStatements(card)">预览账单</button>
+                    :disabled="busy || !rangesReady(card)" @click="previewStatements(card)">预览账单</button>
                   <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
                     :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
                 </div>
+                <details v-if="card.bound && card.status === 'active'" class="card-periods">
+                  <summary>选择账期<span v-if="rangesReady(card)"> · 已选 {{ selectedRanges(card).length }} 期</span></summary>
+                  <fieldset v-if="card.billing_periods?.length" :disabled="busy" class="billing-period-options">
+                    <legend>已结束的账期</legend>
+                    <label v-for="period in card.billing_periods" :key="period.end">
+                      <input type="checkbox" v-model="selections[card.id]" :value="periodValue(period)" />
+                      {{ period.start }} 至 {{ period.end }}
+                    </label>
+                  </fieldset>
+                  <fieldset v-else :disabled="busy">
+                    <legend>自选账期</legend>
+                    <div v-for="(range, index) in rangesFor(card)" :key="index" class="mailbox-actions">
+                      <label>起始日期 <input v-model="range.start" type="date" /></label>
+                      <label>结束日期 <input v-model="range.end" type="date" :min="range.start" /></label>
+                      <button v-if="rangesFor(card).length > 1" type="button" class="btn-quiet" @click="rangesFor(card).splice(index, 1)">移除此范围</button>
+                    </div>
+                    <button type="button" class="btn-quiet" :disabled="rangesFor(card).length >= 12"
+                      @click="rangesFor(card).push({ start: '', end: '' })">添加日期范围</button>
+                  </fieldset>
+                </details>
               </li>
             </ul>
           </section>
@@ -351,6 +384,7 @@ onMounted(refresh)
 }
 .binding-cards li {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
@@ -359,6 +393,9 @@ onMounted(refresh)
 .binding-cards li span {
   overflow-wrap: anywhere;
 }
+.card-periods { flex-basis: 100%; }
+.card-periods summary { cursor: pointer; }
+.billing-period-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .card-actions {
   justify-content: flex-end;
 }

@@ -1404,7 +1404,7 @@ test.describe('G 成员 / 分类 / 管理', () => {
     let enabled = false
     let bound = false
     await page.route('**/api/v1/credit-statement-mailbox/cards', route => route.fulfill({
-      json: { items: [{ id: 'fixture-card', name: '测试信用卡', status: 'active', bound, taken: false }] },
+      json: { items: [{ id: 'fixture-card', name: '测试信用卡', status: 'active', bound, taken: false, billing_periods: [{ start: '2026-10-05', end: '2026-11-04' }] }] },
     }))
     await page.route('**/api/v1/accounts/fixture-card/credit-statement-binding?*', async route => {
       const req = route.request()
@@ -1451,8 +1451,8 @@ test.describe('G 成员 / 分类 / 管理', () => {
       json: { since: '2026-10-26', items: [{ statement_on: '2026-11-01', due_on: '2026-11-25', amount_due_minor: 12345 }] },
     }))
     await expect(linked.getByRole('button', { name: '预览账单' })).toBeDisabled()
-    await card.getByLabel('起始日期').fill('2026-11-01')
-    await card.getByLabel('结束日期').fill('2026-11-30')
+    await linked.getByText('选择账期', { exact: true }).click()
+    await linked.getByRole('checkbox', { name: '2026-10-05 至 2026-11-04' }).check()
     await linked.getByRole('button', { name: '预览账单' }).click()
     await expect(card.getByRole('region', { name: '账单预览' })).toContainText('应还 ¥123.45')
     await unbindButton.click()
@@ -1527,6 +1527,7 @@ test.describe('G 成员 / 分类 / 管理', () => {
     await card.getByRole('button', { name: '信用卡绑定' }).click()
     const linked = card.getByRole('list', { name: '已绑定信用卡', exact: true })
     await expect(linked.getByRole('button', { name: '同步账单' })).toBeDisabled()
+    await linked.getByText('选择账期', { exact: true }).click()
     await card.getByLabel('起始日期').fill('2026-09-01')
     await card.getByLabel('结束日期').fill('2026-09-30')
     await card.getByRole('button', { name: '添加日期范围' }).click()
