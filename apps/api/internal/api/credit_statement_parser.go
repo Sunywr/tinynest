@@ -34,7 +34,7 @@ type statementMailPreview struct {
 
 var (
 	statementHTMLHidden   = regexp.MustCompile(`(?is)<(?:style|script)\b[^>]*>.*?</(?:style|script)\s*>`)
-	statementHTMLBreak    = regexp.MustCompile(`(?i)</(?:td|th|tr|p|div)>|<br\s*/?>`)
+	statementHTMLBreak    = regexp.MustCompile(`(?i)</(?:td|th|tr|p|div)>|<p(?:\s[^>]*)?>|<br\s*/?>`)
 	statementHTMLTag      = regexp.MustCompile(`(?s)<[^>]*>`)
 	statementCardTail     = regexp.MustCompile(`(?:卡尾号|卡号(?:后|末)(?:四|4)位|卡号\s*[:：]\s*[0-9]{0,6}[*＊]{4,12})\s*[:：]?\s*([0-9]{4})(?:[^0-9]|$)`)
 	statementDueLabel     = regexp.MustCompile(`(?:本期应还(?:款)?总(?:金)?额|本期应还款?金额|本期账单应还金额)\s*[:：]?\s*(?:人民币\s*|CNY\s*|[¥￥]\s*)?([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?)(?:\s|$)`)
@@ -103,6 +103,16 @@ func parseStatementMail(raw []byte, bank, tail string, subjectKeywords ...string
 	if bank == "comm" && strings.Contains(body, "账单周期") && statementCommCard.MatchString(body) {
 		return parseCommSummary(out, body, tail), true
 	}
+	if bank == "gdb" || bank == "ceb" {
+		compact := strings.Join(strings.Fields(body), " ")
+		if bank == "gdb" {
+			if _, rows, ok := strings.Cut(compact, gdbSummaryHeader); ok {
+				return parseGDBSummary(out, compact, rows, tail), true
+			}
+		} else if _, rows, ok := strings.Cut(compact, cebSummaryHeader); ok {
+			return parseCEBSummary(out, compact, rows, tail), true
+		}
+	}
 	unattributed := !statementCardTail.MatchString(body)
 	out.StatementOn = statementFindDate(statementClosingLabel, body)
 	out.DueOn = statementFindDate(statementDueDateLabel, body)
@@ -164,7 +174,8 @@ func parseCommSummary(out statementMailPreview, body, tail string) statementMail
 }
 
 func statementSenderMatches(from, bank string) bool {
-	addr, err := mail.ParseAddress(from)
+	parser := mail.AddressParser{WordDecoder: &mime.WordDecoder{CharsetReader: statementCharsetReader}}
+	addr, err := parser.Parse(from)
 	if err != nil {
 		return false
 	}

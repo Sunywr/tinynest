@@ -221,3 +221,59 @@ func TestCMBHTMLSummaryUsesNamedFields(t *testing.T) {
 		t.Fatal("account-wide amount without explicit card identification must remain review-only")
 	}
 }
+
+func TestStatementSenderDecodesGBKDisplayName(t *testing.T) {
+	name, err := simplifiedchinese.GBK.NewEncoder().String("交通银行信用卡")
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := mime.BEncoding.Encode("GBK", name) + " <statement@bocomcc.com>"
+	if !statementSenderMatches(from, "comm") {
+		t.Fatal("valid sender rejected with GBK display name")
+	}
+	if statementSenderMatches(strings.Replace(from, "bocomcc.com", "bocomcc.com.example", 1), "comm") {
+		t.Fatal("unrecognized sender accepted")
+	}
+}
+
+func TestGDBCardSummarySeparatesCardsAndNoDebt(t *testing.T) {
+	raw := bankSummaryHTML("creditcardbill@cgbchina.com.cn", "广发银行信用卡账单", `
+ <p>账单周期:2026/09/29-2026/10/28</p><p>账单日:2026/10/28</p>
+ <table><tr><td>卡号末四位</td><td>本期账单金额</td><td>最低还款额</td><td>最后还款日</td><td>入账货币</td><td>存款</td><td>卡片消费额度</td></tr></table>
+ <table><tr><td>1234<br></td><td>350.77</td><td>100.00</td><td>2026/11/17</td><td>人民币</td><td>0.00</td><td>47,000.00</td></tr></table>
+ <table><tr><td>5678<br></td><td>无欠款</td><td>无欠款</td><td>2026/11/17</td><td>人民币</td><td>0.00</td><td>47,000.00</td></tr></table>`)
+	for _, tc := range []struct {
+		tail  string
+		minor int64
+	}{{"1234", 35077}, {"5678", 0}} {
+		item, _ := parseStatementMail(raw, "gdb", tc.tail)
+		if !statementSummaryReady(item) || int64(*item.AmountDue) != tc.minor || item.PeriodStart != "2026-09-29" || item.DueOn != "2026-11-17" {
+			t.Fatalf("unexpected card summary: %+v", item)
+		}
+	}
+	wrong, _ := parseStatementMail(raw, "gdb", "9999")
+	if statementSummaryReady(wrong) {
+		t.Fatal("wrong card accepted")
+	}
+}
+
+func TestCEBBilingualSummaryVerifiesCardAndRMB(t *testing.T) {
+	body := `<table><tr><td>账单周期<p>Statement Cycle</p></td><td>2026/10/11-2026/11/10</td><td>人民币本期应还款额<p>RMB Statement Balance</p></td><td>￥123.45</td></tr>
+ <tr><td>账单日<p>Statement Date</p></td><td>2026/11/10</td><td>人民币本期最低还款额<p>RMB Minimum Payment Due</p></td><td>￥6.17</td></tr>
+ <tr><td>到期还款日<p>Payment Due Date</p></td><td>2026/11/29</td></tr></table>
+ <table><tr><td>账号<p>Account Number</p></td><td>账户名称<p>Card Name</p></td><td>本期余额<p>Total Balance</p></td><td>本期应还款额<p>Statement Balance</p></td><td>本期最低还款额<p>Minimum Payment Due</p></td></tr>
+ <tr><td>12345678****4321</td><td>联名信用卡</td><td>123.45</td><td>123.45</td><td>6.17</td></tr></table>`
+	raw := bankSummaryHTML("statement@cardcenter.cebbank.com", "光大信用卡账单", body)
+	item, _ := parseStatementMail(raw, "ceb", "4321")
+	if !statementSummaryReady(item) || *item.AmountDue != 12345 || item.PeriodStart != "2026-10-11" || item.DueOn != "2026-11-29" {
+		t.Fatalf("unexpected CEB summary: %+v", item)
+	}
+	wrong, _ := parseStatementMail(raw, "ceb", "9999")
+	if statementSummaryReady(wrong) {
+		t.Fatal("wrong card accepted")
+	}
+}
+
+func bankSummaryHTML(sender, subject, body string) []byte {
+	return []byte("From: " + sender + "\r\nSubject: " + mime.BEncoding.Encode("UTF-8", subject) + "\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + body)
+}
