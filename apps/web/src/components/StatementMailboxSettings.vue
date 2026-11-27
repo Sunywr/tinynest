@@ -304,6 +304,10 @@ onMounted(refresh)
             <ul v-else :aria-label="group.label">
               <li v-for="card in group.items" :key="card.id">
                 <span>{{ card.name }}<small v-if="card.status === 'disabled'"> · 已停用</small></span>
+                <SmartSelect v-if="card.bound && card.status === 'active' && card.billing_periods?.length"
+                  class="card-period-dropdown" model-value="" v-model:selected-values="selections[card.id]"
+                  :options="card.billing_periods.map(period => ({ id: periodValue(period), name: period.start + ' 至 ' + period.end }))"
+                  show-selected-labels placeholder="搜索并选择账期" :disabled="busy" />
                 <small v-if="card.taken">已绑定其他邮箱</small>
                 <div v-else class="mailbox-actions card-actions">
                   <button v-if="card.bound && card.status === 'active'" class="btn-quiet" type="button"
@@ -315,11 +319,7 @@ onMounted(refresh)
                   <button :class="card.bound ? 'btn-danger' : 'btn-primary'" type="button"
                     :disabled="busy" @click="updateBinding(card)">{{ card.bound ? '解绑' : '绑定' }}</button>
                 </div>
-                <SmartSelect v-if="card.bound && card.status === 'active' && card.billing_periods?.length"
-                  class="card-period-dropdown" model-value="" v-model:selected-values="selections[card.id]"
-                  :options="card.billing_periods.map(period => ({ id: periodValue(period), name: period.start + ' 至 ' + period.end }))"
-                  placeholder="搜索并选择账期" :disabled="busy" />
-                <details v-else-if="card.bound && card.status === 'active'" class="card-periods">
+                <details v-if="card.bound && card.status === 'active' && !card.billing_periods?.length" class="card-periods">
                   <summary>选择账期<span v-if="rangesReady(card)"> · 已选 {{ selectedRanges(card).length }} 期</span></summary>
                   <fieldset :disabled="busy">
                     <legend>自选账期</legend>
@@ -448,7 +448,14 @@ onMounted(refresh)
 }
 .card-periods { flex-basis: 100%; }
 .card-periods summary { cursor: pointer; }
-.card-period-dropdown { flex-basis: 100%; max-width: 380px; }
+.card-period-dropdown {
+  flex: 1 1 200px;
+  min-width: min(100%, 200px);
+  max-width: 380px;
+}
+@media (max-width: 560px) {
+  .card-period-dropdown { order: 1; flex-basis: 100%; max-width: none; }
+}
 .card-actions {
   justify-content: flex-end;
 }

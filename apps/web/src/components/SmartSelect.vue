@@ -11,6 +11,7 @@ interface Option { id: string; name: string; hint?: string; emoji?: string; badg
 const props = defineProps<{
   modelValue: string
   selectedValues?: string[]
+  showSelectedLabels?: boolean
   options: Option[]
   placeholder?: string
   disabled?: boolean
@@ -30,9 +31,13 @@ const searchInput = ref<HTMLInputElement>()
 const highlighted = ref(0)
 
 const selected = computed(() => props.options.find(o => o.id === props.modelValue))
-const selectedName = computed(() => props.selectedValues
-  ? (props.selectedValues.length ? `已选 ${props.selectedValues.length} 项` : '')
-  : selected.value?.name ?? '')
+const selectedName = computed(() => {
+  if (!props.selectedValues) return selected.value?.name ?? ''
+  if (!props.selectedValues.length) return ''
+  if (!props.showSelectedLabels) return `已选 ${props.selectedValues.length} 项`
+  return props.options.filter(option => props.selectedValues?.includes(option.id))
+    .map(option => option.name).join('、')
+})
 
 function isSelected(id: string): boolean {
   return props.selectedValues?.includes(id) ?? props.modelValue === id
@@ -122,7 +127,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 <template>
   <div ref="root" class="smart-select" :class="{ open: isOpen }">
-    <button type="button" class="ss-trigger" :class="{ placeholder: !selectedName }"
+    <button type="button" class="ss-trigger" :class="{ placeholder: !selectedName, 'selected-labels': showSelectedLabels }"
       :disabled="disabled" :aria-expanded="isOpen" aria-haspopup="listbox" @click.stop="toggle()">
       <CategoryIcon v-if="selected?.emoji" class="ss-emoji" :value="selected.emoji" />
       <span class="ss-value">{{ selectedName || placeholder || '请选择' }}</span>
@@ -166,6 +171,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   background: var(--card); color: var(--text); font: inherit; font-size: 16px; cursor: pointer; text-align: left;
 }
 .ss-trigger .ss-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-trigger.selected-labels .ss-value { white-space: normal; overflow-wrap: anywhere; }
 .ss-emoji { flex: none; color: var(--primary-deep); }
 .ss-badge { flex: none; padding: 2px 8px; border-radius: 999px; background: #f9e8df; color: #944d3c; font-size: 12px; }
 .ss-badge.income { background: #e7f0e0; color: #426242; }
