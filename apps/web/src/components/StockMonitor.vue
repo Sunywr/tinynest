@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { ChevronDown } from 'lucide-vue-next'
 import { isStockCode, marketDate, type Position, type Preferences } from '../services/stockMarket'
 import { positionCategories, positionFrom, useStockMonitor } from '../composables/useStockMonitor'
 import type { InvestmentOverview } from '../services/api'
@@ -229,10 +230,10 @@ function exportPositions(csv = false) {
     <header class="stock-head">
       <h2 class="section-title">股票</h2>
       <div class="stock-actions">
-        <button class="btn" type="button" :aria-pressed="prefs.hideTop" @click="savePreferences({ ...prefs, hideTop: !prefs.hideTop })">
+        <button class="btn-quiet" type="button" :aria-pressed="prefs.hideTop" @click="savePreferences({ ...prefs, hideTop: !prefs.hideTop })">
           {{ prefs.hideTop ? '显示汇总' : '隐藏汇总' }}
         </button>
-        <button class="btn" type="button" :disabled="quoteBusy" @click="refresh">{{ quoteBusy ? '刷新中' : '刷新行情' }}</button>
+        <button class="btn-quiet" type="button" :disabled="quoteBusy" @click="refresh">{{ quoteBusy ? '刷新中' : '刷新行情' }}</button>
       </div>
     </header>
     <div v-if="indexRows.length" class="stock-grid stock-indices">
@@ -254,9 +255,9 @@ function exportPositions(csv = false) {
       <select v-model="sortBy" aria-label="排序">
         <option value="yield">股息率</option><option value="pnl">盈亏率</option><option value="dividend">年分红</option>
       </select>
-      <label><input v-model="alertsOnly" type="checkbox"> 只看提醒</label>
-      <button v-if="mode === 'watch'" class="btn" type="button" :disabled="!positions.some(p => p.qty === 0 && !snapshotCodes.has(p.code))" @click="confirmClear = true">清空观察池</button>
-      <button class="btn" type="button" @click="startEdit()">添加</button>
+      <label class="stock-toggle"><input v-model="alertsOnly" type="checkbox"> 只看提醒</label>
+      <button v-if="mode === 'watch'" class="btn-quiet" type="button" :disabled="!positions.some(p => p.qty === 0 && !snapshotCodes.has(p.code))" @click="confirmClear = true">清空观察池</button>
+      <button class="btn-primary" type="button" @click="startEdit()">添加</button>
     </div>
     <p class="stock-note">显示 {{ filtered.length }} / {{ allPositions.length }} 项 · 估值与分红数据供研究核验</p>
     <p v-if="!filtered.length" class="stock-note">{{ alertsOnly ? '当前无有效提醒，可取消筛选查看全部。' : '暂无符合条件的标的。' }}</p>
@@ -266,6 +267,7 @@ function exportPositions(csv = false) {
           <span><strong>{{ row.q?.name || row.p.name }}</strong><small>{{ row.p.code }} · {{ row.p.category }}</small></span>
           <span><strong>{{ row.q ? price(row.q.price, row.p.code) : '—' }}</strong><small>{{ percent(row.q?.change ?? null) }}</small></span>
           <span class="stock-status" :class="{ verified: row.status === '进入区间', review: rules.isAlert(row.status) }">{{ row.status }}</span>
+          <ChevronDown class="stock-chevron" :size="16" aria-hidden="true" />
         </summary>
         <dl class="stock-metrics">
           <div><dt>份额（底 / 动）</dt><dd>{{ quantity.format(row.p.qty) }}（{{ quantity.format(row.p.base) }} / {{ quantity.format(row.p.qty - row.p.base) }}）</dd></div>
@@ -281,13 +283,13 @@ function exportPositions(csv = false) {
           <li v-for="reason in [...new Set([...(row.range?.reasons ?? []), ...(row.d.errors ?? [])])]" :key="reason">{{ reason }}</li>
         </ul>
         <div class="stock-actions">
-          <button class="btn" type="button" @click="startEdit(row.p)">编辑 {{ row.p.code }}</button>
+          <button class="btn-quiet" type="button" @click="startEdit(row.p)">编辑 {{ row.p.code }}</button>
         </div>
       </details>
     </div>
 
     <form v-if="editor" class="stock-form" @submit.prevent="saveEdit">
-      <div class="stock-head"><strong>{{ editingCode ? '编辑股票记录' : '添加股票或观察仓' }}</strong><button class="btn" type="button" @click="editor = null">取消</button></div>
+      <div class="stock-head"><strong>{{ editingCode ? '编辑股票记录' : '添加股票或观察仓' }}</strong><button class="btn-quiet" type="button" @click="editor = null">取消</button></div>
       <div class="stock-fields">
         <label>代码<input v-model="editor.code" required inputmode="numeric" maxlength="6" :readonly="!!editingCode"></label>
         <label>名称<input v-model="editor.name" maxlength="80" placeholder="可由行情补全" :readonly="snapshotCodes.has(editingCode)"></label>
@@ -302,20 +304,20 @@ function exportPositions(csv = false) {
       </div>
       <p v-if="snapshotCodes.has(editingCode)" class="stock-note">pfm 份额与成本来自只读快照。分类及区间保存在本浏览器。</p>
       <div class="stock-actions">
-        <button class="btn" v-if="positions.some(p => p.code === editingCode)" type="button" @click="removeEdit">删除本地记录</button>
-        <button class="btn primary" type="submit">保存</button>
+        <button class="btn-quiet" v-if="positions.some(p => p.code === editingCode)" type="button" @click="removeEdit">删除本地记录</button>
+        <button class="btn-primary" type="submit">保存</button>
       </div>
     </form>
 
     <details class="stock-fold" @toggle="event => { if ((event.target as HTMLDetailsElement).open && unread) markRead() }">
-      <summary>研究机会 <span v-if="unread">· {{ unread }} 条未读</span></summary>
+      <summary><span>研究机会 <small v-if="unread">· {{ unread }} 条未读</small></span><ChevronDown class="stock-chevron" :size="16" aria-hidden="true" /></summary>
       <div class="stock-actions">
         <select v-model="researchKind" aria-label="研究类别" @change="expandedResearch = false">
           <option v-for="tab in researchTabs" :key="tab.value" :value="tab.value">{{ tab.label }}</option>
         </select>
-        <button class="btn" type="button" :disabled="scanBusy" @click="scanOpportunities(true)">扫描机会</button>
-        <button class="btn" type="button" :disabled="!available.length" @click="addWatch(available)">加入全部（{{ available.length }}）</button>
-        <button class="btn" type="button" :disabled="!qualified.length || scanBusy" @click="addWatch(qualified)">加入通过项（{{ qualified.length }}）</button>
+        <button class="btn-quiet" type="button" :disabled="scanBusy" @click="scanOpportunities(true)">扫描机会</button>
+        <button class="btn-quiet" type="button" :disabled="!available.length" @click="addWatch(available)">加入全部（{{ available.length }}）</button>
+        <button class="btn-quiet" type="button" :disabled="!qualified.length || scanBusy" @click="addWatch(qualified)">加入通过项（{{ qualified.length }}）</button>
       </div>
       <p v-if="scanProgress || scanNotice" class="stock-note" role="status">{{ scanProgress || scanNotice }}</p>
       <p v-if="study.coverage" class="stock-note">{{ study.coverage }} · {{ marketTime(study.stockAt) }}</p>
@@ -330,9 +332,9 @@ function exportPositions(csv = false) {
             <a :href="item.url" target="_blank" rel="noopener noreferrer">{{ item.title }}</a> · {{ item.date }} · {{ item.direction }} · {{ item.horizon }}
           </li>
         </ul>
-        <button type="button" class="btn" :disabled="tracked.has(row.code)" @click="addWatch([row])">{{ tracked.has(row.code) ? '已在盯盘' : '加入观察仓' }}</button>
+        <button type="button" class="btn-quiet" :disabled="tracked.has(row.code)" @click="addWatch([row])">{{ tracked.has(row.code) ? '已在盯盘' : '加入观察仓' }}</button>
       </details>
-      <button v-if="shownResearch.length < research.length" type="button" class="btn" @click="expandedResearch = true">展开其余 {{ research.length - shownResearch.length }} 项</button>
+      <button v-if="shownResearch.length < research.length" type="button" class="btn-quiet" @click="expandedResearch = true">展开其余 {{ research.length - shownResearch.length }} 项</button>
       <details v-if="study.etf?.sources.length" class="stock-opportunity">
         <summary>ETF 数据来源</summary>
         <ul class="stock-reasons"><li v-for="source in study.etf.sources" :key="source.url">
@@ -340,24 +342,24 @@ function exportPositions(csv = false) {
         </li></ul>
       </details>
       <details v-if="Object.keys(study.changes).length" class="stock-opportunity"><summary>通过名单变动</summary>
-        <button v-if="unread" type="button" class="btn" @click="markRead">标记已读</button>
+        <button v-if="unread" type="button" class="btn-quiet" @click="markRead">标记已读</button>
         <ul class="stock-reasons"><li v-for="(change, code) in study.changes" :key="code">{{ change.text }}</li></ul>
       </details>
     </details>
 
     <details class="stock-fold" @toggle="event => { if ((event.target as HTMLDetailsElement).open) prefsDraft = { ...prefs } }">
-      <summary>设置与导入导出</summary>
+      <summary>设置与导入导出 <ChevronDown class="stock-chevron" :size="16" aria-hidden="true" /></summary>
       <p class="stock-note">手工记录和设置保存在本浏览器。扫描在股票页打开时运行，上海时间 09:35、13:05、15:15。</p>
       <form class="stock-form" @submit.prevent="saveSettings">
         <div class="stock-fields">
           <label v-for="[key, label] in settings" :key="key">{{ label }}<input v-model.number="prefsDraft[key]" type="number" required min="0" step="any"></label>
         </div>
-        <button class="btn" type="submit">保存设置</button>
+        <button class="btn-quiet" type="submit">保存设置</button>
       </form>
       <div class="stock-actions">
         <label class="stock-import">导入静观 JSON<input type="file" accept=".json,application/json" @change="importPositions"></label>
-        <button class="btn" type="button" @click="exportPositions()">导出 JSON</button>
-        <button class="btn" type="button" @click="exportPositions(true)">导出 CSV</button>
+        <button class="btn-quiet" type="button" @click="exportPositions()">导出 JSON</button>
+        <button class="btn-quiet" type="button" @click="exportPositions(true)">导出 CSV</button>
       </div>
       <details class="stock-opportunity">
         <summary>批量添加</summary>
@@ -365,7 +367,7 @@ function exportPositions(csv = false) {
           <label class="stock-import">每行一条，依次输入代码、份额和可选的每股成本
             <textarea v-model="bulkDraft" rows="3" maxlength="60000" required></textarea>
           </label>
-          <button class="btn" type="submit">添加记录</button>
+          <button class="btn-quiet" type="submit">添加记录</button>
         </form>
       </details>
     </details>
@@ -373,15 +375,15 @@ function exportPositions(csv = false) {
     <div v-if="confirmClear" class="stock-form">
       <p>清空全部观察仓，包括当前筛选隐藏的记录？</p>
       <div class="stock-actions">
-        <button type="button" class="btn" @click="confirmClear = false">取消</button>
-        <button type="button" class="btn" @click="confirmClear = !savePositions(positions.filter(p => p.qty > 0 || snapshotCodes.has(p.code)))">确认清空</button>
+        <button type="button" class="btn-quiet" @click="confirmClear = false">取消</button>
+        <button type="button" class="btn-quiet" @click="confirmClear = !savePositions(positions.filter(p => p.qty > 0 || snapshotCodes.has(p.code)))">确认清空</button>
       </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.stocks { padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.stocks { padding: clamp(12px, 2.5vw, 16px); display: grid; gap: 12px; min-width: 0; }
 .stock-head, .stock-actions, .stock-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .stock-head { justify-content: space-between; }
 .stock-head .section-title { margin: 0; }
@@ -391,15 +393,40 @@ function exportPositions(csv = false) {
 .stock-grid small, .stock-row small, .stock-opportunity small, .stock-note, .stock-metrics dt { color: var(--muted); font-size: 12px; }
 .stock-note { margin: 0; line-height: 1.5; }
 .stock-row, .stock-fold, .stock-opportunity { border-top: 1px solid var(--border); min-width: 0; }
-.stocks summary { min-height: 40px; padding: 5px 0; cursor: pointer; }
-.stock-row summary { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(56px, .65fr) minmax(72px, .8fr); align-items: center; gap: 6px; font-size: 13px; }
+.stocks summary {
+  min-height: var(--touch-min);
+  padding: 6px 0;
+  cursor: pointer;
+}
+.stock-row summary, .stock-fold > summary { list-style: none; }
+.stock-row summary::-webkit-details-marker, .stock-fold > summary::-webkit-details-marker { display: none; }
+.stock-chevron { color: var(--muted); justify-self: end; }
+details[open] > summary > .stock-chevron { transform: rotate(180deg); }
+.stock-row summary { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(44px, .65fr) minmax(66px, .85fr) 16px; align-items: center; gap: 6px; font-size: 13px; }
 .stock-row summary > span { display: grid; overflow-wrap: anywhere; }
-.stock-status { justify-self: end; font-size: 11px; color: var(--muted); text-align: right; }
-.stock-status.review { color: var(--primary-deep); }
-.stock-status.verified { color: #397157; }
+.stock-row summary > .stock-status {
+  display: block;
+  justify-self: end;
+  padding: 3px 7px;
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+}
+.stock-row summary > .review { color: var(--primary-deep); background: var(--soft); }
+.stock-row summary > .verified { color: var(--cat-3-ink); background: var(--cat-3); }
 .stock-metrics, .stock-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 8px; margin: 8px 0; }
 .stock-metrics dd { margin: 2px 0 0; font-size: 12px; }
-.stock-fold > summary { font-weight: 700; color: var(--primary-deep); }
+.stock-fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  color: var(--primary-deep);
+}
+.stock-fold > summary small { color: var(--muted); font-weight: 500; }
 .stock-opportunity summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .stock-opportunity, .stock-row details[open] { padding-bottom: 8px; }
 .stock-reasons { font-size: 12px; padding-left: 18px; overflow-wrap: anywhere; }
@@ -408,5 +435,37 @@ function exportPositions(csv = false) {
 .stocks input:not([type=checkbox]), .stocks select { max-width: 100%; min-width: 0; }
 .stock-fields input, .stock-fields select { width: 100%; }
 .stock-filters input[type=search] { flex: 1 1 112px; width: 112px; }
-.stock-filters label { white-space: nowrap; font-size: 12px; }
+.stock-filters :is(select, input[type=search]) { min-height: var(--touch-min); }
+.stock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--touch-min);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--text);
+  white-space: nowrap;
+  font-size: 13px;
+  cursor: pointer;
+}
+.stock-toggle input { margin: 0; accent-color: var(--primary-deep); }
+.stock-import input[type=file]::file-selector-button {
+  min-height: var(--touch-min);
+  margin-right: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--soft);
+  color: var(--primary-deep);
+  font: inherit;
+  cursor: pointer;
+}
+@media (max-width: 520px) {
+  .stock-grid:not(.stock-indices) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stock-indices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stock-filters input[type=search] { order: -1; flex-basis: 100%; }
+  .stock-actions :is(.btn-primary, .btn-quiet, .btn-danger) { padding-inline: 12px; }
+}
 </style>

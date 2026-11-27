@@ -983,6 +983,20 @@ test.describe('E 资产', () => {
     const stocks = await openStocks()
     await expect(stocks).toContainText('26.72')
     await expect(stocks).toContainText('非今日行情')
+    const dialog = page.getByRole('dialog', { name: '投资详情' })
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 844 })
+      const tab = dialog.getByRole('button', { name: '股票', exact: true })
+      await expect(tab).toHaveAttribute('aria-pressed', 'true')
+      for (const control of [tab, stocks.getByRole('button', { name: '添加', exact: true }),
+        stocks.getByRole('button', { name: '隐藏汇总' }), stocks.getByText('只看提醒', { exact: true })]) {
+        await expect(control).toHaveCSS('border-top-left-radius', /^(11|13|14)px$/)
+        expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+      }
+      const dimensions = await dialog.evaluate(node => node.scrollWidth - node.clientWidth)
+      expect(dimensions).toBeLessThanOrEqual(1)
+    }
+    await page.setViewportSize({ width: 390, height: 844 })
     await stocks.getByRole('checkbox', { name: '只看提醒' }).check()
     await expect(stocks).toContainText('当前无有效提醒')
     await stocks.getByRole('checkbox', { name: '只看提醒' }).uncheck()

@@ -260,13 +260,18 @@ onMounted(() => void load())
         </span>
       </button>
       <dialog ref="investmentDialog" class="asset-detail-dialog" aria-label="投资详情" @close="investmentOpen = false">
-        <form method="dialog" class="asset-detail-controls">
-          <button type="submit" aria-label="关闭投资详情"><X :size="20" aria-hidden="true" /></button>
-        </form>
-        <div class="investment-tabs" aria-label="投资视图">
-          <button type="button" class="btn" :aria-pressed="investmentTab === 'overview'" @click="investmentTab = 'overview'">总览</button>
-          <button type="button" class="btn" :aria-pressed="investmentTab === 'stocks'" @click="investmentTab = 'stocks'">股票</button>
-        </div>
+        <header class="investment-dialog-head">
+          <h2 class="section-title">投资详情</h2>
+          <div class="segmented investment-tabs" role="group" aria-label="投资视图">
+            <button type="button" class="segmented-btn" :class="{ active: investmentTab === 'overview' }"
+              :aria-pressed="investmentTab === 'overview'" @click="investmentTab = 'overview'">总览</button>
+            <button type="button" class="segmented-btn" :class="{ active: investmentTab === 'stocks' }"
+              :aria-pressed="investmentTab === 'stocks'" @click="investmentTab = 'stocks'">股票</button>
+          </div>
+          <form method="dialog">
+            <button type="submit" class="icon-btn" aria-label="关闭投资详情"><X :size="20" aria-hidden="true" /></button>
+          </form>
+        </header>
         <InvestmentPanel v-if="investmentTab === 'overview'" :overview="investments" />
         <StockMonitor v-else-if="investmentOpen" :key="stockScope" :overview="investments" :scope="stockScope" :active="true" />
       </dialog>
@@ -378,11 +383,22 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
-.investment-tabs { display: flex; gap: 8px; margin: 0 0 10px; }
-.investment-tabs [aria-pressed="true"] { color: var(--primary-deep); background: var(--soft); font-weight: 700; }
-</style>
+.investment-dialog-head {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.investment-dialog-head form { justify-self: end; }
+.investment-tabs .segmented-btn { min-height: var(--touch-min); }
+.investment-dialog-head + :is(.investment-panel, .stocks) { margin: 10px; }
 
-<style scoped>
 .asset-detail-trigger {
   width: 100%;
   display: grid;
